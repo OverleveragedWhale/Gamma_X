@@ -1,1 +1,1 @@
-# Gamma_X GEX Dashboard
+# Gamma_X Dashboard
