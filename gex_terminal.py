@@ -450,7 +450,7 @@ def load_closes():
 HOST = os.environ.get("DASH_HOST", "127.0.0.1")
 PORT = int(os.environ.get("DASH_PORT", "8787"))
 TOKEN = os.environ.get("DASH_TOKEN", "").strip()
-REFRESH_SECONDS = 15 * 60
+REFRESH_SECONDS = 30 * 60
 
 _cache = {"generated": None, "market": "STARTING", "symbols": [],
           "epoch": 0.0, "refresh_seconds": REFRESH_SECONDS}
