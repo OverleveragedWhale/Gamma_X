@@ -424,8 +424,8 @@ def load_closes():
     or fails the sanity check. Enter the number you read off your platform:
 
         [closes]
-        NQ = 20845
-        ES = 6430
+        NQ = 29300
+        ES = 6700
     """
     out = {}
     try:
