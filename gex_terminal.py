@@ -105,6 +105,7 @@ def next_friday(d):
 
 
 FUTURES_EXPIRY_MONTHS = (3, 6, 9, 12)   # CME quarterly financial futures cycle
+FUTURES_ROLL_DAYS = 3     # roll to the deferred contract this many days out
 
 
 def nth_weekday(year, month, weekday, n):
@@ -115,11 +116,16 @@ def nth_weekday(year, month, weekday, n):
 
 
 def next_futures_expiry(d):
-    """Next quarterly ES/NQ expiration (3rd Friday of Mar/Jun/Sep/Dec) on/after d."""
+    """Front quarterly ES/NQ expiration (3rd Friday of Mar/Jun/Sep/Dec) as of d.
+
+    Rolls to the next quarter once the near contract is within
+    FUTURES_ROLL_DAYS, so the near-term bucket tracks the contract dealers are
+    actually hedging with rather than one whose open interest is being closed out.
+    """
     candidates = [nth_weekday(year, m, 4, 3)
                   for year in (d.year, d.year + 1)
                   for m in FUTURES_EXPIRY_MONTHS]
-    return min(c for c in candidates if c >= d)
+    return min(c for c in candidates if (c - d).days > FUTURES_ROLL_DAYS)
 
 
 _COOKIE_JAR = http.cookiejar.CookieJar()
