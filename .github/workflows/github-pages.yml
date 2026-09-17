@@ -2,16 +2,18 @@ name: Publish GEX snapshot
 
 on:
   schedule:
-    # Hourly, at :16 past the hour. Eastern is a whole-hour offset from UTC, so
-    # :16 UTC is :16 ET year-round and this needs no DST handling. The gate step
-    # decides whether a firing is an in-session hourly refresh (09:00-16:59 ET)
-    # or an off-hours one (kept to every 4th hour).
+    # Target cadence: hourly at :16, plus every 5 minutes across the 15:01-16:21
+    # ET close window (scheduled at both the EDT and EST placements of it, since
+    # cron has no timezone).
+    #
+    # GitHub delivers only a fraction of these and at arbitrary minutes - the
+    # previous "*/30" cron landed ~6 times a day, never once on a :00 or :30
+    # slot, with gaps of 2-8 hours. So these crons are a request, not a
+    # guarantee, and there is deliberately no time-of-day gate below: a delayed
+    # firing is indistinguishable from an on-time one, so gating on the clock
+    # would discard real runs and leave the page staler than doing nothing.
+    # Every firing that arrives gets published.
     - cron: "16 * * * *"
-    # Every 5 minutes across the 15:01-16:21 ET close window. GitHub cron has no
-    # timezone, so both the EDT (UTC-4) and EST (UTC-5) placements of that window
-    # are scheduled and the gate step drops whichever hour is not currently ET
-    # 15:00/16:00. Minute :16 is deliberately absent - the hourly cron above
-    # already covers it, and listing it twice would double-trigger.
     - cron: "1,6,11,21,26,31,36,41,46,51,56 19,20,21 * * 1-5"
   workflow_dispatch:
 
@@ -27,70 +29,24 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    outputs:
-      run: ${{ steps.gate.outputs.run }}
     steps:
-      - name: Gate this firing on Eastern time
-        id: gate
-        env:
-          SCHEDULE: ${{ github.event.schedule }}
-        run: |
-          python3 - >>"$GITHUB_OUTPUT" <<'PY'
-          import datetime, os, sys, zoneinfo
-
-          HOURLY_CRON = "16 * * * *"
-          DENSE_OPEN = (15, 1)      # 15:01 ET
-          DENSE_CLOSE = (16, 21)    # 16:21 ET
-
-          now = datetime.datetime.now(zoneinfo.ZoneInfo("America/New_York"))
-          schedule = os.environ.get("SCHEDULE", "")
-          hm = (now.hour, now.minute)
-          weekday = now.weekday() < 5
-
-          if not schedule:
-              run, why = True, "manual dispatch"
-          elif schedule == HOURLY_CRON:
-              if weekday and 9 <= now.hour <= 16:
-                  run, why = True, "in-session hourly refresh"
-              elif now.hour % 4 == 0:
-                  run, why = True, "off-hours refresh (every 4h)"
-              else:
-                  run, why = False, "off-hours, not a 4-hour slot"
-          else:
-              run = weekday and DENSE_OPEN <= hm <= DENSE_CLOSE
-              why = "close window" if run else "outside 15:01-16:21 ET"
-
-          print(f"run={'true' if run else 'false'}")
-          print(f"{now:%Y-%m-%d %H:%M %Z} - {why}", file=sys.stderr)
-          PY
-
       - name: Check out repository
-        if: steps.gate.outputs.run == 'true'
         uses: actions/checkout@v4
-
       - name: Set up Python
-        if: steps.gate.outputs.run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Generate dashboard snapshot
-        if: steps.gate.outputs.run == 'true'
         run: python gex_terminal.py --snapshot _site/index.html
-
       - name: Configure Pages
-        if: steps.gate.outputs.run == 'true'
         uses: actions/configure-pages@v5
-
       - name: Upload Pages artifact
-        if: steps.gate.outputs.run == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: _site
 
   deploy:
     needs: build
-    if: needs.build.outputs.run == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
