@@ -1,0 +1,76 @@
+name: Feed diagnostics
+
+# Answers two things this repo cannot check from a dev machine behind a proxy:
+#   1. how often the Cboe delayed file is actually republished, which decides
+#      whether publishing faster than ~15 min is worth anything
+#   2. whether Stooq is reachable, which is what scales chain levels into
+#      futures terms and supplies the prior-session high/low/close tags
+#
+# Read-only. Publishes nothing, writes nothing to the repo.
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Minutes to watch the Cboe feed"
+        default: "20"
+      interval:
+        description: "Seconds between Cboe polls"
+        default: "30"
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Stooq reachability and futures scaling
+        run: |
+          python - <<'PY'
+          import gex_terminal as g
+
+          # Every Stooq symbol the dashboard depends on, and what breaks
+          # without it.
+          wanted = [
+              ("^spx",   "ES chain close + prior session"),
+              ("^ndx",   "NQ index close (margin notional, tracking ratio)"),
+              ("qqq.us", "NQ chain close + prior session"),
+              ("es.f",   "ES futures close (chain -> futures scaling)"),
+              ("nq.f",   "NQ futures close (chain -> futures scaling)"),
+          ]
+          got = {}
+          for sym, why in wanted:
+              try:
+                  rows = g.fetch_closes(sym, max_rows=5)
+                  got[sym] = rows[-1]
+                  print(f"  OK    {sym:<8} last close {rows[-1]:>12,.2f}   {why}")
+              except Exception as exc:
+                  print(f"  FAIL  {sym:<8} {type(exc).__name__}: {str(exc)[:70]}")
+                  print(f"        -> lost: {why}")
+
+          # Reproduce the carry gate that decides auto futures scaling.
+          print("\nfutures scaling gate (-0.01 <= implied carry <= 0.04):")
+          for inst in g.INSTRUMENTS:
+              fut, hist, idx = inst["fut"], inst["hist"], inst["index"]
+              if not all(s in got for s in (fut, hist, idx)):
+                  missing = [s for s in (fut, hist, idx) if s not in got]
+                  print(f"  {inst['future']}: cannot evaluate, missing {missing}")
+                  continue
+              k_track = got[idx] / got[hist]
+              carry = got[fut] / got[hist] / k_track - 1.0
+              ok = -0.01 <= carry <= 0.04
+              print(f"  {inst['future']}: k_track={k_track:.4f} carry={carry:+.4f} "
+                    f"-> {'ACCEPTED' if ok else 'REJECTED, falls back to index terms'}")
+          PY
+
+      - name: Cboe republish cadence
+        env:
+          PROBE_MINUTES: ${{ inputs.minutes }}
+          PROBE_INTERVAL: ${{ inputs.interval }}
+        run: python tools/probe_feed.py SPY "$PROBE_INTERVAL" "$PROBE_MINUTES"
