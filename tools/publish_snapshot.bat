@@ -65,6 +65,13 @@ if not errorlevel 1 (
 )
 
 git commit -m "snapshot %NOW%" >> "%LOG%" 2>&1
+if errorlevel 1 (
+  rem Without this the failed commit falls through to a push that says
+  rem "Everything up-to-date", exits 0, and the run logs "published"
+  rem while the page never changed.
+  echo [%NOW%] ERROR: commit failed, nothing published >> "%LOG%"
+  exit /b 1
+)
 git push origin snapshot >> "%LOG%" 2>&1
 if errorlevel 1 (
   rem Most likely the fallback workflow pushed first. The next run resets to
