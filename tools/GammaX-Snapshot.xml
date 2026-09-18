@@ -2,18 +2,20 @@
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Author>Gamma_X</Author>
-    <Description>Generates the GEX dashboard and publishes it to the snapshot branch that GitHub Pages serves. Polls every minute from 09:25 to 16:25 on weekdays, and every 4 hours outside that. The run only pushes when the figures actually change (--skip-unchanged), so a minute-by-minute poll still publishes at roughly the rate the ~15 min delayed Cboe feed updates. All times are the machine's local clock, so set it to Eastern.</Description>
+    <Description>Generates the GEX dashboard and publishes it to the snapshot branch that GitHub Pages serves. Weekdays: every 15 minutes from 09:15 to 14:45, then every 5 minutes from 15:00 to 17:00. Every 4 hours otherwise. Runs only push when the figures actually change (--skip-unchanged). All times are the machine's local clock, so set it to Eastern.</Description>
     <URI>\Gamma_X Snapshot</URI>
   </RegistrationInfo>
   <Triggers>
-    <!-- Session: every minute, 09:25 through 16:25, weekdays. -->
+    <!-- Session: every 15 minutes, 09:15 through 14:45, weekdays. 24 runs.
+         Stops at 14:45 so the 5-minute trigger owns 15:00 outright rather
+         than both firing on the same minute. -->
     <CalendarTrigger>
       <Repetition>
-        <Interval>PT1M</Interval>
-        <Duration>PT7H</Duration>
+        <Interval>PT15M</Interval>
+        <Duration>PT5H30M</Duration>
         <StopAtDurationEnd>false</StopAtDurationEnd>
       </Repetition>
-      <StartBoundary>2026-01-01T09:25:00</StartBoundary>
+      <StartBoundary>2026-01-01T09:15:00</StartBoundary>
       <Enabled>true</Enabled>
       <ScheduleByWeek>
         <DaysOfWeek>
@@ -26,14 +28,34 @@
         <WeeksInterval>1</WeeksInterval>
       </ScheduleByWeek>
     </CalendarTrigger>
-    <!-- Off-hours: 20:16, 00:16, 04:16, 08:16 every day. -->
+    <!-- Close window: every 5 minutes, 15:00 through 17:00, weekdays. 25 runs. -->
+    <CalendarTrigger>
+      <Repetition>
+        <Interval>PT5M</Interval>
+        <Duration>PT2H</Duration>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+      <StartBoundary>2026-01-01T15:00:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByWeek>
+        <DaysOfWeek>
+          <Monday />
+          <Tuesday />
+          <Wednesday />
+          <Thursday />
+          <Friday />
+        </DaysOfWeek>
+        <WeeksInterval>1</WeeksInterval>
+      </ScheduleByWeek>
+    </CalendarTrigger>
+    <!-- Off-hours: 20:00, 00:00, 04:00, 08:00 every day. -->
     <CalendarTrigger>
       <Repetition>
         <Interval>PT4H</Interval>
         <Duration>PT12H</Duration>
         <StopAtDurationEnd>false</StopAtDurationEnd>
       </Repetition>
-      <StartBoundary>2026-01-01T20:16:00</StartBoundary>
+      <StartBoundary>2026-01-01T20:00:00</StartBoundary>
       <Enabled>true</Enabled>
       <ScheduleByDay>
         <DaysInterval>1</DaysInterval>

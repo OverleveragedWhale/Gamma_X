@@ -46,9 +46,10 @@ if errorlevel 1 (
   exit /b 1
 )
 rem --skip-unchanged leaves index.html untouched when the figures match what it
-rem already holds, so the git check below turns a minute-by-minute poll into a
-rem push only when the numbers actually move. The Cboe feed is ~15 min delayed
-rem and open interest is T-1, so most runs have nothing new to say.
+rem already holds, so the git check below publishes only when the numbers
+rem actually move. Open interest is T-1, so max pain cannot shift intraday at
+rem all; how often the quotes themselves move is what tools/probe_feed.py
+rem measures. Keeping this on bounds the GitHub Pages rebuild rate either way.
 %PY% gex_terminal.py --snapshot "%PUB%\index.html" --skip-unchanged >> "%LOG%" 2>&1
 if errorlevel 1 (
   echo [%NOW%] ERROR: snapshot generation failed >> "%LOG%"
