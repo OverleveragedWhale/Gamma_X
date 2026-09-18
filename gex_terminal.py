@@ -239,24 +239,48 @@ def top_walls(per, side, spot, n=None, min_sep=None):
 
 
 def max_pain_by_expiry(contracts):
-    """Return the max-pain strike for each expiration in the option book."""
+    """Return the max-pain strike for each expiration in the option book.
+
+    Open-interest loss at settlement S is sum((S-K)*oi) over calls struck at or
+    below S, plus sum((K-S)*oi) over puts struck at or above S. Dropping the
+    positive part turns each side into S*sum(oi) - sum(K*oi), so one ascending
+    pass and one descending pass price every candidate strike - rather than
+    rescanning the expiration's contracts once per strike.
+    """
     by_expiry = {}
-    for expiry in sorted({c["exp"] for c in contracts}):
-        expiry_contracts = [c for c in contracts if c["exp"] == expiry]
-        strikes = sorted({c["strike"] for c in expiry_contracts})
-        losses = []
-        for settlement in strikes:
-            loss = 0.0
-            for c in expiry_contracts:
-                intrinsic = (max(settlement - c["strike"], 0.0)
-                             if c["cp"] == "C" else
-                             max(c["strike"] - settlement, 0.0))
-                loss += intrinsic * c["oi"] * SHARES_PER_CONTRACT
-            losses.append((loss, settlement))
-        if losses:
-            loss, strike = min(losses)
-            by_expiry[expiry] = {"strike": strike, "loss": loss}
-    return by_expiry
+    for c in contracts:
+        by_expiry.setdefault(c["exp"], []).append(c)
+
+    out = {}
+    for expiry in sorted(by_expiry):
+        call_oi, put_oi = {}, {}
+        for c in by_expiry[expiry]:
+            side = call_oi if c["cp"] == "C" else put_oi
+            side[c["strike"]] = side.get(c["strike"], 0) + c["oi"]
+        strikes = sorted(set(call_oi) | set(put_oi))
+        if not strikes:
+            continue
+
+        call_loss, oi_sum, koi_sum = [], 0.0, 0.0
+        for k in strikes:
+            oi = call_oi.get(k, 0)
+            oi_sum += oi
+            koi_sum += k * oi
+            call_loss.append(k * oi_sum - koi_sum)
+
+        put_loss, oi_sum, koi_sum = [0.0] * len(strikes), 0.0, 0.0
+        for i in range(len(strikes) - 1, -1, -1):
+            k = strikes[i]
+            oi = put_oi.get(k, 0)
+            oi_sum += oi
+            koi_sum += k * oi
+            put_loss[i] = koi_sum - k * oi_sum
+
+        # min over (loss, strike) keeps the original tie-break: lowest strike.
+        loss, strike = min(((call_loss[i] + put_loss[i]) * SHARES_PER_CONTRACT, k)
+                           for i, k in enumerate(strikes))
+        out[expiry] = {"strike": strike, "loss": loss}
+    return out
 
 
 def bs_gamma(S, K, T, sigma):
