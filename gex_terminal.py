@@ -342,41 +342,75 @@ def build_regime(contracts, spot, today, prior, disp):
     return out
 
 
-def net_gex_at(S, prepped):
-    """prepped: (T, K, iv, cp, oi, real_gamma, anchor_gamma) per contract, where
-    anchor_gamma = bs_gamma(spot, K, T, iv) at the real current spot. Scaling
-    real_gamma by bs_gamma(S,...)/anchor_gamma means this reproduces the exact
-    real-gamma total (the same one `regime` is computed from) at S == spot,
-    and extrapolates away from spot using BS gamma's shape - instead of
-    substituting a from-scratch BS gamma that can disagree in sign with the
-    real chain gamma even at the anchor point."""
-    total = 0.0
-    for T, K, iv, cp, oi, real_gamma, anchor_gamma in prepped:
-        scale = bs_gamma(S, K, T, iv) / anchor_gamma
-        g = contract_gex(real_gamma * scale, oi, S)
-        total += g if cp == "C" else -g
-    return total
+_EXP_MAX = 700.0     # math.exp raises OverflowError past ~709
 
 
 def find_flip(spot, contracts, today, span=0.07, steps=71):
+    """Price nearest spot where net GEX changes sign, or None.
+
+    Each contract's real chain gamma is scaled by bs_gamma(S)/bs_gamma(spot),
+    so the curve reproduces the exact real-gamma total at S == spot (the same
+    one `regime` reports) and extrapolates away from it with BS gamma's shape,
+    rather than substituting a from-scratch BS gamma that can disagree in sign
+    with the chain even at the anchor point.
+
+    Because the scale is a ratio of two gammas, almost everything cancels.
+    With vt = iv*sqrt(T), a = ln(K) - vt*vt/2, d1(S) = (ln(S) - a)/vt, and
+    A = d1(spot):
+
+        bs_gamma(S)/bs_gamma(spot) = exp((A*A - d1*d1)/2) * spot/S
+        net(S) = S * sum(base * exp((A*A - d1*d1)/2))
+        base   = +/- gamma * oi * SHARES_PER_CONTRACT * 0.01 * spot
+
+    base, a and A are fixed per contract and ln(S) is shared across a step, so
+    a step costs one exp per contract rather than a log, two sqrts and two
+    function calls - interpreter overhead being most of the bill on a small
+    ARM core. Keeping the two gammas together as one exponent also avoids
+    forming bs_gamma(spot) alone, which underflows for far-OTM short-dated
+    contracts and turned the ratio into inf or nan.
+    """
+    lo, hi = spot * (1 - span), spot * (1 + span)
+    if lo <= 0:
+        return None
+    ln_spot, ln_lo, ln_hi = math.log(spot), math.log(lo), math.log(hi)
+
     prepped = []
     for c in contracts:
-        if c["iv"] <= 0 or c["gamma"] <= 0:
+        iv, gamma = c["iv"], c["gamma"]
+        if iv <= 0 or gamma <= 0:
             continue
         T = max((c["exp"] - today).days / 365.0, 0.5 / 365.0)
-        anchor = bs_gamma(spot, c["strike"], T, c["iv"])
-        if anchor <= 0:
+        K = c["strike"]
+        if bs_gamma(spot, K, T, iv) <= 0:
             continue
-        prepped.append((T, c["strike"], c["iv"], c["cp"], c["oi"], c["gamma"], anchor))
+        vt = iv * math.sqrt(T)
+        inv_vt = 1.0 / vt
+        a = math.log(K) - 0.5 * vt * vt
+        a2 = ((ln_spot - a) * inv_vt) ** 2
+        # The exponent peaks where ln(S) sits closest to a, so its largest
+        # value over the scan is known here. Contracts that would overflow
+        # exp() are ones whose anchor gamma is denormal; the ratio they stand
+        # for is not representable either way.
+        near = min(max(a, ln_lo), ln_hi)
+        if 0.5 * (a2 - ((near - a) * inv_vt) ** 2) > _EXP_MAX:
+            continue
+        base = gamma * c["oi"] * SHARES_PER_CONTRACT * 0.01 * spot
+        prepped.append((a, inv_vt, a2, base if c["cp"] == "C" else -base))
+
     if not prepped:
         return None
 
-    lo, hi = spot * (1 - span), spot * (1 + span)
+    exp_, log_ = math.exp, math.log
     prev_v = prev_s = None
     crossings = []
     for i in range(steps):
         s = lo + (hi - lo) * i / (steps - 1)
-        v = net_gex_at(s, prepped)
+        ln_s = log_(s)
+        acc = 0.0
+        for a, inv_vt, a2, base in prepped:
+            d1 = (ln_s - a) * inv_vt
+            acc += base * exp_(0.5 * (a2 - d1 * d1))
+        v = s * acc
         if prev_v is not None and (v >= 0) != (prev_v >= 0):
             frac = abs(prev_v) / (abs(prev_v) + abs(v) + 1e-12)
             crossings.append(prev_s + (s - prev_s) * frac)
