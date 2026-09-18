@@ -39,6 +39,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 # ---------------- settings ----------------
 MAX_DTE = 95                 # GEX: ignore contracts beyond this many days
+NEAR_MAX_DTE = 32            # near-term bucket: never look further than this
 SHARES_PER_CONTRACT = 100
 WALL_COUNT = 3               # ranked walls reported per side
 MIN_WALL_SEP = 0.004         # min gap between reported walls (0.4% of spot)
@@ -603,13 +604,21 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     # GEX + walls, split into two expiration buckets (internal math in chain
     # terms; strikes/flip shifted to display terms via disp()):
     #   near = contracts through the next quarterly ES/NQ futures expiration
-    #          (the front-month contract dealers are actually hedging with)
+    #          (the front-month contract dealers are actually hedging with),
+    #          but never more than NEAR_MAX_DTE out. Quarterly spacing is ~91
+    #          days against a 95 day book, so without the cap the bucket holds
+    #          almost the whole chain for most of the quarter and the two
+    #          panels report identical numbers.
     #   full = everything through MAX_DTE, as before
     if contracts:
-        near_cutoff = next_futures_expiry(today)
+        fut_exp = next_futures_expiry(today)
+        near_cutoff = min(fut_exp, today + timedelta(days=NEAR_MAX_DTE))
         near_contracts = [c for c in contracts if c["exp"] <= near_cutoff]
         out["regimes"]["near"] = build_regime(near_contracts, spot, today, prior, disp)
-        out["regimes"]["near"]["label"] = f"Near-term (thru {near_cutoff.strftime('%m/%d')} fut exp)"
+        out["regimes"]["near"]["label"] = (
+            f"Near-term (thru {near_cutoff.strftime('%m/%d')} fut exp)"
+            if near_cutoff == fut_exp else
+            f"Near-term (thru {near_cutoff.strftime('%m/%d')}, {NEAR_MAX_DTE}d cap)")
         out["regimes"]["full"] = build_regime(contracts, spot, today, prior, disp)
         out["regimes"]["full"]["label"] = f"Full book (thru {MAX_DTE}d)"
         out["max_pain"] = [
