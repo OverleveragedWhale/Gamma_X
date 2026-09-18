@@ -30,7 +30,7 @@ echo [%NOW%] --- run start >> "%LOG%"
 
 rem Discard the previous run's generated page and match the remote exactly.
 rem Safe because this clone holds nothing but the generated index.html - it is
-rem never a working copy. Keeps the Surface from diverging if the GitHub
+rem never a working copy. Keeps this machine from diverging if the GitHub
 rem fallback workflow pushed in the meantime.
 cd /d "%PUB%"
 if errorlevel 1 (
