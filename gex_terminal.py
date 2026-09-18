@@ -696,6 +696,7 @@ def snapshot_json():
 PAGE = r"""<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="gx-digest" content="__GX_DIGEST__">
 <title>Gamma Terminal</title>
 <style>
 :root{
@@ -969,13 +970,44 @@ PAGE = PAGE.replace("__SNAPSHOT_DATA__", "null")
 PAGE = PAGE.replace("--muted:#7f8 da0;", "")
 
 
-def render_snapshot(path):
+_VOLATILE_KEYS = ("generated", "epoch", "seconds_to_refresh", "data_age_seconds")
+_DIGEST_RE = re.compile(r'name="gx-digest" content="([0-9a-f]*)"')
+
+
+def payload_digest(data):
+    """Fingerprint of the numbers on the page, ignoring when it was rendered.
+
+    Lets a caller poll faster than the upstream feed refreshes without
+    republishing: the Cboe endpoint is delayed ~15 min and open interest is
+    T-1, so most runs recompute to byte-identical figures under a new
+    timestamp, which would otherwise look like a change to git.
+    """
+    stable = {k: v for k, v in data.items() if k not in _VOLATILE_KEYS}
+    return hashlib.sha256(
+        json.dumps(stable, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def render_snapshot(path, skip_unchanged=False):
+    """Write the static snapshot. Returns True if the file was written."""
     recompute()
     data = snapshot_json()
+    digest = payload_digest(json.loads(data))
+    target = Path(path)
+
+    if skip_unchanged and target.exists():
+        try:
+            found = _DIGEST_RE.search(target.read_text(encoding="utf-8"))
+        except OSError:
+            found = None
+        if found and found.group(1) == digest:
+            return False
+
     page = PAGE.replace("const SNAPSHOT_DATA = null;",
                         f"const SNAPSHOT_DATA = {data};")
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(page, encoding="utf-8")
+    page = page.replace("__GX_DIGEST__", digest)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(page, encoding="utf-8")
+    return True
 
 
 # ---------------- HTTP handler ----------------
@@ -1052,10 +1084,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--snapshot", metavar="PATH",
                         help="write a static GitHub Pages-compatible HTML snapshot")
+    parser.add_argument("--skip-unchanged", action="store_true",
+                        help="with --snapshot, leave the file alone when the "
+                             "figures match what it already holds")
     args = parser.parse_args()
     if args.snapshot:
-        render_snapshot(args.snapshot)
-        print(f"Snapshot written to {args.snapshot}")
+        if render_snapshot(args.snapshot, skip_unchanged=args.skip_unchanged):
+            print(f"Snapshot written to {args.snapshot}")
+        else:
+            print("Snapshot unchanged, left as is")
         return
     try:
         server = SingleInstanceHTTPServer((HOST, PORT), Handler)

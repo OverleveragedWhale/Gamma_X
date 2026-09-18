@@ -45,7 +45,11 @@ if errorlevel 1 (
   echo [%NOW%] ERROR: cannot enter %REPO% >> "%LOG%"
   exit /b 1
 )
-%PY% gex_terminal.py --snapshot "%PUB%\index.html" >> "%LOG%" 2>&1
+rem --skip-unchanged leaves index.html untouched when the figures match what it
+rem already holds, so the git check below turns a minute-by-minute poll into a
+rem push only when the numbers actually move. The Cboe feed is ~15 min delayed
+rem and open interest is T-1, so most runs have nothing new to say.
+%PY% gex_terminal.py --snapshot "%PUB%\index.html" --skip-unchanged >> "%LOG%" 2>&1
 if errorlevel 1 (
   echo [%NOW%] ERROR: snapshot generation failed >> "%LOG%"
   exit /b 1

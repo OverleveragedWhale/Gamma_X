@@ -2,38 +2,18 @@
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Author>Gamma_X</Author>
-    <Description>Generates the GEX dashboard and publishes it to the snapshot branch that GitHub Pages serves. Hourly at :16 through the session, every 5 minutes across the 15:01-16:21 close window, and every 4 hours outside that. All times are the machine's local clock, so set the tablet to Eastern (or leave it elsewhere and rely on the tzdata package for the data side).</Description>
+    <Description>Generates the GEX dashboard and publishes it to the snapshot branch that GitHub Pages serves. Polls every minute from 09:25 to 16:25 on weekdays, and every 4 hours outside that. The run only pushes when the figures actually change (--skip-unchanged), so a minute-by-minute poll still publishes at roughly the rate the ~15 min delayed Cboe feed updates. All times are the machine's local clock, so set it to Eastern.</Description>
     <URI>\Gamma_X Snapshot</URI>
   </RegistrationInfo>
   <Triggers>
-    <!-- In-session hourly: 09:16 through 15:16, weekdays. -->
+    <!-- Session: every minute, 09:25 through 16:25, weekdays. -->
     <CalendarTrigger>
       <Repetition>
-        <Interval>PT1H</Interval>
-        <Duration>PT6H</Duration>
+        <Interval>PT1M</Interval>
+        <Duration>PT7H</Duration>
         <StopAtDurationEnd>false</StopAtDurationEnd>
       </Repetition>
-      <StartBoundary>2026-01-01T09:16:00</StartBoundary>
-      <Enabled>true</Enabled>
-      <ScheduleByWeek>
-        <DaysOfWeek>
-          <Monday />
-          <Tuesday />
-          <Wednesday />
-          <Thursday />
-          <Friday />
-        </DaysOfWeek>
-        <WeeksInterval>1</WeeksInterval>
-      </ScheduleByWeek>
-    </CalendarTrigger>
-    <!-- Close window: 15:01 to 16:21 every 5 minutes, weekdays. 17 runs. -->
-    <CalendarTrigger>
-      <Repetition>
-        <Interval>PT5M</Interval>
-        <Duration>PT1H20M</Duration>
-        <StopAtDurationEnd>false</StopAtDurationEnd>
-      </Repetition>
-      <StartBoundary>2026-01-01T15:01:00</StartBoundary>
+      <StartBoundary>2026-01-01T09:25:00</StartBoundary>
       <Enabled>true</Enabled>
       <ScheduleByWeek>
         <DaysOfWeek>
@@ -89,12 +69,11 @@
     <Hidden>false</Hidden>
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <WakeToRun>true</WakeToRun>
-    <ExecutionTimeLimit>PT10M</ExecutionTimeLimit>
+    <!-- A run is seconds of work; cap it well under the 1 minute cadence so a
+         hung fetch cannot block the following runs for long. IgnoreNew above
+         means a slow run is skipped rather than queued behind itself. -->
+    <ExecutionTimeLimit>PT3M</ExecutionTimeLimit>
     <Priority>7</Priority>
-    <RestartOnFailure>
-      <Interval>PT1M</Interval>
-      <Count>2</Count>
-    </RestartOnFailure>
   </Settings>
   <Actions Context="Author">
     <Exec>
