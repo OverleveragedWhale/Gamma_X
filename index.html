@@ -1,16 +1,271 @@
 <!DOCTYPE html>
-<meta charset="utf-8">
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="gx-digest" content="a687eafd0d0bab9dc1a24eab024630df11bf356f62fa5c032e38060d0219b25a">
 <title>Gamma Terminal</title>
-<meta name="color-scheme" content="dark light">
 <style>
-  body{background:#0b0f17;color:#e7ecf4;font:15px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;
-       display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;text-align:center}
-  .k{color:#d9a441;letter-spacing:.08em;font-size:12px}
-  p{color:#7f8da0;max-width:46ch}
-</style>
-<div>
-  <p class="k">GAMMA TERMINAL</p>
-  <h1>Waiting for first snapshot</h1>
-  <p>This branch is published by <code>tools/publish_snapshot.bat</code>.
-     The page appears here once the scheduled task runs.</p>
+:root{
+  --bg:#0b0f17; --panel:#131b28; --raised:#1a2434; --line:rgba(255,255,255,.08);
+  --ink:#e7ecf4;  --muted:#7f8da0;
+  --brass:#d9a441; --jade:#4bbf8a; --verm:#e0603f; --stress:#ff5d63;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);
+  font-family:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  font-size:14px;line-height:1.4;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:20px 18px 60px}
+header{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px 20px;
+  padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:22px}
+h1{font-family:system-ui,sans-serif;font-weight:800;font-size:19px;
+  letter-spacing:.14em;text-transform:uppercase;margin:0}
+h1 .g{color:var(--brass)}
+.status{display:flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.12em;
+  text-transform:uppercase}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--jade)}
+.dot.pulse{animation:pulse 2.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.status.closed .dot{background:var(--muted)}
+.status.weekend .dot{background:var(--brass)}
+.meta{margin-left:auto;display:flex;gap:18px;align-items:baseline;
+  font-size:12px;color:var(--muted)}
+.meta b{color:var(--ink);font-weight:600}
+button{font:inherit;font-size:12px;color:var(--ink);background:var(--raised);
+  border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer;
+  letter-spacing:.08em;text-transform:uppercase}
+button:hover{border-color:var(--brass);color:var(--brass)}
+button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:18px 20px;margin-bottom:18px}
+.phead{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+.sym{font-family:system-ui,sans-serif;font-weight:800;font-size:22px;letter-spacing:.06em}
+.spot{font-size:20px;font-weight:600}
+.regime{font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+  padding:3px 9px;border-radius:5px;border:1px solid transparent}
+.regime.positive{color:var(--jade);border-color:rgba(75,191,138,.4);background:rgba(75,191,138,.08)}
+.regime.negative{color:var(--verm);border-color:rgba(224,96,63,.4);background:rgba(224,96,63,.08)}
+.regime.unknown,.regime.STARTING{color:var(--muted);border-color:var(--line)}
+.role{font-size:12px;color:var(--muted);margin-left:auto}
+.scale{font-size:10.5px;color:var(--brass);letter-spacing:.05em;
+  margin:-6px 0 12px;opacity:.85}
+.regimes{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:900px){.regimes{grid-template-columns:1fr}}
+.regime-block{background:var(--raised);border:1px solid var(--line);
+  border-radius:10px;padding:14px 16px}
+.rhead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.rlabel{font-family:system-ui,sans-serif;font-weight:700;font-size:11.5px;
+  letter-spacing:.05em;color:var(--ink)}
+.grid{display:grid;grid-template-columns:150px 1fr;gap:18px}
+@media(max-width:640px){.grid{grid-template-columns:1fr}}
+.stat{margin-bottom:11px}
+.stat .k{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted)}
+.stat .v{font-size:17px;font-weight:600}
+.v.pos{color:var(--jade)}.v.neg{color:var(--verm)}
+.flash{animation:flash 1s ease-out}
+@keyframes flash{from{background:rgba(217,164,65,.25)}to{background:transparent}}
+/* range rail */
+.rail-wrap{padding:6px 2px}
+.rail-scale{display:flex;justify-content:space-between;font-size:10px;
+  color:var(--muted);margin-bottom:6px}
+.rail{position:relative;height:64px;border-radius:8px;
+  background:linear-gradient(180deg,var(--raised),#141d2b);
+  border:1px solid var(--line);overflow:hidden}
+.band{position:absolute;top:0;bottom:0}
+.band.margin{border-left:1px dashed rgba(255,255,255,.28);
+  border-right:1px dashed rgba(255,255,255,.28)}
+.tick{position:absolute;top:0;bottom:0;width:2px;transform:translateX(-1px)}
+.tick.spot{background:var(--ink);width:2px;z-index:6}
+.tick.flip{background:var(--brass);z-index:5}
+.tick.wall{z-index:4}
+.tick.wall.call{background:rgba(75,191,138,.9)}
+.tick.wall.put{background:rgba(224,96,63,.9)}
+.lab{position:absolute;font-size:9px;letter-spacing:.04em;white-space:nowrap;
+  transform:translateX(-50%);color:var(--muted)}
+.lab.top{top:3px}.lab.bot{bottom:3px}
+.lab.spot{color:var(--ink)}.lab.flip{color:var(--brass)}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:10px;color:var(--muted);
+  margin-top:9px}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;
+  margin-right:5px;vertical-align:middle}
+/* walls */
+.walls{margin-top:16px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--muted);font-weight:500;padding:4px 8px;border-bottom:1px solid var(--line)}
+td{padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.04)}
+td.num{text-align:right}
+.side-c{color:var(--jade)}.side-p{color:var(--verm)}
+.chip{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
+  padding:1px 6px;border-radius:4px;border:1px solid var(--line);color:var(--muted)}
+.chip.conf{color:var(--ink);border-color:rgba(255,255,255,.25)}
+.max-pain{margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
+.max-pain .k{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);
+  margin-bottom:5px}
+.eff{margin-top:12px;font-size:12.5px}
+.eff b{color:var(--brass);letter-spacing:.08em}
+.thin{color:var(--stress)}
+.mrow{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:13px;
+  padding-top:12px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+.err{color:var(--stress);font-size:12.5px}
+.foot{margin-top:26px;font-size:11px;color:var(--muted);line-height:1.7}
+@media(prefers-reduced-motion:reduce){.dot.pulse{animation:none}.flash{animation:none}}
+</style></head>
+<body><div class="wrap">
+<header>
+  <h1>Gamma<span class="g">/</span>Terminal</h1>
+  <div id="status" class="status"><span class="dot pulse"></span><span id="mkt">--</span></div>
+  <div class="meta">
+    <span>updated <b id="upd">--</b></span>
+    <span>next refresh <b id="cd">--</b></span>
+    <button id="refresh">Refresh now</button>
+  </div>
+</header>
+<div id="panels"></div>
+<div class="foot" id="foot"></div>
 </div>
+<script>
+const REFRESH_SECONDS = 1800;
+const SNAPSHOT_DATA = {"generated": "2026-09-18 07:26:44 ET", "market": "PRE-MARKET", "symbols": [{"symbol": "ES", "future": "ES", "chain": "_SPX", "ratio": 1.0, "fut_close": null, "scale_note": "SPX x 1.000 -> ES INDEX TERMS (index terms (set [closes] ES))", "ok": true, "error": null, "spot": 7637.76, "regimes": {"near": {"net_gex": 4252211304.87522, "net_gex_str": "+4.25B", "regime": "positive", "flip": 7638.32, "flip_dist": -0.01, "walls": {"call": [{"strike": 7650.0, "gex": 51867445919.24177, "gex_str": "+51.87B", "dist": 0.16, "lead": 2.3, "conf": null}, {"strike": 8000.0, "gex": 22088059631.77169, "gex_str": "+22.09B", "dist": 4.74, "lead": null, "conf": null}, {"strike": 7700.0, "gex": 15831439016.519602, "gex_str": "+15.83B", "dist": 0.81, "lead": null, "conf": null}], "put": [{"strike": 7650.0, "gex": 52444890293.403275, "gex_str": "+52.44B", "dist": 0.16, "lead": 2.8, "conf": null}, {"strike": 8000.0, "gex": 18552375901.56671, "gex_str": "+18.55B", "dist": 4.74, "lead": null, "conf": null}, {"strike": 7600.0, "gex": 17019363087.57065, "gex_str": "+17.02B", "dist": -0.49, "lead": null, "conf": null}]}, "dispersed": [], "role": "Fade: sell call wall, buy put wall", "label": "Near-term (thru 12/18 fut exp)"}, "full": {"net_gex": 4252211304.87522, "net_gex_str": "+4.25B", "regime": "positive", "flip": 7638.32, "flip_dist": -0.01, "walls": {"call": [{"strike": 7650.0, "gex": 51867445919.24177, "gex_str": "+51.87B", "dist": 0.16, "lead": 2.3, "conf": null}, {"strike": 8000.0, "gex": 22088059631.77169, "gex_str": "+22.09B", "dist": 4.74, "lead": null, "conf": null}, {"strike": 7700.0, "gex": 15831439016.519602, "gex_str": "+15.83B", "dist": 0.81, "lead": null, "conf": null}], "put": [{"strike": 7650.0, "gex": 52444890293.403275, "gex_str": "+52.44B", "dist": 0.16, "lead": 2.8, "conf": null}, {"strike": 8000.0, "gex": 18552375901.56671, "gex_str": "+18.55B", "dist": 4.74, "lead": null, "conf": null}, {"strike": 7600.0, "gex": 17019363087.57065, "gex_str": "+17.02B", "dist": -0.49, "lead": null, "conf": null}]}, "dispersed": [], "role": "Fade: sell call wall, buy put wall", "label": "Full book (thru 95d)"}}, "max_pain": [{"expiry": "2026-09-18", "strike": 7520.0, "dist": -1.54, "loss_str": "+104.62B"}, {"expiry": "2026-09-21", "strike": 7670.0, "dist": 0.42, "loss_str": "+88.6M"}, {"expiry": "2026-09-22", "strike": 7645.0, "dist": 0.09, "loss_str": "+49.4M"}, {"expiry": "2026-09-23", "strike": 7635.0, "dist": -0.04, "loss_str": "+40.1M"}, {"expiry": "2026-09-24", "strike": 7650.0, "dist": 0.16, "loss_str": "+32.0M"}, {"expiry": "2026-09-25", "strike": 7650.0, "dist": 0.16, "loss_str": "+1.20B"}, {"expiry": "2026-09-28", "strike": 7670.0, "dist": 0.42, "loss_str": "+54.2M"}, {"expiry": "2026-09-29", "strike": 7645.0, "dist": 0.09, "loss_str": "+17.6M"}, {"expiry": "2026-09-30", "strike": 7575.0, "dist": -0.82, "loss_str": "+4.45B"}, {"expiry": "2026-10-01", "strike": 7650.0, "dist": 0.16, "loss_str": "+13.6M"}, {"expiry": "2026-10-02", "strike": 7650.0, "dist": 0.16, "loss_str": "+338.0M"}, {"expiry": "2026-10-05", "strike": 7680.0, "dist": 0.55, "loss_str": "+24.4M"}, {"expiry": "2026-10-06", "strike": 7630.0, "dist": -0.1, "loss_str": "+8.0M"}, {"expiry": "2026-10-07", "strike": 7675.0, "dist": 0.49, "loss_str": "+11.2M"}, {"expiry": "2026-10-08", "strike": 7650.0, "dist": 0.16, "loss_str": "+28.7M"}, {"expiry": "2026-10-09", "strike": 7625.0, "dist": -0.17, "loss_str": "+569.5M"}, {"expiry": "2026-10-12", "strike": 7640.0, "dist": 0.03, "loss_str": "+31.4M"}, {"expiry": "2026-10-13", "strike": 7625.0, "dist": -0.17, "loss_str": "+8.8M"}, {"expiry": "2026-10-14", "strike": 7625.0, "dist": -0.17, "loss_str": "+12.1M"}, {"expiry": "2026-10-15", "strike": 7600.0, "dist": -0.49, "loss_str": "+5.8M"}, {"expiry": "2026-10-16", "strike": 7500.0, "dist": -1.8, "loss_str": "+33.99B"}, {"expiry": "2026-10-19", "strike": 7630.0, "dist": -0.1, "loss_str": "+4.3M"}, {"expiry": "2026-10-20", "strike": 7625.0, "dist": -0.17, "loss_str": "+4.3M"}, {"expiry": "2026-10-21", "strike": 7600.0, "dist": -0.49, "loss_str": "+663,000"}, {"expiry": "2026-10-22", "strike": 7700.0, "dist": 0.81, "loss_str": "+5.1M"}, {"expiry": "2026-10-23", "strike": 7600.0, "dist": -0.49, "loss_str": "+245.4M"}, {"expiry": "2026-10-26", "strike": 7625.0, "dist": -0.17, "loss_str": "+562,500"}, {"expiry": "2026-10-30", "strike": 7675.0, "dist": 0.49, "loss_str": "+813.0M"}, {"expiry": "2026-11-03", "strike": 7700.0, "dist": 0.81, "loss_str": "+14.5M"}, {"expiry": "2026-11-04", "strike": 7725.0, "dist": 1.14, "loss_str": "+5.8M"}, {"expiry": "2026-11-06", "strike": 7650.0, "dist": 0.16, "loss_str": "+19.7M"}, {"expiry": "2026-11-20", "strike": 7500.0, "dist": -1.8, "loss_str": "+17.31B"}, {"expiry": "2026-11-30", "strike": 7670.0, "dist": 0.42, "loss_str": "+170.7M"}, {"expiry": "2026-12-18", "strike": 7000.0, "dist": -8.35, "loss_str": "+132.77B"}], "margin": {"error": "no index close for notional"}}, {"symbol": "NQ", "future": "NQ", "chain": "QQQ", "ratio": 1.0, "fut_close": null, "scale_note": "QQQ x 1.000 -> NQ INDEX TERMS (index terms (set [closes] NQ))", "ok": true, "error": null, "spot": 719.92, "regimes": {"near": {"net_gex": -1975359717.68154, "net_gex_str": "-1.98B", "regime": "negative", "flip": 721.21, "flip_dist": -0.18, "walls": {"call": [{"strike": 720.0, "gex": 1835069090.5731695, "gex_str": "+1.84B", "dist": 0.01, "lead": 1.7, "conf": null}, {"strike": 725.0, "gex": 1050874273.45664, "gex_str": "+1.05B", "dist": 0.71, "lead": null, "conf": null}, {"strike": 715.0, "gex": 1002629473.1104928, "gex_str": "+1.00B", "dist": -0.68, "lead": null, "conf": null}], "put": [{"strike": 715.0, "gex": 1465802412.793468, "gex_str": "+1.47B", "dist": -0.68, "lead": 1.1, "conf": null}, {"strike": 710.0, "gex": 1348870726.4241066, "gex_str": "+1.35B", "dist": -1.38, "lead": null, "conf": null}, {"strike": 700.0, "gex": 1310742482.6995227, "gex_str": "+1.31B", "dist": -2.77, "lead": null, "conf": null}]}, "dispersed": ["put"], "role": "Put wall = break trigger; call wall caps rallies", "label": "Near-term (thru 12/18 fut exp)"}, "full": {"net_gex": -1975359717.68154, "net_gex_str": "-1.98B", "regime": "negative", "flip": 721.21, "flip_dist": -0.18, "walls": {"call": [{"strike": 720.0, "gex": 1835069090.5731695, "gex_str": "+1.84B", "dist": 0.01, "lead": 1.7, "conf": null}, {"strike": 725.0, "gex": 1050874273.45664, "gex_str": "+1.05B", "dist": 0.71, "lead": null, "conf": null}, {"strike": 715.0, "gex": 1002629473.1104928, "gex_str": "+1.00B", "dist": -0.68, "lead": null, "conf": null}], "put": [{"strike": 715.0, "gex": 1465802412.793468, "gex_str": "+1.47B", "dist": -0.68, "lead": 1.1, "conf": null}, {"strike": 710.0, "gex": 1348870726.4241066, "gex_str": "+1.35B", "dist": -1.38, "lead": null, "conf": null}, {"strike": 700.0, "gex": 1310742482.6995227, "gex_str": "+1.31B", "dist": -2.77, "lead": null, "conf": null}]}, "dispersed": ["put"], "role": "Put wall = break trigger; call wall caps rallies", "label": "Full book (thru 95d)"}}, "max_pain": [{"expiry": "2026-09-18", "strike": 701.0, "dist": -2.63, "loss_str": "+1.45B"}, {"expiry": "2026-09-21", "strike": 715.0, "dist": -0.68, "loss_str": "+13.4M"}, {"expiry": "2026-09-22", "strike": 713.0, "dist": -0.96, "loss_str": "+6.6M"}, {"expiry": "2026-09-23", "strike": 714.0, "dist": -0.82, "loss_str": "+3.8M"}, {"expiry": "2026-09-24", "strike": 715.0, "dist": -0.68, "loss_str": "+3.5M"}, {"expiry": "2026-09-25", "strike": 717.0, "dist": -0.41, "loss_str": "+30.0M"}, {"expiry": "2026-09-28", "strike": 715.0, "dist": -0.68, "loss_str": "+3.0M"}, {"expiry": "2026-09-29", "strike": 710.0, "dist": -1.38, "loss_str": "+1.0M"}, {"expiry": "2026-09-30", "strike": 710.0, "dist": -1.38, "loss_str": "+153.8M"}, {"expiry": "2026-10-01", "strike": 715.0, "dist": -0.68, "loss_str": "+500,000"}, {"expiry": "2026-10-02", "strike": 714.0, "dist": -0.82, "loss_str": "+22.3M"}, {"expiry": "2026-10-09", "strike": 715.0, "dist": -0.68, "loss_str": "+12.1M"}, {"expiry": "2026-10-16", "strike": 715.0, "dist": -0.68, "loss_str": "+296.8M"}, {"expiry": "2026-10-23", "strike": 709.0, "dist": -1.52, "loss_str": "+6.0M"}, {"expiry": "2026-10-30", "strike": 717.0, "dist": -0.41, "loss_str": "+34.3M"}, {"expiry": "2026-11-20", "strike": 715.0, "dist": -0.68, "loss_str": "+77.4M"}, {"expiry": "2026-11-30", "strike": 715.0, "dist": -0.68, "loss_str": "+12.0M"}, {"expiry": "2026-12-18", "strike": 690.0, "dist": -4.16, "loss_str": "+2.15B"}], "margin": {"error": "no index close for notional"}}], "epoch": 1789730807.8622217, "refresh_seconds": 1800, "seconds_to_refresh": 1799, "data_age_seconds": 0};
+let secs=REFRESH_SECONDS, last = {};
+
+function fmtCd(s){const m=Math.floor(s/60),x=s%60;return m+":"+String(x).padStart(2,"0");}
+function pct(v,lo,hi){return hi>lo?100*(v-lo)/(hi-lo):50;}
+function clamp(x){return Math.max(0,Math.min(100,x));}
+
+function rail(s,r){
+  const m=s.margin||{};
+  const strikes=[...(r.walls.call||[]),...(r.walls.put||[])].map(w=>+w.strike);
+  let lo=Math.min(s.spot,...strikes), hi=Math.max(s.spot,...strikes);
+  if(!(hi>lo)){ lo=s.spot*0.95; hi=s.spot*1.05; }
+  if(m.band_lo!==undefined){lo=Math.min(lo,m.band_lo);hi=Math.max(hi,m.band_hi);}
+  const pad=(hi-lo)*0.06; lo-=pad; hi+=pad;
+  const L=(v)=>clamp(pct(v,lo,hi));
+  let html=`<div class="rail-wrap"><div class="rail-scale"><span>${lo.toFixed(1)}</span><span>${hi.toFixed(1)}</span></div><div class="rail">`;
+  if(m.band_lo!==undefined)
+    html+=`<div class="band margin" style="left:${L(m.band_lo)}%;right:${100-L(m.band_hi)}%"></div>`;
+  // walls (only in-domain)
+  for(const side of ["call","put"]) (r.walls[side]||[]).forEach(w=>{
+    if(w.strike<lo||w.strike>hi) return;
+    html+=`<div class="tick wall ${side}" style="left:${L(w.strike)}%"></div>`;
+    html+=`<div class="lab bot" style="left:${L(w.strike)}%">${(+w.strike).toFixed(0)}</div>`;
+  });
+  if(r.flip!==null&&r.flip!==undefined&&r.flip>=lo&&r.flip<=hi){
+    html+=`<div class="tick flip" style="left:${L(r.flip)}%"></div>`;
+    html+=`<div class="lab top flip" style="left:${L(r.flip)}%">flip</div>`;
+  }
+  html+=`<div class="tick spot" style="left:${L(s.spot)}%"></div>`;
+  html+=`<div class="lab top spot" style="left:${L(s.spot)}%">spot ${s.spot.toFixed(2)}</div>`;
+  html+=`</div>`;
+  html+=`<div class="legend"><span><i style="background:var(--ink)"></i>spot</span>`
+      +`<span><i style="background:var(--brass)"></i>flip</span>`;
+  if(m.band_lo!==undefined) html+=`<span>┊ margin band</span>`;
+  html+=`</div></div>`;
+  return html;
+}
+
+function wallRows(list, side){
+  if(!list||!list.length) return "";
+  return list.map(w=>{
+    let chips="";
+    if(w.lead) chips+=`<span class="chip">${w.lead>=2?"dominant":"lead"} x${w.lead}</span>`;
+    if(w.conf) chips+=` <span class="chip conf">~${w.conf}</span>`;
+    return `<tr><td class="side-${side[0]}">${side.toUpperCase()}</td>`
+      +`<td class="num">${(+w.strike).toFixed(0)}</td>`
+      +`<td class="num">${w.gex_str}</td>`
+      +`<td class="num">${w.dist>0?"+":""}${w.dist}%</td>`
+      +`<td>${chips}</td></tr>`;
+  }).join("");
+}
+
+function regimeBlock(s,key,r){
+  const gexClass=r.regime==="positive"?"pos":r.regime==="negative"?"neg":"";
+  let eff = r.dispersed&&r.dispersed.length
+     ? `<div class="eff thin">Dispersed gamma (${r.dispersed.join("/")}) — no single dominant wall. Lean on volume profile / prior levels or stand down.</div>`
+     : "";
+  return `<div class="regime-block">
+    <div class="rhead">
+      <span class="rlabel">${r.label||key}</span>
+      <span class="regime ${r.regime}">${r.regime} gamma</span>
+      <span class="role">${r.role||""}</span>
+    </div>
+    <div class="grid">
+      <div class="stats">
+        <div class="stat"><div class="k">Net GEX</div><div class="v ${gexClass}" data-k="${s.symbol}-${key}-gex">${r.net_gex_str}</div></div>
+        <div class="stat"><div class="k">Flip</div><div class="v">${r.flip!==null&&r.flip!==undefined?r.flip.toFixed(2):"—"}${r.flip_dist!==null&&r.flip_dist!==undefined?` <span style="font-size:12px;color:var(--muted)">(${r.flip_dist>0?"+":""}${r.flip_dist}%)</span>`:""}</div></div>
+      </div>
+      <div>
+        ${rail(s,r)}
+        <div class="walls"><table><thead><tr><th>Side</th><th class="num">Strike</th><th class="num">GEX</th><th class="num">Dist</th><th>Tags</th></tr></thead>
+        <tbody>${wallRows(r.walls.call,"call")}${wallRows(r.walls.put,"put")}</tbody></table></div>
+        ${eff}
+      </div>
+    </div>
+  </div>`;
+}
+
+function panel(s){
+  if(!s.ok) return `<div class="panel"><div class="phead"><span class="sym">${s.symbol}</span></div><div class="err">error: ${s.error}</div></div>`;
+  const m=s.margin||{};
+  let marg="";
+  if(m.error){ marg=`<div class="mrow">margin: ${m.error}</div>`; }
+  else if(m.pct!==undefined){
+    marg=`<div class="mrow"><span>${m.future} margin covers <b style="color:var(--ink)">${m.pct}%</b> → band ${m.band_lo}–${m.band_hi}</span></div>`;
+  }
+  const regimes=s.regimes||{};
+  const maxPain=(s.max_pain||[]).length
+    ? `<div class="max-pain"><div class="k">Max pain by expiry</div><table><thead><tr><th>Expiry</th><th class="num">Level</th><th class="num">Dist</th><th class="num">Open-interest loss</th></tr></thead><tbody>`
+      +(s.max_pain||[]).map(p=>`<tr><td>${p.expiry}</td><td class="num">${(+p.strike).toFixed(2)}</td><td class="num">${p.dist>0?"+":""}${p.dist}%</td><td class="num">${p.loss_str}</td></tr>`).join("")
+      +`</tbody></table></div>`
+    : "";
+  const body = (regimes.near||regimes.full)
+    ? `<div class="regimes">`
+      +(regimes.near?regimeBlock(s,"near",regimes.near):"")
+      +(regimes.full?regimeBlock(s,"full",regimes.full):"")
+      +`</div>`
+    : `<div class="err">${s.error_note||"no usable option contracts returned"}</div>`;
+  return `<div class="panel">
+    <div class="phead">
+      <span class="sym">${s.symbol}</span>
+      <span class="spot" data-k="${s.symbol}-spot">${s.spot.toFixed(2)}</span>
+    </div>
+    ${s.scale_note?`<div class="scale">levels: ${s.scale_note}</div>`:""}
+    ${body}
+    ${maxPain}
+    ${marg}
+  </div>`;
+}
+
+async function load(){
+  try{
+    const d = SNAPSHOT_DATA || await fetch("/api/data",{cache:"no-store"}).then(res=>res.json());
+    secs=d.seconds_to_refresh;
+    document.getElementById("mkt").textContent=d.market;
+    const st=document.getElementById("status");
+    st.className="status"+(d.market==="OPEN"?"":d.market.startsWith("WEEKEND")?" weekend":" closed");
+    document.getElementById("upd").textContent=d.generated||"—";
+    if(SNAPSHOT_DATA) document.getElementById("refresh").style.display="none";
+    document.getElementById("panels").innerHTML=(d.symbols||[]).map(panel).join("");
+    // change flash
+    (d.symbols||[]).forEach(s=>{
+      if(!s.ok)return;
+      for(const key of ["near","full"]){
+        const r=(s.regimes||{})[key]; if(!r) continue;
+        const gk=`${s.symbol}-${key}-gex`;
+        if(last[gk]!==undefined&&last[gk]!==r.net_gex_str){
+          const el=document.querySelector(`[data-k="${gk}"]`); if(el)el.classList.add("flash");
+        }
+        last[gk]=r.net_gex_str;
+      }
+    });
+    document.getElementById("foot").innerHTML=
+      `Data ~15&nbsp;min delayed · open interest is T-1 · index close proxies the futures close.`
+      +` Server recomputes every ${Math.round(REFRESH_SECONDS/60)}&nbsp;min; margin numbers come from your config.ini and need manual upkeep.`;
+  }catch(e){ document.getElementById("mkt").textContent="server unreachable"; }
+}
+function tick(){ secs=Math.max(0,secs-1); document.getElementById("cd").textContent=fmtCd(secs);
+  if(secs<=0){ secs=REFRESH_SECONDS; } }
+document.getElementById("refresh").addEventListener("click",async()=>{
+  await fetch("/refresh",{method:"POST"}); setTimeout(load,600); });
+load(); setInterval(load,30000); setInterval(tick,1000);
+</script>
+</body></html>
