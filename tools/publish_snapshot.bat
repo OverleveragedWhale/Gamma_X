@@ -57,7 +57,7 @@ if errorlevel 1 (
 )
 
 cd /d "%PUB%"
-git add index.html >> "%LOG%" 2>&1
+git add index.html data.json >> "%LOG%" 2>&1
 git diff --cached --quiet
 if not errorlevel 1 (
   echo [%NOW%] no change, nothing to publish >> "%LOG%"

@@ -47,7 +47,7 @@ jobs:
           python gex_terminal.py --snapshot pub/index.html --skip-unchanged
 
           cd pub
-          git add index.html
+          git add index.html data.json
           if git diff --cached --quiet; then
             echo "figures match the live page; nothing to publish"
             echo "published=false" >> "$GITHUB_OUTPUT"

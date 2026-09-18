@@ -820,7 +820,7 @@ td.num{text-align:right}
   <div id="status" class="status"><span class="dot pulse"></span><span id="mkt">--</span></div>
   <div class="meta">
     <span>updated <b id="upd">--</b></span>
-    <span>next refresh <b id="cd">--</b></span>
+    <span><span id="cdlab">next refresh</span> <b id="cd">--</b></span>
     <button id="refresh">Refresh now</button>
   </div>
 </header>
@@ -830,7 +830,12 @@ td.num{text-align:right}
 <script>
 const REFRESH_SECONDS = __REFRESH_SECONDS__;
 const SNAPSHOT_DATA = __SNAPSHOT_DATA__;
-let secs=REFRESH_SECONDS, last = {};
+// A published snapshot has its figures baked in so it renders standalone, and
+// also polls data.json, which the publisher writes beside index.html. That is
+// what lets a static page follow later snapshots without the viewer reloading.
+const IS_SNAPSHOT = SNAPSHOT_DATA !== null;
+const POLL_MS = 60000;
+let secs=REFRESH_SECONDS, last = {}, dataEpoch = null;
 
 function fmtCd(s){const m=Math.floor(s/60),x=s%60;return m+":"+String(x).padStart(2,"0");}
 function pct(v,lo,hi){return hi>lo?100*(v-lo)/(hi-lo):50;}
@@ -939,15 +944,27 @@ function panel(s){
   </div>`;
 }
 
+async function fetchData(){
+  if(!IS_SNAPSHOT) return await fetch("/api/data",{cache:"no-store"}).then(res=>res.json());
+  // Unique query param gets past the Pages CDN. Falling back to the baked-in
+  // copy keeps the page working on first paint and when opened off disk.
+  try{
+    const res = await fetch("data.json?t="+Date.now(),{cache:"no-store"});
+    if(res.ok) return await res.json();
+  }catch(e){}
+  return SNAPSHOT_DATA;
+}
+
 async function load(){
   try{
-    const d = SNAPSHOT_DATA || await fetch("/api/data",{cache:"no-store"}).then(res=>res.json());
+    const d = await fetchData();
     secs=d.seconds_to_refresh;
+    dataEpoch=d.epoch||null;
     document.getElementById("mkt").textContent=d.market;
     const st=document.getElementById("status");
     st.className="status"+(d.market==="OPEN"?"":d.market.startsWith("WEEKEND")?" weekend":" closed");
     document.getElementById("upd").textContent=d.generated||"—";
-    if(SNAPSHOT_DATA) document.getElementById("refresh").style.display="none";
+    document.getElementById("cdlab").textContent=IS_SNAPSHOT?"data age":"next refresh";
     document.getElementById("panels").innerHTML=(d.symbols||[]).map(panel).join("");
     // change flash
     (d.symbols||[]).forEach(s=>{
@@ -963,14 +980,26 @@ async function load(){
     });
     document.getElementById("foot").innerHTML=
       `Data ~15&nbsp;min delayed · open interest is T-1 · index close proxies the futures close.`
-      +` Server recomputes every ${Math.round(REFRESH_SECONDS/60)}&nbsp;min; margin numbers come from your config.ini and need manual upkeep.`;
+      +(IS_SNAPSHOT
+        ? ` Page re-checks for a new snapshot every ${Math.round(POLL_MS/1000)}s.`
+        : ` Server recomputes every ${Math.round(REFRESH_SECONDS/60)}&nbsp;min.`)
+      +` Margin numbers come from your config.ini and need manual upkeep.`;
   }catch(e){ document.getElementById("mkt").textContent="server unreachable"; }
 }
-function tick(){ secs=Math.max(0,secs-1); document.getElementById("cd").textContent=fmtCd(secs);
+function tick(){
+  const cd=document.getElementById("cd");
+  if(IS_SNAPSHOT){
+    // Count up from the recompute behind this snapshot, so a stalled publisher
+    // shows as growing age instead of hiding behind a fake countdown.
+    if(dataEpoch) cd.textContent=fmtCd(Math.max(0,Math.floor(Date.now()/1000-dataEpoch)));
+    return;
+  }
+  secs=Math.max(0,secs-1); cd.textContent=fmtCd(secs);
   if(secs<=0){ secs=REFRESH_SECONDS; } }
 document.getElementById("refresh").addEventListener("click",async()=>{
+  if(IS_SNAPSHOT){ await load(); return; }
   await fetch("/refresh",{method:"POST"}); setTimeout(load,600); });
-load(); setInterval(load,30000); setInterval(tick,1000);
+load(); setInterval(load,IS_SNAPSHOT?POLL_MS:30000); setInterval(tick,1000);
 </script>
 </body></html>"""
 PAGE = PAGE.replace("__REFRESH_SECONDS__", str(REFRESH_SECONDS))
@@ -997,13 +1026,21 @@ def payload_digest(data):
 
 
 def render_snapshot(path, skip_unchanged=False):
-    """Write the static snapshot. Returns True if the file was written."""
+    """Write the static snapshot and the data sidecar beside it.
+
+    index.html carries a baked-in copy so it renders on its own; data.json is
+    what the published page polls to pick up later snapshots without a reload.
+    Returns True if the files were written.
+    """
     recompute()
     data = snapshot_json()
     digest = payload_digest(json.loads(data))
     target = Path(path)
+    sidecar = target.with_name("data.json")
 
-    if skip_unchanged and target.exists():
+    # Require the sidecar too, or the first run after it was introduced would
+    # match on digest and never create it.
+    if skip_unchanged and target.exists() and sidecar.exists():
         try:
             found = _DIGEST_RE.search(target.read_text(encoding="utf-8"))
         except OSError:
@@ -1016,6 +1053,7 @@ def render_snapshot(path, skip_unchanged=False):
     page = page.replace("__GX_DIGEST__", digest)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(page, encoding="utf-8")
+    sidecar.write_text(data, encoding="utf-8")
     return True
 
 
