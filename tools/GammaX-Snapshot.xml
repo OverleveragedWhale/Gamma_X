@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Author>Gamma_X</Author>
+    <Description>Generates the GEX dashboard and publishes it to the snapshot branch that GitHub Pages serves. Hourly at :16 through the session, every 5 minutes across the 15:01-16:21 close window, and every 4 hours outside that. All times are the machine's local clock, so set the tablet to Eastern (or leave it elsewhere and rely on the tzdata package for the data side).</Description>
+    <URI>\Gamma_X Snapshot</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <!-- In-session hourly: 09:16 through 15:16, weekdays. -->
+    <CalendarTrigger>
+      <Repetition>
+        <Interval>PT1H</Interval>
+        <Duration>PT6H</Duration>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+      <StartBoundary>2026-01-01T09:16:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByWeek>
+        <DaysOfWeek>
+          <Monday />
+          <Tuesday />
+          <Wednesday />
+          <Thursday />
+          <Friday />
+        </DaysOfWeek>
+        <WeeksInterval>1</WeeksInterval>
+      </ScheduleByWeek>
+    </CalendarTrigger>
+    <!-- Close window: 15:01 to 16:21 every 5 minutes, weekdays. 17 runs. -->
+    <CalendarTrigger>
+      <Repetition>
+        <Interval>PT5M</Interval>
+        <Duration>PT1H20M</Duration>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+      <StartBoundary>2026-01-01T15:01:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByWeek>
+        <DaysOfWeek>
+          <Monday />
+          <Tuesday />
+          <Wednesday />
+          <Thursday />
+          <Friday />
+        </DaysOfWeek>
+        <WeeksInterval>1</WeeksInterval>
+      </ScheduleByWeek>
+    </CalendarTrigger>
+    <!-- Off-hours: 20:16, 00:16, 04:16, 08:16 every day. -->
+    <CalendarTrigger>
+      <Repetition>
+        <Interval>PT4H</Interval>
+        <Duration>PT12H</Duration>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+      <StartBoundary>2026-01-01T20:16:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
+    </CalendarTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <!-- Replace with COMPUTERNAME\YourUser, or set it in the General tab
+           after importing. LogonType must be Password, not S4U: an S4U task
+           runs without network access, which would break both the data fetch
+           and the git push. -->
+      <UserId>REPLACE\WITH_YOUR_USER</UserId>
+      <LogonType>Password</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <!-- A tablet is on battery often enough that the defaults here would
+         silently skip most runs. -->
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>true</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>true</WakeToRun>
+    <ExecutionTimeLimit>PT10M</ExecutionTimeLimit>
+    <Priority>7</Priority>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>2</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>C:\GammaX\Gamma_X\tools\publish_snapshot.bat</Command>
+    </Exec>
+  </Actions>
+</Task>
