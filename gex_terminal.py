@@ -437,12 +437,19 @@ def prior_session(rows, today):
 
 # ---------------- margin buffer ----------------
 def margin_buffer(inst, idx_close, margins_cfg):
+    """Margin per contract, expressed in index points as well as dollars.
+
+    A futures contract's P&L is points * multiplier, so margin / multiplier is
+    exactly how many points the market can move against one contract before the
+    posted margin is gone. Sizing the band off index notional instead - the old
+    margin/(index_close*multiplier) - measures the move against the cash index
+    and then draws it on a futures axis, stretching the band by the basis.
+    """
     fut = inst["future"]
     margin = float(margins_cfg[fut])
     notional = idx_close * inst["multiplier"]
-    pct = margin / notional
     return {"future": fut, "index_close": idx_close, "notional": notional,
-            "margin": margin, "pct": pct}
+            "margin": margin, "points": margin / inst["multiplier"]}
 
 
 # ---------------- assembly ----------------
@@ -614,14 +621,20 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
         out["error_note"] = "no usable option contracts returned (verify chain is free)"
         out["max_pain"] = []
 
-    # margin band (pct is scale-free; band built in chain terms then disp'd)
+    # margin band, in points either side of the future - the axis the walls,
+    # flip and spot are already drawn on, so the band is directly comparable
     if margins_cfg is not None and idx_close:
         try:
             mb = margin_buffer(inst, idx_close, margins_cfg)
+            fut_spot = disp(spot)
+            pts = mb["points"]
             out["margin"] = {
-                "future": mb["future"], "pct": round(mb["pct"] * 100, 2),
-                "band_lo": disp(spot * (1 - mb["pct"])),
-                "band_hi": disp(spot * (1 + mb["pct"])),
+                "future": mb["future"],
+                "points": round(pts, 2),
+                "pct": round(100 * pts / fut_spot, 2) if fut_spot else None,
+                "band_lo": round(fut_spot - pts, 2),
+                "band_hi": round(fut_spot + pts, 2),
+                "margin": round(mb["margin"]),
                 "notional": round(mb["notional"]),
             }
         except Exception as exc:
@@ -850,7 +863,7 @@ function rail(s,r){
   html+=`</div>`;
   html+=`<div class="legend"><span><i style="background:var(--ink)"></i>spot</span>`
       +`<span><i style="background:var(--brass)"></i>flip</span>`;
-  if(m.band_lo!==undefined) html+=`<span>┊ margin band</span>`;
+  if(m.band_lo!==undefined) html+=`<span>┊ margin ±${m.points} pts</span>`;
   html+=`</div></div>`;
   return html;
 }
@@ -901,7 +914,9 @@ function panel(s){
   let marg="";
   if(m.error){ marg=`<div class="mrow">margin: ${m.error}</div>`; }
   else if(m.pct!==undefined){
-    marg=`<div class="mrow"><span>${m.future} margin covers <b style="color:var(--ink)">${m.pct}%</b> → band ${m.band_lo}–${m.band_hi}</span></div>`;
+    marg=`<div class="mrow"><span>${m.future} margin covers `
+        +`<b style="color:var(--ink)">±${m.points} pts</b> (${m.pct}%) `
+        +`→ band ${m.band_lo}–${m.band_hi}</span></div>`;
   }
   const regimes=s.regimes||{};
   const maxPain=(s.max_pain||[]).length
