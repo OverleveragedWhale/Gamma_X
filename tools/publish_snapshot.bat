@@ -45,6 +45,15 @@ if errorlevel 1 (
   echo [%NOW%] ERROR: cannot enter %REPO% >> "%LOG%"
   exit /b 1
 )
+rem Fast-forward code and config pushed while this machine was away - margin
+rem values set from the "Set margins" workflow arrive this way. ff-only so a
+rem local commit is never silently discarded, and a failure here is a warning
+rem rather than a skipped run: publishing slightly stale code beats publishing
+rem nothing.
+git fetch origin main >> "%LOG%" 2>&1
+git merge --ff-only origin/main >> "%LOG%" 2>&1
+if errorlevel 1 echo [%NOW%] WARN: could not fast-forward main >> "%LOG%"
+
 rem --skip-unchanged leaves index.html untouched when the figures match what it
 rem already holds, so the git check below publishes only when the numbers
 rem actually move. Open interest is T-1, so max pain cannot shift intraday at

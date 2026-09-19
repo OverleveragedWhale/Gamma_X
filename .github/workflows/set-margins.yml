@@ -1,0 +1,67 @@
+name: Set margins
+
+# Remote way to update the CME margin values in config.ini - Actions tab ->
+# Set margins -> Run workflow, which works from the GitHub mobile app. The
+# desktop publisher fast-forwards main on each run, so the new values reach it
+# without anyone touching that machine.
+
+on:
+  workflow_dispatch:
+    inputs:
+      es:
+        description: "ES initial margin per contract, USD (blank leaves it unchanged)"
+        required: false
+        default: ""
+      nq:
+        description: "NQ initial margin per contract, USD (blank leaves it unchanged)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: set-margins
+  cancel-in-progress: false
+
+jobs:
+  set:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Update config.ini
+        env:
+          ES_IN: ${{ inputs.es }}
+          NQ_IN: ${{ inputs.nq }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -n "${ES_IN}" ]; then args+=(--es "${ES_IN}"); fi
+          if [ -n "${NQ_IN}" ]; then args+=(--nq "${NQ_IN}"); fi
+          if [ ${#args[@]} -eq 0 ]; then
+            echo "::error::Give at least one of ES or NQ."
+            exit 1
+          fi
+          python tools/set_margins.py "${args[@]}"
+
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add config.ini
+          if git diff --cached --quiet; then
+            echo "values already match; nothing to commit"
+            exit 0
+          fi
+          git commit -m "Set margins via workflow ($(date -u '+%Y-%m-%d %H:%M UTC'))"
+          git push
+          echo "::notice::config.ini updated. The desktop picks this up on its next"
+          echo "::notice::run; to see it sooner, run 'Publish snapshot (manual backup)'."
