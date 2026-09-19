@@ -1,35 +1,46 @@
 #!/usr/bin/env python3
 """Set CME margin values in config.ini without disturbing its comments.
 
-Rewriting the file through configparser would drop the guidance comments that
-explain where the numbers come from and that they go stale, so this edits the
-value lines in place instead: an existing entry - including the commented-out
-examples the file ships with - is replaced, otherwise the entry is inserted
-under [margins].
+Rewriting through configparser would drop the guidance comments explaining
+where the numbers come from and that they go stale, so this edits the value
+lines in place instead.
 
-    python tools/set_margins.py --es 25010 --nq 39650
+Up and down legs are stored separately, since margin need not be symmetric;
+gex_terminal falls back to the bare ES/NQ key for a leg that is missing. Every
+write stamps SET_AT, which the dashboard shows, so a band is never read without
+knowing how old its inputs are.
+
+    python tools/set_margins.py --es-up 25010 --es-down 24000
+    python tools/set_margins.py --nq 39650          # both legs at once
 """
 import argparse
+import configparser
+import datetime
 import pathlib
 import re
 import sys
 
 CONFIG = pathlib.Path(__file__).resolve().parent.parent / "config.ini"
 SECTION = "[margins]"
+NL = chr(10)
 
 
 def set_value(text, key, value):
     """Return text with `key` set to `value` under [margins]."""
     line = f"{key} = {value}"
-    # Matches "ES = 1", "es=1", and the shipped "# ES  = 25010" examples.
-    pattern = re.compile(rf"^[ \t]*#?[ \t]*{re.escape(key)}[ \t]*=.*$",
+    # Matches "ES_UP = 1", "es_up=1", and the commented-out examples.
+    pattern = re.compile(r"^[ \t]*#?[ \t]*" + re.escape(key) + r"[ \t]*=.*$",
                          re.MULTILINE | re.IGNORECASE)
     if pattern.search(text):
         return pattern.sub(line, text, count=1)
     if SECTION not in text:
-        return text.rstrip("\n") + f"\n\n{SECTION}\n{line}\n"
-    head, _, tail = text.partition(SECTION)
-    return f"{head}{SECTION}\n{line}{tail}"
+        return text.rstrip(NL) + NL + NL + SECTION + NL + line + NL
+    # Append at the end of the section so the guidance comments stay on top.
+    start = text.index(SECTION) + len(SECTION)
+    nxt = re.search(r"^\[", text[start:], re.MULTILINE)
+    end = start + (nxt.start() if nxt else len(text) - start)
+    body = text[start:end].rstrip(NL) + NL + line + NL
+    return text[:start] + body + text[end:]
 
 
 def positive(raw):
@@ -44,31 +55,42 @@ def positive(raw):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--es", type=positive, help="ES initial margin per contract, USD")
-    ap.add_argument("--nq", type=positive, help="NQ initial margin per contract, USD")
+    for sym in ("es", "nq"):
+        ap.add_argument(f"--{sym}", type=positive,
+                        help=f"{sym.upper()} margin per contract, both legs")
+        ap.add_argument(f"--{sym}-up", type=positive,
+                        help=f"{sym.upper()} margin per contract, up leg")
+        ap.add_argument(f"--{sym}-down", type=positive,
+                        help=f"{sym.upper()} margin per contract, down leg")
     ap.add_argument("--path", type=pathlib.Path, default=CONFIG)
     args = ap.parse_args()
 
-    if not args.es and not args.nq:
-        ap.error("give --es and/or --nq")
+    updates = {}
+    for sym in ("ES", "NQ"):
+        both = getattr(args, sym.lower())
+        for side in ("UP", "DOWN"):
+            value = getattr(args, f"{sym.lower()}_{side.lower()}") or both
+            if value:
+                updates[f"{sym}_{side}"] = value
+    if not updates:
+        ap.error("give at least one margin value")
 
     text = args.path.read_text(encoding="utf-8")
-    for key, value in (("ES", args.es), ("NQ", args.nq)):
-        if value:
-            text = set_value(text, key, value)
-            print(f"  {key} = {value}")
+    for key, value in updates.items():
+        text = set_value(text, key, value)
+        print(f"  {key} = {value}")
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    text = set_value(text, "SET_AT", stamp)
+    print(f"  SET_AT = {stamp}")
     args.path.write_text(text, encoding="utf-8")
 
-    # Prove the result is loadable the same way the dashboard loads it.
-    import configparser
     parser = configparser.ConfigParser()
     parser.read(args.path)
     if not parser.has_section("margins"):
         print("ERROR: no [margins] section after edit", file=sys.stderr)
         return 1
-    for key in ("ES", "NQ"):
-        if key in parser["margins"]:
-            print(f"  verified {key} -> {float(parser['margins'][key]):,.2f}")
+    for key in sorted(updates):
+        print(f"  verified {key} -> {float(parser['margins'][key]):,.2f}")
     return 0
 
 

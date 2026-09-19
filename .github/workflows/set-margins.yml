@@ -2,18 +2,30 @@ name: Set margins
 
 # Remote way to update the CME margin values in config.ini - Actions tab ->
 # Set margins -> Run workflow, which works from the GitHub mobile app. The
-# desktop publisher fast-forwards main on each run, so the new values reach it
-# without anyone touching that machine.
+# desktop publisher fast-forwards main on each run, so new values reach it
+# without touching that machine.
+#
+# Up and down legs are separate because margin need not be symmetric. Leaving
+# a field blank leaves that value alone. Every write stamps SET_AT, which the
+# dashboard displays beside the band.
 
 on:
   workflow_dispatch:
     inputs:
-      es:
-        description: "ES initial margin per contract, USD (blank leaves it unchanged)"
+      es_up:
+        description: "ES margin per contract, up leg (USD)"
         required: false
         default: ""
-      nq:
-        description: "NQ initial margin per contract, USD (blank leaves it unchanged)"
+      es_down:
+        description: "ES margin per contract, down leg (USD)"
+        required: false
+        default: ""
+      nq_up:
+        description: "NQ margin per contract, up leg (USD)"
+        required: false
+        default: ""
+      nq_down:
+        description: "NQ margin per contract, down leg (USD)"
         required: false
         default: ""
 
@@ -38,15 +50,19 @@ jobs:
 
       - name: Update config.ini
         env:
-          ES_IN: ${{ inputs.es }}
-          NQ_IN: ${{ inputs.nq }}
+          ES_UP: ${{ inputs.es_up }}
+          ES_DOWN: ${{ inputs.es_down }}
+          NQ_UP: ${{ inputs.nq_up }}
+          NQ_DOWN: ${{ inputs.nq_down }}
         run: |
           set -euo pipefail
           args=()
-          if [ -n "${ES_IN}" ]; then args+=(--es "${ES_IN}"); fi
-          if [ -n "${NQ_IN}" ]; then args+=(--nq "${NQ_IN}"); fi
+          if [ -n "${ES_UP}" ];   then args+=(--es-up   "${ES_UP}");   fi
+          if [ -n "${ES_DOWN}" ]; then args+=(--es-down "${ES_DOWN}"); fi
+          if [ -n "${NQ_UP}" ];   then args+=(--nq-up   "${NQ_UP}");   fi
+          if [ -n "${NQ_DOWN}" ]; then args+=(--nq-down "${NQ_DOWN}"); fi
           if [ ${#args[@]} -eq 0 ]; then
-            echo "::error::Give at least one of ES or NQ."
+            echo "::error::Give at least one margin value."
             exit 1
           fi
           python tools/set_margins.py "${args[@]}"
@@ -63,5 +79,4 @@ jobs:
           fi
           git commit -m "Set margins via workflow ($(date -u '+%Y-%m-%d %H:%M UTC'))"
           git push
-          echo "::notice::config.ini updated. The desktop picks this up on its next"
-          echo "::notice::run; to see it sooner, run 'Publish snapshot (manual backup)'."
+          echo "::notice::config.ini updated. The desktop picks this up on its next run."

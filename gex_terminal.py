@@ -45,6 +45,9 @@ WALL_COUNT = 3               # ranked walls reported per side
 MIN_WALL_SEP = 0.004         # min gap between reported walls (0.4% of spot)
 WALL_CONFLUENCE_TOL = 0.0015  # wall within 0.15% of prior H/L/C = confluence
 PRIOR_SESSION_ROWS = 5        # daily bars kept for prior close + chain-scale ratio
+VOL_LOOKBACK = 20             # daily bars behind the realized-vol estimate
+Z_99, Z_999 = 2.3263, 3.0902  # two-sided normal quantiles for 99% / 99.9%
+TICKS_PER_POINT = 4           # ES and NQ both quote in quarter points
 
 CBOE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
 YAHOO_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
@@ -426,6 +429,16 @@ def fetch_closes(sym, max_rows=PRIOR_SESSION_ROWS):
     return [r["c"] for r in fetch_rows(sym, max_rows)]
 
 
+def realized_sigma(rows):
+    """Stdev of daily log returns from a close series, or None if too short."""
+    closes = [r["c"] for r in rows if r["c"] > 0]
+    rets = [math.log(b / a) for a, b in zip(closes, closes[1:])]
+    if len(rets) < 3:
+        return None
+    mean = sum(rets) / len(rets)
+    return math.sqrt(sum((r - mean) ** 2 for r in rets) / (len(rets) - 1))
+
+
 def prior_session(rows, today):
     """Most recent completed session (skips today's partial row if present)."""
     iso = today.isoformat()
@@ -436,20 +449,38 @@ def prior_session(rows, today):
 
 
 # ---------------- margin buffer ----------------
+def _margin_leg(margins_cfg, fut, side):
+    """Margin for one side, falling back to a single symmetric value."""
+    for key in (f"{fut}_{side}", fut):
+        if key in margins_cfg:
+            return float(margins_cfg[key])
+    raise KeyError(f"no margin for {fut} ({side.lower()} leg)")
+
+
 def margin_buffer(inst, idx_close, margins_cfg):
-    """Margin per contract, expressed in index points as well as dollars.
+    """Margin per contract in index points, up and down legs kept apart.
 
     A futures contract's P&L is points * multiplier, so margin / multiplier is
     exactly how many points the market can move against one contract before the
-    posted margin is gone. Sizing the band off index notional instead - the old
-    margin/(index_close*multiplier) - measures the move against the cash index
-    and then draws it on a futures axis, stretching the band by the basis.
+    posted margin is gone. Sizing the band off index notional instead measures
+    the move against the cash index and then draws it on a futures axis,
+    stretching the band by the basis.
+
+    `compare` is the requested cross-check: the two legs averaged, taken at 1%
+    for the 99%-liquidated level, then converted from ticks to points at
+    TICKS_PER_POINT. It is reported beside the band rather than drawn, so the
+    two can be read against each other.
     """
     fut = inst["future"]
-    margin = float(margins_cfg[fut])
-    notional = idx_close * inst["multiplier"]
-    return {"future": fut, "index_close": idx_close, "notional": notional,
-            "margin": margin, "points": margin / inst["multiplier"]}
+    up = _margin_leg(margins_cfg, fut, "UP")
+    down = _margin_leg(margins_cfg, fut, "DOWN")
+    mult = inst["multiplier"]
+    avg = (up + down) / 2.0
+    return {"future": fut, "index_close": idx_close,
+            "notional": idx_close * mult,
+            "margin_up": up, "margin_down": down, "margin_avg": avg,
+            "points_up": up / mult, "points_down": down / mult,
+            "compare": avg * 0.01 / TICKS_PER_POINT}
 
 
 # ---------------- assembly ----------------
@@ -562,8 +593,11 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
 
     # futures/chain ratio m: auto Yahoo future close -> config -> index terms
     m, fut_close, ratio_src = k_track, None, f"index terms (set [closes] {future})"
+    fut_rows = []
     try:
-        fc = fetch_closes(inst["fut"], max_rows=5)[-1]
+        # Same call feeds the ratio and the realized-vol estimate below.
+        fut_rows = fetch_rows(inst["fut"], max_rows=VOL_LOOKBACK + 2)
+        fc = fut_rows[-1]["c"]
         carry = fc / chain_close / k_track - 1.0     # implied future/index carry
         if -0.01 <= carry <= 0.04:                   # plausible front-month carry
             fut_close, ratio_src = fc, f"auto {inst['fut']}"
@@ -621,21 +655,44 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
         out["error_note"] = "no usable option contracts returned (verify chain is free)"
         out["max_pain"] = []
 
+    # Confidence bands from the future's own realized vol, drawn about the
+    # previous session's close so the reference is fixed for the whole day
+    # rather than sliding with spot.
+    sigma = realized_sigma(fut_rows) if fut_rows else None
+    prior_fut = prior_session(fut_rows, today) if fut_rows else None
+    if sigma and prior_fut:
+        anchor = prior_fut["c"]
+        out["risk"] = {
+            "anchor": round(anchor, 2), "anchor_date": prior_fut["date"],
+            "sigma_pct": round(100 * sigma, 3), "bars": len(fut_rows),
+            "bands": [
+                {"label": label, "z": z,
+                 "points": round(anchor * z * sigma, 2),
+                 "lo": round(anchor * (1 - z * sigma), 2),
+                 "hi": round(anchor * (1 + z * sigma), 2)}
+                for label, z in (("99%", Z_99), ("99.9%", Z_999))
+            ],
+        }
+    else:
+        out["risk"] = {"error": "not enough futures history for a vol estimate"}
+
     # margin band, in points either side of the future - the axis the walls,
     # flip and spot are already drawn on, so the band is directly comparable
     if margins_cfg is not None and idx_close:
         try:
             mb = margin_buffer(inst, idx_close, margins_cfg)
             fut_spot = disp(spot)
-            pts = mb["points"]
             out["margin"] = {
                 "future": mb["future"],
-                "points": round(pts, 2),
-                "pct": round(100 * pts / fut_spot, 2) if fut_spot else None,
-                "band_lo": round(fut_spot - pts, 2),
-                "band_hi": round(fut_spot + pts, 2),
-                "margin": round(mb["margin"]),
+                "points_up": round(mb["points_up"], 2),
+                "points_down": round(mb["points_down"], 2),
+                "band_lo": round(fut_spot - mb["points_down"], 2),
+                "band_hi": round(fut_spot + mb["points_up"], 2),
+                "margin_up": round(mb["margin_up"]),
+                "margin_down": round(mb["margin_down"]),
+                "compare": round(mb["compare"], 2),
                 "notional": round(mb["notional"]),
+                "set_at": margins_cfg.get("set_at") or "date not recorded",
             }
         except Exception as exc:
             out["margin"] = {"error": repr(exc)}
@@ -773,6 +830,8 @@ button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
 .band{position:absolute;top:0;bottom:0}
 .band.margin{border-left:1px dashed rgba(255,255,255,.28);
   border-right:1px dashed rgba(255,255,255,.28)}
+.band.r999{background:rgba(217,164,65,.07)}
+.band.r99{background:rgba(217,164,65,.13)}
 .tick{position:absolute;top:0;bottom:0;width:2px;transform:translateX(-1px)}
 .tick.spot{background:var(--ink);width:2px;z-index:6}
 .tick.flip{background:var(--brass);z-index:5}
@@ -843,9 +902,16 @@ function rail(s,r){
   let lo=Math.min(s.spot,...strikes), hi=Math.max(s.spot,...strikes);
   if(!(hi>lo)){ lo=s.spot*0.95; hi=s.spot*1.05; }
   if(m.band_lo!==undefined){lo=Math.min(lo,m.band_lo);hi=Math.max(hi,m.band_hi);}
+  const rb=((s.risk||{}).bands)||[];
+  rb.forEach(b=>{lo=Math.min(lo,b.lo);hi=Math.max(hi,b.hi);});
   const pad=(hi-lo)*0.06; lo-=pad; hi+=pad;
   const L=(v)=>clamp(pct(v,lo,hi));
   let html=`<div class="rail-wrap"><div class="rail-scale"><span>${lo.toFixed(1)}</span><span>${hi.toFixed(1)}</span></div><div class="rail">`;
+  // widest first so the 99% band reads as the denser core of the 99.9% one
+  [...rb].reverse().forEach(b=>{
+    const cls=b.label==="99%"?"r99":"r999";
+    html+=`<div class="band ${cls}" style="left:${L(b.lo)}%;right:${100-L(b.hi)}%"></div>`;
+  });
   if(m.band_lo!==undefined)
     html+=`<div class="band margin" style="left:${L(m.band_lo)}%;right:${100-L(m.band_hi)}%"></div>`;
   // walls (only in-domain)
@@ -863,7 +929,8 @@ function rail(s,r){
   html+=`</div>`;
   html+=`<div class="legend"><span><i style="background:var(--ink)"></i>spot</span>`
       +`<span><i style="background:var(--brass)"></i>flip</span>`;
-  if(m.band_lo!==undefined) html+=`<span>┊ margin ±${m.points} pts</span>`;
+  rb.forEach(b=>html+=`<span><i style="background:rgba(217,164,65,${b.label==="99%"?".45":".22"})"></i>${b.label} ±${b.points} pts</span>`);
+  if(m.band_lo!==undefined) html+=`<span>┊ margin +${m.points_up}/−${m.points_down} pts</span>`;
   html+=`</div></div>`;
   return html;
 }
@@ -912,11 +979,19 @@ function panel(s){
   if(!s.ok) return `<div class="panel"><div class="phead"><span class="sym">${s.symbol}</span></div><div class="err">error: ${s.error}</div></div>`;
   const m=s.margin||{};
   let marg="";
-  if(m.error){ marg=`<div class="mrow">margin: ${m.error}</div>`; }
-  else if(m.pct!==undefined){
-    marg=`<div class="mrow"><span>${m.future} margin covers `
-        +`<b style="color:var(--ink)">±${m.points} pts</b> (${m.pct}%) `
-        +`→ band ${m.band_lo}–${m.band_hi}</span></div>`;
+  const rk=s.risk||{};
+  if(rk.bands){
+    marg+=`<div class="mrow"><span>realized σ <b style="color:var(--ink)">${rk.sigma_pct}%</b>/day`
+        +` over ${rk.bars} bars, about the ${rk.anchor_date} close ${rk.anchor} → `
+        +rk.bands.map(b=>`${b.label} ±${b.points} (${b.lo}–${b.hi})`).join(" · ")
+        +`</span></div>`;
+  } else if(rk.error){ marg+=`<div class="mrow">risk bands: ${rk.error}</div>`; }
+  if(m.error){ marg+=`<div class="mrow">margin: ${m.error}</div>`; }
+  else if(m.points_up!==undefined){
+    marg+=`<div class="mrow"><span>${m.future} margin `
+        +`<b style="color:var(--ink)">+${m.points_up}/−${m.points_down} pts</b>`
+        +` → band ${m.band_lo}–${m.band_hi} · compare <b style="color:var(--ink)">${m.compare}</b>`
+        +` · set ${m.set_at}</span></div>`;
   }
   const regimes=s.regimes||{};
   const maxPain=(s.max_pain||[]).length
