@@ -47,6 +47,7 @@ WALL_CONFLUENCE_TOL = 0.0015  # wall within 0.15% of prior H/L/C = confluence
 PRIOR_SESSION_ROWS = 5        # daily bars kept for prior close + chain-scale ratio
 VOL_LOOKBACK = 20             # daily bars behind the realized-vol estimate
 Z_99, Z_999 = 2.3263, 3.0902  # two-sided normal quantiles for 99% / 99.9%
+BAND_DIVISOR = 2.0            # bands reported halved: margin is bi-directional
 TICKS_PER_POINT = 4           # ES and NQ both quote in quarter points
 
 CBOE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
@@ -468,10 +469,9 @@ def margin_buffer(inst, idx_close, margins_cfg, sigma=None):
 
     `compare` is the requested cross-check, reported beside the band rather
     than drawn. The two legs are averaged, taken at 1% for the 99%-liquidated
-    level, converted from ticks to points at TICKS_PER_POINT, scaled by the
-    day's realized sigma in percent, and halved because a margin covers moves
-    in both directions while this expresses one side of it. Every step is kept
-    in the payload so the figure can be audited without re-deriving it.
+    level, converted from ticks to points at TICKS_PER_POINT, then scaled by
+    the day's realized sigma in percent. Every step is kept in the payload so
+    the figure can be audited without re-deriving it.
     """
     fut = inst["future"]
     up = _margin_leg(margins_cfg, fut, "UP")
@@ -485,7 +485,7 @@ def margin_buffer(inst, idx_close, margins_cfg, sigma=None):
             "margin_up": up, "margin_down": down, "margin_avg": avg,
             "points_up": up / mult, "points_down": down / mult,
             "compare_base": base, "compare_sigma_pct": sigma_pct,
-            "compare": (base * sigma_pct / 2.0) if sigma_pct else None}
+            "compare": (base * sigma_pct) if sigma_pct else None}
 
 
 # ---------------- assembly ----------------
@@ -672,9 +672,9 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
             "sigma_pct": round(100 * sigma, 3), "bars": len(fut_rows),
             "bands": [
                 {"label": label, "z": z,
-                 "points": round(anchor * z * sigma, 2),
-                 "lo": round(anchor * (1 - z * sigma), 2),
-                 "hi": round(anchor * (1 + z * sigma), 2)}
+                 "points": round(anchor * z * sigma / BAND_DIVISOR, 2),
+                 "lo": round(anchor * (1 - z * sigma / BAND_DIVISOR), 2),
+                 "hi": round(anchor * (1 + z * sigma / BAND_DIVISOR), 2)}
                 for label, z in (("99%", Z_99), ("99.9%", Z_999))
             ],
         }
@@ -701,7 +701,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
                 # Derived from the rounded components the panel prints, so
                 # the displayed arithmetic reproduces exactly rather than
                 # drifting a cent against a full-precision sigma.
-                "compare": (round(_cmp_base * _cmp_sig / 2.0, 2)
+                "compare": (round(_cmp_base * _cmp_sig, 2)
                             if _cmp_sig else None),
                 "compare_base": _cmp_base,
                 "compare_sigma_pct": _cmp_sig,
@@ -1007,7 +1007,7 @@ function panel(s){
         +` → band ${m.band_lo}–${m.band_hi}`
         +(m.compare!==null&&m.compare!==undefined
           ? ` · compare <b style="color:var(--ink)">${m.compare}</b>`
-            +` <span style="opacity:.7">(${m.compare_base} × ${m.compare_sigma_pct}σ ÷ 2)</span>`
+            +` <span style="opacity:.7">(${m.compare_base} × ${m.compare_sigma_pct}σ)</span>`
           : ` · compare n/a (no vol estimate)`)
         +` · set ${m.set_at}</span></div>`;
   }
