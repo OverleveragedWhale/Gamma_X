@@ -457,7 +457,7 @@ def _margin_leg(margins_cfg, fut, side):
     raise KeyError(f"no margin for {fut} ({side.lower()} leg)")
 
 
-def margin_buffer(inst, idx_close, margins_cfg):
+def margin_buffer(inst, idx_close, margins_cfg, sigma=None):
     """Margin per contract in index points, up and down legs kept apart.
 
     A futures contract's P&L is points * multiplier, so margin / multiplier is
@@ -466,21 +466,26 @@ def margin_buffer(inst, idx_close, margins_cfg):
     the move against the cash index and then draws it on a futures axis,
     stretching the band by the basis.
 
-    `compare` is the requested cross-check: the two legs averaged, taken at 1%
-    for the 99%-liquidated level, then converted from ticks to points at
-    TICKS_PER_POINT. It is reported beside the band rather than drawn, so the
-    two can be read against each other.
+    `compare` is the requested cross-check, reported beside the band rather
+    than drawn. The two legs are averaged, taken at 1% for the 99%-liquidated
+    level, converted from ticks to points at TICKS_PER_POINT, scaled by the
+    day's realized sigma in percent, and halved because a margin covers moves
+    in both directions while this expresses one side of it. Every step is kept
+    in the payload so the figure can be audited without re-deriving it.
     """
     fut = inst["future"]
     up = _margin_leg(margins_cfg, fut, "UP")
     down = _margin_leg(margins_cfg, fut, "DOWN")
     mult = inst["multiplier"]
     avg = (up + down) / 2.0
+    base = avg * 0.01 / TICKS_PER_POINT
+    sigma_pct = 100.0 * sigma if sigma else None
     return {"future": fut, "index_close": idx_close,
             "notional": idx_close * mult,
             "margin_up": up, "margin_down": down, "margin_avg": avg,
             "points_up": up / mult, "points_down": down / mult,
-            "compare": avg * 0.01 / TICKS_PER_POINT}
+            "compare_base": base, "compare_sigma_pct": sigma_pct,
+            "compare": (base * sigma_pct / 2.0) if sigma_pct else None}
 
 
 # ---------------- assembly ----------------
@@ -680,8 +685,11 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     # flip and spot are already drawn on, so the band is directly comparable
     if margins_cfg is not None and idx_close:
         try:
-            mb = margin_buffer(inst, idx_close, margins_cfg)
+            mb = margin_buffer(inst, idx_close, margins_cfg, sigma)
             fut_spot = disp(spot)
+            _cmp_base = round(mb["compare_base"], 3)
+            _cmp_sig = (round(mb["compare_sigma_pct"], 3)
+                        if mb["compare_sigma_pct"] else None)
             out["margin"] = {
                 "future": mb["future"],
                 "points_up": round(mb["points_up"], 2),
@@ -690,7 +698,13 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
                 "band_hi": round(fut_spot + mb["points_up"], 2),
                 "margin_up": round(mb["margin_up"]),
                 "margin_down": round(mb["margin_down"]),
-                "compare": round(mb["compare"], 2),
+                # Derived from the rounded components the panel prints, so
+                # the displayed arithmetic reproduces exactly rather than
+                # drifting a cent against a full-precision sigma.
+                "compare": (round(_cmp_base * _cmp_sig / 2.0, 2)
+                            if _cmp_sig else None),
+                "compare_base": _cmp_base,
+                "compare_sigma_pct": _cmp_sig,
                 "notional": round(mb["notional"]),
                 "set_at": margins_cfg.get("set_at") or "date not recorded",
             }
@@ -990,7 +1004,11 @@ function panel(s){
   else if(m.points_up!==undefined){
     marg+=`<div class="mrow"><span>${m.future} margin `
         +`<b style="color:var(--ink)">+${m.points_up}/−${m.points_down} pts</b>`
-        +` → band ${m.band_lo}–${m.band_hi} · compare <b style="color:var(--ink)">${m.compare}</b>`
+        +` → band ${m.band_lo}–${m.band_hi}`
+        +(m.compare!==null&&m.compare!==undefined
+          ? ` · compare <b style="color:var(--ink)">${m.compare}</b>`
+            +` <span style="opacity:.7">(${m.compare_base} × ${m.compare_sigma_pct}σ ÷ 2)</span>`
+          : ` · compare n/a (no vol estimate)`)
         +` · set ${m.set_at}</span></div>`;
   }
   const regimes=s.regimes||{};
