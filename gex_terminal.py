@@ -3,7 +3,7 @@
 gex_terminal.py - single-file live GEX + margin dashboard (no email).
 
 Fetches Cboe delayed chains for SPY/QQQ; computes net GEX, the gamma
-flip, scored call/put walls, and a futures-margin buffer (Stooq is used only
+flip, scored call/put walls, and a futures-margin buffer (Yahoo is used only
 for the prior close used to scale chain-terms levels into futures terms);
 serves a live web terminal that recomputes every 15 minutes. One process,
 no scheduled tasks, no email.
@@ -36,7 +36,7 @@ import time
 import threading
 from datetime import time as dtime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 # ---------------- settings ----------------
 MAX_DTE = 95                 # GEX: ignore contracts beyond this many days
 NEAR_MAX_DTE = 32            # near-term bucket: never look further than this
@@ -44,10 +44,11 @@ SHARES_PER_CONTRACT = 100
 WALL_COUNT = 3               # ranked walls reported per side
 MIN_WALL_SEP = 0.004         # min gap between reported walls (0.4% of spot)
 WALL_CONFLUENCE_TOL = 0.0015  # wall within 0.15% of prior H/L/C = confluence
-PRIOR_SESSION_ROWS = 5        # Stooq rows needed for prior close + chain-scale ratio
+PRIOR_SESSION_ROWS = 5        # daily bars kept for prior close + chain-scale ratio
 
 CBOE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
-STOOQ_URL = "https://stooq.com/q/d/l/?s={sym}&i=d"
+YAHOO_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
+             "{sym}?range=1mo&interval=1d")
 
 # GEX source per tradeable. SPX index options are free-with-greeks, so ES uses
 # the native cash-index chain. Cboe's free feed does NOT carry NDX greeks,
@@ -55,16 +56,16 @@ STOOQ_URL = "https://stooq.com/q/d/l/?s={sym}&i=d"
 # by a single multiplicative ratio from real PRIOR CLOSES:
 #     m = prior_future_close / prior_chain_close      (level_future = strike * m)
 # m folds ETF tracking and the futures basis (which is itself ~multiplicative)
-# into one empirical number. The future close is auto-fetched from Stooq
+# into one empirical number. The future close is auto-fetched from Yahoo
 # (sanity-checked against the index ratio), overridable via config [closes].
-#   chain = Cboe options ticker    hist = Stooq chain-scale prior close (m)
-#   index = Stooq cash index (margin notional + tracking sanity)
-#   fut   = Stooq futures symbol for the prior settle
+#   chain = Cboe options ticker    hist = Yahoo chain-scale prior close (m)
+#   index = Yahoo cash index (margin notional + tracking sanity)
+#   fut   = Yahoo futures symbol for the prior settle
 INSTRUMENTS = [
-    {"future": "ES",  "chain": "_SPX", "hist": "^spx",   "index": "^spx",
-     "fut": "es.f",  "multiplier": 50},
-    {"future": "NQ",  "chain": "QQQ",  "hist": "qqq.us", "index": "^ndx",
-     "fut": "nq.f",  "multiplier": 20},
+    {"future": "ES",  "chain": "_SPX", "hist": "^GSPC", "index": "^GSPC",
+     "fut": "ES=F",  "multiplier": 50},
+    {"future": "NQ",  "chain": "QQQ",  "hist": "QQQ",   "index": "^NDX",
+     "fut": "NQ=F",  "multiplier": 20},
 ]
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -132,42 +133,10 @@ def next_futures_expiry(d):
 _COOKIE_JAR = http.cookiejar.CookieJar()
 _OPENER = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_COOKIE_JAR))
 
-# Some hosts (Stooq) gate plain requests behind a JS proof-of-work check:
-# a page with a challenge string `c`, a required hex-zero-prefix length `d`,
-# and a `/__verify` endpoint that expects the winning nonce `n` such that
-# sha256(c + str(n)) starts with `d` zero hex digits. Solving it once and
-# keeping the resulting cookie lets subsequent requests through normally.
-_CHALLENGE_RE = re.compile(r'c="([^"]+)",d=(\d+)')
-
-
-def _solve_pow_challenge(html, origin_url, timeout):
-    m = _CHALLENGE_RE.search(html)
-    if not m:
-        return False
-    c, d = m.group(1), int(m.group(2))
-    target = "0" * d
-    n = 0
-    while not hashlib.sha256(f"{c}{n}".encode()).hexdigest().startswith(target):
-        n += 1
-    verify_url = urllib.parse.urljoin(origin_url, "/__verify")
-    body = f"c={urllib.parse.quote(c)}&n={n}".encode()
-    req = urllib.request.Request(
-        verify_url, data=body, headers={
-            "User-Agent": "Mozilla/5.0",
-            "Content-Type": "application/x-www-form-urlencoded",
-        })
-    with _OPENER.open(req, timeout=timeout) as resp:
-        resp.read()
-    return True
-
-
-def http_get(url, timeout=30, _retry=True):
+def http_get(url, timeout=30):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with _OPENER.open(req, timeout=timeout) as resp:
         text = resp.read().decode("utf-8")
-    if _retry and "/__verify" in text and _CHALLENGE_RE.search(text):
-        if _solve_pow_challenge(text, url, timeout):
-            return http_get(url, timeout=timeout, _retry=False)
     return text
 
 
@@ -420,27 +389,41 @@ def find_flip(spot, contracts, today, span=0.07, steps=71):
 
 
 # ---------------- history (prior close + chain-scale ratio only) ----------------
-def fetch_rows(stooq_sym, max_rows=PRIOR_SESSION_ROWS):
-    """Daily OHLC rows (chronological) from Stooq CSV: Date,O,H,L,C,Volume."""
-    text = http_get(STOOQ_URL.format(sym=stooq_sym))
+def fetch_rows(sym, max_rows=PRIOR_SESSION_ROWS):
+    """Daily OHLC rows (chronological) from the Yahoo chart API.
+
+    Bar timestamps are epoch seconds at the exchange's session start, so the
+    meta gmtoffset converts them to the exchange's own calendar date; taking
+    the UTC date instead rolls a futures session onto the wrong day and makes
+    prior_session pick the wrong bar. A month is requested so a run of
+    holidays still leaves PRIOR_SESSION_ROWS usable bars.
+    """
+    text = http_get(YAHOO_URL.format(sym=quote(sym)))
+    try:
+        result = json.loads(text)["chart"]["result"][0]
+        stamps = result["timestamp"]
+        q = result["indicators"]["quote"][0]
+        off = result.get("meta", {}).get("gmtoffset") or 0
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        preview = text.strip()[:200]
+        raise ValueError(f"Yahoo history unusable for {sym} ({exc!r}) - "
+                         f"response was: {preview!r}") from exc
+
     rows = []
-    for line in text.strip().splitlines()[1:]:
-        p = line.split(",")
-        if len(p) >= 5:
-            try:
-                rows.append({"date": p[0], "o": float(p[1]), "h": float(p[2]),
-                             "l": float(p[3]), "c": float(p[4])})
-            except ValueError:
-                continue
+    for n, ts in enumerate(stamps):
+        bar = (q["open"][n], q["high"][n], q["low"][n], q["close"][n])
+        if any(v is None for v in bar):           # holidays come back as nulls
+            continue
+        rows.append({"date": datetime.utcfromtimestamp(ts + off).date().isoformat(),
+                     "o": float(bar[0]), "h": float(bar[1]),
+                     "l": float(bar[2]), "c": float(bar[3])})
     if len(rows) < 2:
-        preview = text.strip().replace("\n", " ")[:200]
-        raise ValueError(f"Stooq history too short for {stooq_sym} "
-                         f"({len(rows)} rows) - response was: {preview!r}")
+        raise ValueError(f"Yahoo history too short for {sym} ({len(rows)} rows)")
     return rows[-max_rows:]
 
 
-def fetch_closes(stooq_sym, max_rows=PRIOR_SESSION_ROWS):
-    return [r["c"] for r in fetch_rows(stooq_sym, max_rows)]
+def fetch_closes(sym, max_rows=PRIOR_SESSION_ROWS):
+    return [r["c"] for r in fetch_rows(sym, max_rows)]
 
 
 def prior_session(rows, today):
@@ -485,7 +468,7 @@ def load_margins():
 
 def load_closes():
     """Optional [closes] section: prior futures SETTLEMENT per future, used to
-    build the chain->future ratio when the auto Stooq futures pull is missing
+    build the chain->future ratio when the auto Yahoo futures pull is missing
     or fails the sanity check. Enter the number you read off your platform:
 
         [closes]
@@ -542,7 +525,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     """Compute one instrument, then map every level to FUTURES terms with a
     single ratio m = prior_future_close / prior_chain_close (real closes; folds
     ETF tracking + the multiplicative futures basis into one number). Future
-    close: auto from Stooq (sanity-checked vs the index ratio to reject
+    close: auto from Yahoo (sanity-checked vs the index ratio to reject
     back-adjusted continuous series), else config [closes], else index terms."""
     future = inst["future"]
     today = now_et().date()
@@ -551,7 +534,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
 
     # chain-scale prior close/session: feeds the chain->future ratio and PDH/
     # PDL/PDC wall confluence. Isolated from GEX/walls/flip below, which come
-    # entirely from the Cboe chain - a Stooq outage should degrade the ratio
+    # entirely from the Cboe chain - a history outage should degrade the ratio
     # scaling and confluence tags, not blank the panel.
     try:
         rows = fetch_rows(inst["hist"])
@@ -570,7 +553,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
                           future, inst["index"])
     k_track = (idx_close / chain_close) if (idx_close and chain_close) else 1.0
 
-    # futures/chain ratio m: auto Stooq future close -> config -> index terms
+    # futures/chain ratio m: auto Yahoo future close -> config -> index terms
     m, fut_close, ratio_src = k_track, None, f"index terms (set [closes] {future})"
     try:
         fc = fetch_closes(inst["fut"], max_rows=5)[-1]
@@ -656,7 +639,7 @@ def recompute():
     closes_cfg = load_closes()
 
     # Instruments are independent (different symbols/URLs) and each one is
-    # network-bound (Cboe chain + 3 Stooq calls), so run them concurrently
+    # network-bound (Cboe chain + 3 Yahoo calls), so run them concurrently
     # instead of paying for 12 sequential round-trips per cycle.
     syms = [None] * len(INSTRUMENTS)
 
