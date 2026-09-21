@@ -77,15 +77,15 @@ YAHOO_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
 # a back-adjusted continuous series would not be caught for those two.
 INSTRUMENTS = [
     {"future": "ES",  "chain": "_SPX", "hist": "^GSPC", "index": "^GSPC",
-     "fut": "ES=F",  "multiplier": 50,   "cycle": "quarterly"},
+     "fut": "ES=F",  "multiplier": 50,   "cycle": "quarterly", "exch": ".CME"},
     {"future": "NQ",  "chain": "QQQ",  "hist": "QQQ",   "index": "^NDX",
-     "fut": "NQ=F",  "multiplier": 20,   "cycle": "quarterly"},
+     "fut": "NQ=F",  "multiplier": 20,   "cycle": "quarterly", "exch": ".CME"},
     # Commodity books ride an ETF chain the same way NQ rides QQQ, but the
     # proxy is looser: see the ratio-noise note in compute_symbol.
     {"future": "GC",  "chain": "GLD",  "hist": "GLD",   "index": "GC=F",
-     "fut": "GC=F",  "multiplier": 100,  "cycle": "gc"},
+     "fut": "GC=F",  "multiplier": 100,  "cycle": "gc",        "exch": ".CMX"},
     {"future": "CL",  "chain": "USO",  "hist": "USO",   "index": "CL=F",
-     "fut": "CL=F",  "multiplier": 1000, "cycle": "cl"},
+     "fut": "CL=F",  "multiplier": 1000, "cycle": "cl",        "exch": ".NYM"},
 ]
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -201,6 +201,74 @@ def next_futures_expiry(d, cycle="quarterly"):
                   for year in (d.year - 1, d.year, d.year + 1)
                   for m in months]
     return min(c for c in candidates if (c - d).days > FUTURES_ROLL_DAYS)
+
+
+MONTH_CODES = "FGHJKMNQUVXZ"      # Jan..Dec, the standard futures month letters
+CONTRACT_CANDIDATES = 3           # how many contracts deep to compare on volume
+
+
+def contract_symbol(inst, year, month):
+    """Yahoo symbol for one delivery month, e.g. GCZ26.CMX."""
+    return f"{inst['future']}{MONTH_CODES[month - 1]}{year % 100:02d}{inst['exch']}"
+
+
+def contract_candidates(inst, d, n=CONTRACT_CANDIDATES):
+    """The next n contracts on this instrument's cycle, nearest first.
+
+    Each entry is (last trade date, delivery year, delivery month, symbol).
+    Contracts already inside FUTURES_ROLL_DAYS are dropped, matching the date
+    rule this list is compared against.
+    """
+    months, rule = EXPIRY_CYCLES[inst["cycle"]]
+    out = sorted({(rule(y, m), y, m)
+                  for y in (d.year, d.year + 1)
+                  for m in months
+                  if (rule(y, m) - d).days > FUTURES_ROLL_DAYS})[:n]
+    return [(exp, y, m, contract_symbol(inst, y, m)) for exp, y, m in out]
+
+
+def contract_volume(sym):
+    """Most recent session volume for one futures contract, or None."""
+    result = json.loads(http_get(YAHOO_URL.format(sym=quote(sym))))["chart"]["result"][0]
+    vols = [v for v in (result["indicators"]["quote"][0].get("volume") or []) if v]
+    return vols[-1] if vols else None
+
+
+def active_contract(inst, d):
+    """Pick the front contract by traded volume, not by proximity to expiry.
+
+    The nearest contract is not always the one being traded. Gold is the clear
+    case: with Oct two months from termination its volume is already a rounding
+    error against Dec, because metals liquidity concentrates in a few delivery
+    months rather than rolling evenly. A date rule would put the near-term
+    bucket on a contract almost nobody holds.
+
+    Open interest would be the better measure - it is positions rather than
+    turnover, and it does not spike in both legs during a roll - but no free
+    feed carries per-contract futures OI (CME's own endpoint returns 403), so
+    volume stands in. Falls back to the date rule if the fetch fails.
+    """
+    candidates = contract_candidates(inst, d)
+    rows = []
+    for exp, year, month, sym in candidates:
+        try:
+            vol = contract_volume(sym)
+        except Exception:
+            logging.info("%s: contract volume unavailable for %s", inst["future"], sym)
+            vol = None
+        rows.append({"symbol": sym, "expiry": exp.isoformat(), "volume": vol,
+                     "label": f"{calendar.month_abbr[month]} {year % 100:02d}"})
+    if not any(r["volume"] for r in rows):
+        exp = next_futures_expiry(d, inst["cycle"])
+        return {"expiry": exp, "source": "date rule (no volume)",
+                "chosen": None, "candidates": rows}
+    # Ties go to the nearer contract, which is what enumerate order gives.
+    idx = max(range(len(rows)), key=lambda i: rows[i]["volume"] or -1)
+    best = rows[idx]
+    for i, r in enumerate(rows):
+        r["active"] = (i == idx)
+    return {"expiry": date.fromisoformat(best["expiry"]),
+            "source": "volume", "chosen": best, "candidates": rows}
 
 
 _COOKIE_JAR = http.cookiejar.CookieJar()
@@ -749,13 +817,32 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     #          is monthly, so for it the cycle date binds and the cap rarely
     #          does; GC alternates between the two.
     #   full = everything through MAX_DTE, as before
+    # Which contract the near-term bucket belongs to, chosen on traded volume
+    # rather than nearness to expiry - see active_contract.
+    try:
+        active = active_contract(inst, today)
+    except Exception:
+        logging.exception("active contract lookup failed for %s", future)
+        active = {"expiry": next_futures_expiry(today, inst["cycle"]),
+                  "source": "date rule (lookup failed)",
+                  "chosen": None, "candidates": []}
+    out["contract"] = {
+        "label": (active["chosen"] or {}).get("label"),
+        "symbol": (active["chosen"] or {}).get("symbol"),
+        "expiry": active["expiry"].isoformat(),
+        "source": active["source"],
+        "date_rule": next_futures_expiry(today, inst["cycle"]).isoformat(),
+        "candidates": active["candidates"],
+    }
+
     if contracts:
-        fut_exp = next_futures_expiry(today, inst.get("cycle", "quarterly"))
+        fut_exp = active["expiry"]
         near_cutoff = min(fut_exp, today + timedelta(days=NEAR_MAX_DTE))
         near_contracts = [c for c in contracts if c["exp"] <= near_cutoff]
         out["regimes"]["near"] = build_regime(near_contracts, spot, today, prior, disp)
+        label_contract = (active["chosen"] or {}).get("label") or "fut"
         out["regimes"]["near"]["label"] = (
-            f"Near-term (thru {near_cutoff.strftime('%m/%d')} fut exp)"
+            f"Near-term (thru {near_cutoff.strftime('%m/%d')} {label_contract})"
             if near_cutoff == fut_exp else
             f"Near-term (thru {near_cutoff.strftime('%m/%d')}, {NEAR_MAX_DTE}d cap)")
         out["regimes"]["full"] = build_regime(contracts, spot, today, prior, disp)
@@ -994,6 +1081,11 @@ td.num{text-align:right}
   padding:1px 6px;border-radius:4px;border:1px solid var(--line);color:var(--muted)}
 .chip.conf{color:var(--ink);border-color:rgba(255,255,255,.25)}
 .max-pain{margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
+.active-con{font-size:10px;letter-spacing:.1em;padding:2px 7px;margin-left:10px;
+  border:1px solid var(--jade);border-radius:3px;color:var(--jade);vertical-align:middle}
+.con-on{color:var(--jade)}
+.con-off{opacity:.5}
+.con-warn{color:var(--brass);opacity:.85}
 .max-pain .sub{letter-spacing:.04em;text-transform:none;opacity:.6;font-weight:400}
 .max-pain tr.opex td{color:var(--ink)}
 .max-pain .tag{font-size:9px;letter-spacing:.1em;padding:1px 5px;margin-left:6px;
@@ -1170,12 +1262,36 @@ function panel(s){
     <div class="phead">
       <span class="sym">${s.symbol}</span>
       <span class="spot" data-k="${s.symbol}-spot">${s.spot.toFixed(2)}</span>
+      ${contractTag(s.contract)}
     </div>
+    ${contractRow(s.contract)}
     ${s.scale_note?`<div class="scale">levels: ${s.scale_note}</div>`:""}
     ${body}
     ${maxPain}
     ${marg}
   </div>`;
+}
+
+function contractTag(c){
+  if(!c||!c.label) return "";
+  return `<span class="active-con" title="front contract by traded volume">${c.label}</span>`;
+}
+
+// The runners-up are shown too: on a normal day one contract carries nearly all
+// the volume, and seeing the gap is what tells you the pick is unambiguous.
+function contractRow(c){
+  if(!c||!(c.candidates||[]).length) return "";
+  const rolled = c.date_rule && c.date_rule!==c.expiry;
+  const list = c.candidates.map(r=>{
+    const v = r.volume==null ? "n/a" : (+r.volume).toLocaleString();
+    return r.active
+      ? `<b class="con-on">${r.label} ${v}</b>`
+      : `<span class="con-off">${r.label} ${v}</span>`;
+  }).join(" · ");
+  return `<div class="scale">contract: ${list}`
+       + `<span style="opacity:.7"> · by ${c.source}</span>`
+       + (rolled?` <span class="con-warn">date rule would use ${c.date_rule}</span>`:"")
+       + `</div>`;
 }
 
 async function fetchData(){
