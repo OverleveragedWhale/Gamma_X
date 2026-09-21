@@ -1,0 +1,143 @@
+//@version=6
+indicator("VARIS Liq Bands", overlay=true, max_labels_count=50)
+
+// Companion to VARIS Zones, which keeps the VWAP risk intervals. This one
+// draws only the liquidation frame pasted from the Gamma Terminal, so the two
+// can sit on the same chart without duplicating anything.
+
+// ============================================================================
+// Liquidation bands, pasted from the Gamma Terminal
+// ----------------------------------------------------------------------------
+// The terminal prints ONE line covering every product. Hit Copy there, paste it
+// into the single field below, and every chart reads its own slice of it:
+//
+//   ES=7712.50,62.52,83.06;NQ=29917.25,240.10,318.90;GC=...;CL=...
+//
+// Per product that is anchor,99%,99.9% - the front contract's previous settle,
+// then the two distances in points either side of it. The chart picks its entry
+// by syminfo.root, so the same paste serves all four; set Product manually if
+// the root does not match (continuous symbols, CFDs, or a broker with its own
+// naming). A product missing from the line simply draws nothing.
+//
+// These are anchored on a settled close, so they are a fixed frame for the
+// session and do NOT move with price. Repaste when the anchor date changes -
+// which is daily, and whenever the front contract or the margin config does.
+// ============================================================================
+showLiq   = input.bool(true, "Show Liquidation Bands", group="Liquidation")
+liqProd   = input.string("Auto (by symbol)", "Product",
+     options=["Auto (by symbol)", "ES", "NQ", "GC", "CL"], group="Liquidation")
+liqPaste  = input.string("", "Paste (all products)", group="Liquidation")
+
+showAnchor   = input.bool(true,  "Show Anchor (prev settle)", group="Style")
+anchorColor  = input.color(color.new(color.gray, 40), "Anchor Color", group="Style")
+liq99Color   = input.color(color.new(color.orange, 20), "99% Color", group="Style")
+liq999Color  = input.color(color.new(color.red, 20), "99.9% Color", group="Style")
+liqWidth     = input.int(1, "Line Width", minval=1, maxval=5, group="Style")
+showLiqFill  = input.bool(true, "Shade 99% -> 99.9%", group="Style")
+liqFillTrans = input.int(88, "Fill Transparency", minval=0, maxval=100, group="Style")
+showLiqLabel = input.bool(true, "Label Lines", group="Style")
+
+// ===== Liquidation parsing =====
+// Which product this chart wants. syminfo.root is "ES"/"NQ"/"GC"/"CL" on CME
+// futures; anything else finds no entry unless Product is set manually.
+selProd = liqProd == "Auto (by symbol)" ? syminfo.root : liqProd
+
+// Parsed once on the first bar rather than per bar - the string never changes
+// mid-run, and Pine re-executes the whole script when an input does.
+// Spaces are stripped first so a line broken across an email still reads, and
+// str.tonumber returns na on anything unreadable, which is what stops a
+// half-pasted string from drawing a line at a wrong price.
+var float liqAnchor = na
+var float liq99Pts  = na
+var float liq999Pts = na
+var bool  liqFound  = false
+
+if barstate.isfirst and liqPaste != ""
+    chunks = str.split(str.replace_all(liqPaste, " ", ""), ";")
+    nChunks = array.size(chunks)
+    // Guarded because `for i = 0 to -1` counts down in Pine rather than
+    // skipping, which would index an empty array.
+    for i = 0 to (nChunks > 0 ? nChunks - 1 : 0)
+        kv = nChunks > 0 ? str.split(array.get(chunks, i), "=") : array.new_string(0)
+        if array.size(kv) == 2 and str.upper(array.get(kv, 0)) == str.upper(selProd)
+            // Set on the key matching, not on the values parsing, so a
+            // truncated entry reports itself as unreadable rather than as
+            // absent - two different things to go and fix.
+            liqFound := true
+            vals = str.split(array.get(kv, 1), ",")
+            if array.size(vals) > 2
+                liqAnchor := str.tonumber(array.get(vals, 0))
+                liq99Pts  := str.tonumber(array.get(vals, 1))
+                liq999Pts := str.tonumber(array.get(vals, 2))
+
+liqOK = showLiq and not na(liqAnchor) and liqAnchor > 0
+hi99  = liqOK and not na(liq99Pts)  ? liqAnchor + liq99Pts  : na
+lo99  = liqOK and not na(liq99Pts)  ? liqAnchor - liq99Pts  : na
+hi999 = liqOK and not na(liq999Pts) ? liqAnchor + liq999Pts : na
+lo999 = liqOK and not na(liq999Pts) ? liqAnchor - liq999Pts : na
+
+// ===== Plots =====
+anchorPlot = plot(liqOK and showAnchor ? liqAnchor : na, title="Liq Anchor",
+     color=anchorColor, linewidth=liqWidth, style=plot.style_linebr)
+
+hi99Plot  = plot(hi99,  title="Liq 99% Upper",   color=liq99Color,  linewidth=liqWidth, style=plot.style_linebr)
+lo99Plot  = plot(lo99,  title="Liq 99% Lower",   color=liq99Color,  linewidth=liqWidth, style=plot.style_linebr)
+hi999Plot = plot(hi999, title="Liq 99.9% Upper", color=liq999Color, linewidth=liqWidth, style=plot.style_linebr)
+lo999Plot = plot(lo999, title="Liq 99.9% Lower", color=liq999Color, linewidth=liqWidth, style=plot.style_linebr)
+
+// Shade only the 99% -> 99.9% shoulders, not the whole span: the interesting
+// region is between the two confidence levels, and flooding the middle would
+// bury whatever else is drawn on the chart.
+fill(hi99Plot,  hi999Plot, color=showLiqFill ? color.new(liq999Color, liqFillTrans) : na, title="Liq Upper Shoulder")
+fill(lo999Plot, lo99Plot,  color=showLiqFill ? color.new(liq999Color, liqFillTrans) : na, title="Liq Lower Shoulder")
+
+// ===== Labels =====
+// Drawn once, on the last bar only, so they sit at the right edge and do not
+// accumulate one per bar.
+var label lHi999 = na
+var label lHi99  = na
+var label lAnc   = na
+var label lLo99  = na
+var label lLo999 = na
+var label lWarn  = na
+
+if barstate.islast and liqOK and showLiqLabel
+    label.delete(lHi999)
+    label.delete(lHi99)
+    label.delete(lAnc)
+    label.delete(lLo99)
+    label.delete(lLo999)
+    tip = selProd + " liq, off " + str.tostring(liqAnchor, format.mintick)
+    if not na(hi999)
+        lHi999 := label.new(bar_index, hi999, "99.9% " + str.tostring(hi999, format.mintick),
+             style=label.style_label_left, color=color.new(color.black, 100),
+             textcolor=liq999Color, size=size.small, tooltip=tip)
+    if not na(hi99)
+        lHi99 := label.new(bar_index, hi99, "99% " + str.tostring(hi99, format.mintick),
+             style=label.style_label_left, color=color.new(color.black, 100),
+             textcolor=liq99Color, size=size.small, tooltip=tip)
+    if showAnchor
+        lAnc := label.new(bar_index, liqAnchor, "settle " + str.tostring(liqAnchor, format.mintick),
+             style=label.style_label_left, color=color.new(color.black, 100),
+             textcolor=anchorColor, size=size.small, tooltip=tip)
+    if not na(lo99)
+        lLo99 := label.new(bar_index, lo99, "99% " + str.tostring(lo99, format.mintick),
+             style=label.style_label_left, color=color.new(color.black, 100),
+             textcolor=liq99Color, size=size.small, tooltip=tip)
+    if not na(lo999)
+        lLo999 := label.new(bar_index, lo999, "99.9% " + str.tostring(lo999, format.mintick),
+             style=label.style_label_left, color=color.new(color.black, 100),
+             textcolor=liq999Color, size=size.small, tooltip=tip)
+
+// A paste that is present but unreadable is worth saying out loud, otherwise
+// the bands simply fail to appear and look like a display bug.
+if barstate.islast and showLiq and liqPaste != "" and not liqOK
+    label.delete(lWarn)
+    string msg = na
+    if liqFound
+        msg := "VARIS: " + selProd + " entry unreadable - expected " + selProd + "=anchor,99%,99.9%"
+    else
+        msg := "VARIS: no entry for " + selProd + " in the paste - set Product manually if the symbol root differs"
+    lWarn := label.new(bar_index, close, msg,
+         style=label.style_label_left, color=color.new(color.red, 20),
+         textcolor=color.white, size=size.small)
