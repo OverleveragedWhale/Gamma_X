@@ -21,6 +21,7 @@ import math
 import re
 import hashlib
 import logging
+import calendar
 import configparser
 import http.cookiejar
 import urllib.request
@@ -66,11 +67,23 @@ YAHOO_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
 #   chain = Cboe options ticker    hist = Yahoo chain-scale prior close (m)
 #   index = Yahoo cash index (margin notional + tracking sanity)
 #   fut   = Yahoo futures symbol for the prior settle
+#   cycle = which futures expiration calendar the near-term bucket follows
+# GC and CL have no free cash-index feed (XAUUSD=X is gone), so their `index`
+# is the futures symbol itself. That makes margin notional the futures notional
+# - correct, there being no cash index to convert from - but it also makes the
+# carry sanity gate in compute_symbol vacuous (carry is 0 by construction), so
+# a back-adjusted continuous series would not be caught for those two.
 INSTRUMENTS = [
     {"future": "ES",  "chain": "_SPX", "hist": "^GSPC", "index": "^GSPC",
-     "fut": "ES=F",  "multiplier": 50, "liq_factor": 2.0},
+     "fut": "ES=F",  "multiplier": 50,   "cycle": "quarterly"},
     {"future": "NQ",  "chain": "QQQ",  "hist": "QQQ",   "index": "^NDX",
-     "fut": "NQ=F",  "multiplier": 20, "liq_factor": 5.0},
+     "fut": "NQ=F",  "multiplier": 20,   "cycle": "quarterly"},
+    # Commodity books ride an ETF chain the same way NQ rides QQQ, but the
+    # proxy is looser: see the ratio-noise note in compute_symbol.
+    {"future": "GC",  "chain": "GLD",  "hist": "GLD",   "index": "GC=F",
+     "fut": "GC=F",  "multiplier": 100,  "cycle": "gc"},
+    {"future": "CL",  "chain": "USO",  "hist": "USO",   "index": "CL=F",
+     "fut": "CL=F",  "multiplier": 1000, "cycle": "cl"},
 ]
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -122,16 +135,69 @@ def nth_weekday(year, month, weekday, n):
     return d + timedelta(days=offset + 7 * (n - 1))
 
 
-def next_futures_expiry(d):
-    """Front quarterly ES/NQ expiration (3rd Friday of Mar/Jun/Sep/Dec) as of d.
+def shift_business_days(d, n):
+    """Move n trading days from d (negative goes back), skipping holidays."""
+    step = 1 if n > 0 else -1
+    remaining = abs(n)
+    while remaining:
+        d += timedelta(days=step)
+        if is_trading_day(d):
+            remaining -= 1
+    return d
 
-    Rolls to the next quarter once the near contract is within
-    FUTURES_ROLL_DAYS, so the near-term bucket tracks the contract dealers are
-    actually hedging with rather than one whose open interest is being closed out.
+
+def last_business_day(year, month):
+    d = date(year, month, calendar.monthrange(year, month)[1])
+    while not is_trading_day(d):
+        d -= timedelta(days=1)
+    return d
+
+
+def quarterly_expiry(year, month):
+    """ES/NQ: 3rd Friday of the delivery month."""
+    return nth_weekday(year, month, 4, 3)
+
+
+def gc_expiry(year, month):
+    """GC: third last business day of the delivery month."""
+    return shift_business_days(last_business_day(year, month), -2)
+
+
+def cl_expiry(year, month):
+    """CL: 3 business days before the 25th of the month preceding delivery.
+
+    When the 25th is not a business day the rule counts back from the business
+    day preceding it instead, which is what the step-back loop below gives.
     """
-    candidates = [nth_weekday(year, m, 4, 3)
-                  for year in (d.year, d.year + 1)
-                  for m in FUTURES_EXPIRY_MONTHS]
+    year, month = (year, month - 1) if month > 1 else (year - 1, 12)
+    anchor = date(year, month, 25)
+    while not is_trading_day(anchor):
+        anchor -= timedelta(days=1)
+    return shift_business_days(anchor, -3)
+
+
+# Delivery months and the termination rule for each cycle. GC lists only the
+# even months, which is where essentially all of its open interest sits.
+EXPIRY_CYCLES = {
+    "quarterly": (FUTURES_EXPIRY_MONTHS, quarterly_expiry),
+    "gc":        ((2, 4, 6, 8, 10, 12), gc_expiry),
+    "cl":        (tuple(range(1, 13)), cl_expiry),
+}
+
+
+def next_futures_expiry(d, cycle="quarterly"):
+    """Front futures expiration for `cycle` as of d.
+
+    Rolls to the next contract once the near one is within FUTURES_ROLL_DAYS,
+    so the near-term bucket tracks the contract dealers are actually hedging
+    with rather than one whose open interest is being closed out.
+    """
+    months, rule = EXPIRY_CYCLES[cycle]
+    # CL terminates in the month *before* delivery, so start a year back to
+    # catch a December termination belonging to a January delivery.
+    candidates = [rule(year, m)
+                  for year in (d.year - 1, d.year, d.year + 1)
+                  for m in months]
     return min(c for c in candidates if (c - d).days > FUTURES_ROLL_DAYS)
 
 
@@ -459,6 +525,23 @@ def _margin_leg(margins_cfg, fut, side):
     raise KeyError(f"no margin for {fut} ({side.lower()} leg)")
 
 
+def liq_factor(multiplier):
+    """Per-instrument scaling that puts every symbol on the same share of margin.
+
+    The chain the panel prints is
+
+        avg x share / TICKS_PER_POINT x liq_factor / BAND_DIVISOR
+
+    which equals (margin in points) x share x liq_factor x multiplier / 8.
+    Setting liq_factor = 100 / multiplier collapses that to a flat 12.5% of
+    margin at the 99% level for any contract size, which is the whole point of
+    the number - it is NOT a tick value. It lands on 5.0 for NQ, matching its
+    $5.00 tick purely by coincidence, and on 2.0 for ES, 1.0 for GC and 0.1 for
+    CL against ticks of $12.50, $10.00 and $10.00. Do not "correct" it.
+    """
+    return 100.0 / multiplier
+
+
 def margin_buffer(inst, idx_close, margins_cfg):
     """Margin per contract in index points, up and down legs kept apart.
 
@@ -480,13 +563,7 @@ def margin_buffer(inst, idx_close, margins_cfg):
     down = _margin_leg(margins_cfg, fut, "DOWN")
     mult = inst["multiplier"]
     avg = (up + down) / 2.0
-    # Per-instrument scaling in the liquidation chain. NOT a tick value:
-    # it is 100 / multiplier, which is what makes the band the same fraction
-    # of margin for every symbol (ES 100/50 = 2.0, NQ 100/20 = 5.0). NQ's 5.0
-    # coincides with its $5.00 tick; ES's does not - its tick is $12.50. So do
-    # not "correct" either of these to a tick value.
-    #   band / (margin in points) = 0.01 * liq_factor * multiplier / 8 = 12.5%
-    tick = inst["liq_factor"]
+    tick = liq_factor(mult)
     # avg -> share at this level -> ticks to points -> liq_factor -> halved,
     # since the posted margin covers moves in both directions.
     liq = [{"label": label, "share": share,
@@ -643,15 +720,17 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
 
     # GEX + walls, split into two expiration buckets (internal math in chain
     # terms; strikes/flip shifted to display terms via disp()):
-    #   near = contracts through the next quarterly ES/NQ futures expiration
-    #          (the front-month contract dealers are actually hedging with),
-    #          but never more than NEAR_MAX_DTE out. Quarterly spacing is ~91
-    #          days against a 95 day book, so without the cap the bucket holds
-    #          almost the whole chain for most of the quarter and the two
-    #          panels report identical numbers.
+    #   near = contracts through the next expiration on this instrument's own
+    #          futures cycle (the front-month contract dealers are actually
+    #          hedging with), but never more than NEAR_MAX_DTE out. Quarterly
+    #          spacing is ~91 days against a 95 day book, so without the cap
+    #          the bucket would hold almost the whole chain for most of the
+    #          quarter and the two panels would report identical numbers. CL
+    #          is monthly, so for it the cycle date binds and the cap rarely
+    #          does; GC alternates between the two.
     #   full = everything through MAX_DTE, as before
     if contracts:
-        fut_exp = next_futures_expiry(today)
+        fut_exp = next_futures_expiry(today, inst.get("cycle", "quarterly"))
         near_cutoff = min(fut_exp, today + timedelta(days=NEAR_MAX_DTE))
         near_contracts = [c for c in contracts if c["exp"] <= near_cutoff]
         out["regimes"]["near"] = build_regime(near_contracts, spot, today, prior, disp)
@@ -725,6 +804,8 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
                 "notional": round(mb["notional"]),
                 "set_at": margins_cfg.get("set_at") or "date not recorded",
             }
+        except KeyError as exc:
+            out["margin"] = {"error": f"{exc.args[0]} - set it in config.ini"}
         except Exception as exc:
             out["margin"] = {"error": repr(exc)}
     else:

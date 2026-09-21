@@ -6,7 +6,7 @@ where the numbers come from and that they go stale, so this edits the value
 lines in place instead.
 
 Up and down legs are stored separately, since margin need not be symmetric;
-gex_terminal falls back to the bare ES/NQ key for a leg that is missing. Every
+gex_terminal falls back to the bare symbol key for a leg that is missing. Every
 write stamps SET_AT, which the dashboard shows, so a band is never read without
 knowing how old its inputs are.
 
@@ -20,6 +20,10 @@ import pathlib
 import re
 import sys
 
+# Kept in step with INSTRUMENTS in gex_terminal.py by hand rather than by
+# import, so this stays a standalone script with no network-capable module
+# pulled in just to read a list of four strings.
+SYMBOLS = ("ES", "NQ", "GC", "CL")
 CONFIG = pathlib.Path(__file__).resolve().parent.parent / "config.ini"
 SECTION = "[margins]"
 NL = chr(10)
@@ -55,7 +59,7 @@ def positive(raw):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    for sym in ("es", "nq"):
+    for sym in (s.lower() for s in SYMBOLS):
         ap.add_argument(f"--{sym}", type=positive,
                         help=f"{sym.upper()} margin per contract, both legs")
         ap.add_argument(f"--{sym}-up", type=positive,
@@ -66,7 +70,7 @@ def main():
     args = ap.parse_args()
 
     updates = {}
-    for sym in ("ES", "NQ"):
+    for sym in SYMBOLS:
         both = getattr(args, sym.lower())
         for side in ("UP", "DOWN"):
             value = getattr(args, f"{sym.lower()}_{side.lower()}") or both

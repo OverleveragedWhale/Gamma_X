@@ -28,6 +28,22 @@ on:
         description: "NQ margin per contract, down leg (USD)"
         required: false
         default: ""
+      gc_up:
+        description: "GC margin per contract, up leg (USD)"
+        required: false
+        default: ""
+      gc_down:
+        description: "GC margin per contract, down leg (USD)"
+        required: false
+        default: ""
+      cl_up:
+        description: "CL margin per contract, up leg (USD)"
+        required: false
+        default: ""
+      cl_down:
+        description: "CL margin per contract, down leg (USD)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -54,13 +70,23 @@ jobs:
           ES_DOWN: ${{ inputs.es_down }}
           NQ_UP: ${{ inputs.nq_up }}
           NQ_DOWN: ${{ inputs.nq_down }}
+          GC_UP: ${{ inputs.gc_up }}
+          GC_DOWN: ${{ inputs.gc_down }}
+          CL_UP: ${{ inputs.cl_up }}
+          CL_DOWN: ${{ inputs.cl_down }}
         run: |
           set -euo pipefail
           args=()
-          if [ -n "${ES_UP}" ];   then args+=(--es-up   "${ES_UP}");   fi
-          if [ -n "${ES_DOWN}" ]; then args+=(--es-down "${ES_DOWN}"); fi
-          if [ -n "${NQ_UP}" ];   then args+=(--nq-up   "${NQ_UP}");   fi
-          if [ -n "${NQ_DOWN}" ]; then args+=(--nq-down "${NQ_DOWN}"); fi
+          for sym in ES NQ GC CL; do
+            for side in UP DOWN; do
+              var="${sym}_${side}"
+              val="${!var:-}"
+              if [ -n "${val}" ]; then
+                flag="--$(echo "${sym}-${side}" | tr '[:upper:]' '[:lower:]')"
+                args+=("${flag}" "${val}")
+              fi
+            done
+          done
           if [ ${#args[@]} -eq 0 ]; then
             echo "::error::Give at least one margin value."
             exit 1
