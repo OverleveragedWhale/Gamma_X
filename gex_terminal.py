@@ -45,7 +45,7 @@ NEAR_MAX_DTE = 32            # near-term bucket: never look further than this
 MAX_PAIN_DAILY_DAYS = 5      # max pain: every expiry inside this many days,
                              # and nothing but monthly opex beyond it
 SHARES_PER_CONTRACT = 100
-WALL_COUNT = 3               # ranked walls reported per side
+WALL_COUNT = 6               # ranked walls reported per side
 MIN_WALL_SEP = 0.004         # min gap between reported walls (0.4% of spot)
 WALL_CONFLUENCE_TOL = 0.0015  # wall within 0.15% of prior H/L/C = confluence
 PRIOR_SESSION_ROWS = 5        # daily bars kept for prior close + chain-scale ratio
