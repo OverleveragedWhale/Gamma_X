@@ -1105,28 +1105,27 @@ button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
 @keyframes flash{from{background:rgba(217,164,65,.25)}to{background:transparent}}
 /* range rail */
 .rail-wrap{padding:6px 2px}
-.rail-scale{display:flex;justify-content:space-between;font-size:10px;
-  color:var(--muted);margin-bottom:6px}
-.rail{position:relative;height:64px;border-radius:8px;
-  background:linear-gradient(180deg,var(--raised),#141d2b);
-  border:1px solid var(--line);overflow:hidden}
-.band{position:absolute;top:0;bottom:0}
-.band.margin{border-left:1px dashed rgba(255,255,255,.28);
-  border-right:1px dashed rgba(255,255,255,.28)}
+.rail-cap{font-size:10px;color:var(--muted);text-align:right;padding:0 3px}
+.rail{position:relative;height:260px;border-radius:8px;
+  background:linear-gradient(90deg,var(--raised),#141d2b);
+  border:1px solid var(--line);overflow:hidden;margin:4px 0}
+.band{position:absolute;left:0;right:0}
+.band.margin{border-top:1px dashed rgba(255,255,255,.28);
+  border-bottom:1px dashed rgba(255,255,255,.28)}
 .band.r999{background:rgba(217,164,65,.07)}
 .band.r99{background:rgba(217,164,65,.13)}
 .tick.liq{background:rgba(75,191,138,.8);z-index:3}
 .tick.liq.l999{background:rgba(75,191,138,.45)}
 .lab.liq{color:var(--jade)}
-.tick{position:absolute;top:0;bottom:0;width:2px;transform:translateX(-1px)}
-.tick.spot{background:var(--ink);width:2px;z-index:6}
+.tick{position:absolute;left:0;right:0;height:2px;transform:translateY(1px)}
+.tick.spot{background:var(--ink);height:3px;z-index:6}
 .tick.flip{background:var(--brass);z-index:5}
 .tick.wall{z-index:4}
 .tick.wall.call{background:rgba(75,191,138,.9)}
 .tick.wall.put{background:rgba(224,96,63,.9)}
 .lab{position:absolute;font-size:9px;letter-spacing:.04em;white-space:nowrap;
-  transform:translateX(-50%);color:var(--muted)}
-.lab.top{top:3px}.lab.bot{bottom:3px}
+  transform:translateY(50%);color:var(--muted)}
+.lab.left{left:5px}.lab.right{right:5px}
 .lab.spot{color:var(--ink)}.lab.flip{color:var(--brass)}
 .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:10px;color:var(--muted);
   margin-top:9px}
@@ -1193,6 +1192,7 @@ let secs=REFRESH_SECONDS, last = {}, dataEpoch = null;
 
 function fmtCd(s){const m=Math.floor(s/60),x=s%60;return m+":"+String(x).padStart(2,"0");}
 function pct(v,lo,hi){return hi>lo?100*(v-lo)/(hi-lo):50;}
+const RAIL_LABEL_GAP=4.5;   // min % of rail height between two strike labels
 function clamp(x){return Math.max(0,Math.min(100,x));}
 
 function rail(s,r){
@@ -1206,35 +1206,45 @@ function rail(s,r){
   const lb=(m.liq||[]).filter(b=>b.lo!==null&&b.lo!==undefined);
   lb.forEach(b=>{lo=Math.min(lo,b.lo);hi=Math.max(hi,b.hi);});
   const pad=(hi-lo)*0.06; lo-=pad; hi+=pad;
+  // Price runs bottom to top, so the rail reads on the same axis as the wall
+  // ladder beside it: high strikes up, low strikes down.
   const L=(v)=>clamp(pct(v,lo,hi));
-  let html=`<div class="rail-wrap"><div class="rail-scale"><span>${lo.toFixed(1)}</span><span>${hi.toFixed(1)}</span></div><div class="rail">`;
+  let html=`<div class="rail-wrap"><div class="rail-cap">${hi.toFixed(1)}</div><div class="rail">`;
   // widest first so the 99% band reads as the denser core of the 99.9% one
   [...rb].reverse().forEach(b=>{
     const cls=b.label==="99%"?"r99":"r999";
-    html+=`<div class="band ${cls}" style="left:${L(b.lo)}%;right:${100-L(b.hi)}%"></div>`;
+    html+=`<div class="band ${cls}" style="bottom:${L(b.lo)}%;top:${100-L(b.hi)}%"></div>`;
   });
   if(m.band_lo!==undefined)
-    html+=`<div class="band margin" style="left:${L(m.band_lo)}%;right:${100-L(m.band_hi)}%"></div>`;
+    html+=`<div class="band margin" style="bottom:${L(m.band_lo)}%;top:${100-L(m.band_hi)}%"></div>`;
   lb.forEach(b=>{
     const cls=b.label==="99%"?"liq":"liq l999";
     [b.lo,b.hi].forEach(v=>{
       if(v<lo||v>hi) return;
-      html+=`<div class="tick ${cls}" style="left:${L(v)}%"></div>`;
+      html+=`<div class="tick ${cls}" style="bottom:${L(v)}%"></div>`;
     });
   });
-  // walls (only in-domain)
+  // Walls (only in-domain). Every wall gets its line, but a strike label is
+  // dropped when one is already printed within RAIL_LABEL_GAP of it - at six
+  // walls a side the 0.4% separation rule allows strikes far closer together
+  // than a 9px label is tall, and overlapping numerals read as neither.
+  const placed=[];
   for(const side of ["call","put"]) (r.walls[side]||[]).forEach(w=>{
     if(w.strike<lo||w.strike>hi) return;
-    html+=`<div class="tick wall ${side}" style="left:${L(w.strike)}%"></div>`;
-    html+=`<div class="lab bot" style="left:${L(w.strike)}%">${(+w.strike).toFixed(0)}</div>`;
+    const y=L(w.strike);
+    html+=`<div class="tick wall ${side}" style="bottom:${y}%"></div>`;
+    if(placed.every(p=>Math.abs(p-y)>=RAIL_LABEL_GAP)){
+      placed.push(y);
+      html+=`<div class="lab left" style="bottom:${y}%">${(+w.strike).toFixed(0)}</div>`;
+    }
   });
   if(r.flip!==null&&r.flip!==undefined&&r.flip>=lo&&r.flip<=hi){
-    html+=`<div class="tick flip" style="left:${L(r.flip)}%"></div>`;
-    html+=`<div class="lab top flip" style="left:${L(r.flip)}%">flip</div>`;
+    html+=`<div class="tick flip" style="bottom:${L(r.flip)}%"></div>`;
+    html+=`<div class="lab right flip" style="bottom:${L(r.flip)}%">flip</div>`;
   }
-  html+=`<div class="tick spot" style="left:${L(s.spot)}%"></div>`;
-  html+=`<div class="lab top spot" style="left:${L(s.spot)}%">spot ${s.spot.toFixed(2)}</div>`;
-  html+=`</div>`;
+  html+=`<div class="tick spot" style="bottom:${L(s.spot)}%"></div>`;
+  html+=`<div class="lab right spot" style="bottom:${L(s.spot)}%">spot ${s.spot.toFixed(2)}</div>`;
+  html+=`</div><div class="rail-cap">${lo.toFixed(1)}</div>`;
   html+=`<div class="legend"><span><i style="background:var(--ink)"></i>spot</span>`
       +`<span><i style="background:var(--brass)"></i>flip</span>`;
   rb.forEach(b=>html+=`<span><i style="background:rgba(217,164,65,${b.label==="99%"?".45":".22"})"></i>σ ${b.label} ±${b.points}</span>`);
