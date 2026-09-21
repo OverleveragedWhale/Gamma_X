@@ -1244,23 +1244,35 @@ function rail(s,r){
   return html;
 }
 
-// Walls are ranked by GEX size in the payload; here they are re-sorted by how
-// far they sit from spot so the table reads outward from the spot row in both
-// directions. `order` is -1 for the block above spot (farthest first, nearest
-// last, against the spot row) and +1 for the block below it.
-// Sorted on a copy: the payload array is re-rendered on every poll.
-function wallRows(list, side, order){
-  if(!list||!list.length) return "";
-  return [...list].sort((a,b)=>order*(Math.abs(a.dist)-Math.abs(b.dist))).map(w=>{
-    let chips="";
-    if(w.lead) chips+=`<span class="chip">${w.lead>=2?"dominant":"lead"} x${w.lead}</span>`;
-    if(w.conf) chips+=` <span class="chip conf">~${w.conf}</span>`;
-    return `<tr><td class="side-${side[0]}">${side.toUpperCase()}</td>`
-      +`<td class="num">${(+w.strike).toFixed(0)}</td>`
-      +`<td class="num">${w.gex_str}</td>`
-      +`<td class="num">${w.dist>0?"+":""}${w.dist}%</td>`
-      +`<td>${chips}</td></tr>`;
-  }).join("");
+function wallRow(w){
+  let chips="";
+  if(w.lead) chips+=`<span class="chip">${w.lead>=2?"dominant":"lead"} x${w.lead}</span>`;
+  if(w.conf) chips+=` <span class="chip conf">~${w.conf}</span>`;
+  return `<tr><td class="side-${w.side[0]}">${w.side.toUpperCase()}</td>`
+    +`<td class="num">${(+w.strike).toFixed(0)}</td>`
+    +`<td class="num">${w.gex_str}</td>`
+    +`<td class="num">${w.dist>0?"+":""}${w.dist}%</td>`
+    +`<td>${chips}</td></tr>`;
+}
+
+// A price ladder: every wall sits where its strike actually falls, so calls and
+// puts interleave and the SPOT row lands in its own place rather than acting as
+// a divider between two books. Strictly descending by strike, which means the
+// distance from spot grows as you read away from the spot row in either
+// direction. Walls are still *chosen* by GEX size in the payload; this only
+// decides the order they appear in, and it sorts a copy because the payload
+// array is re-rendered on every poll.
+function wallLadder(walls, spot){
+  const rows=[];
+  for(const side of ["call","put"])
+    ((walls&&walls[side])||[]).forEach(w=>rows.push(Object.assign({},w,{side})));
+  if(!rows.length) return "";
+  // Equal strikes read call-then-put, so a level carrying both is consistent.
+  rows.sort((a,b)=>(+b.strike)-(+a.strike) || (a.side==="call"?-1:1));
+  if(spot==null) return rows.map(wallRow).join("");
+  const above=rows.filter(w=>+w.strike>+spot);
+  const below=rows.filter(w=>+w.strike<=+spot);
+  return above.map(wallRow).join("")+spotRow(spot)+below.map(wallRow).join("");
 }
 
 // Divider between the call and put blocks, carrying spot itself so the two
@@ -1291,7 +1303,7 @@ function regimeBlock(s,key,r){
       <div>
         ${rail(s,r)}
         <div class="walls"><table><thead><tr><th>Side</th><th class="num">Strike</th><th class="num">GEX</th><th class="num">Dist</th><th>Tags</th></tr></thead>
-        <tbody>${wallRows(r.walls.call,"call",-1)}${spotRow(s.spot)}${wallRows(r.walls.put,"put",1)}</tbody></table></div>
+        <tbody>${wallLadder(r.walls,s.spot)}</tbody></table></div>
         ${eff}
       </div>
     </div>
