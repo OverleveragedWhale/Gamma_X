@@ -52,7 +52,18 @@ PRIOR_SESSION_ROWS = 5        # daily bars kept for prior close + chain-scale ra
 VOL_LOOKBACK = 20             # daily bars behind the realized-vol estimate
 Z_99, Z_999 = 2.3263, 3.0902  # two-sided normal quantiles for 99% / 99.9%
 BAND_DIVISOR = 2.0            # bands reported halved: margin is bi-directional
-LIQ_LEVELS = (("99%", 0.01), ("99.9%", 0.001))   # share of margin at each level
+# Confidence levels for the liquidation bands. The multiplier used to be the
+# tail probability itself - 0.01 at 99%, 0.001 at 99.9% - which inverted the
+# relationship: a deeper tail came out a TENTH the width when it has to be
+# wider, because reaching further into the tail takes a bigger move. The 99%
+# leg is the anchor (LIQ_BASE_SHARE, hand-checked against the margin chain) and
+# other levels scale by the ratio of normal quantiles, the same Z values the
+# realized-vol bands under "risk" use, so the two band families stay comparable.
+LIQ_BASE_SHARE = 0.01                            # share of margin at 99%
+LIQ_LEVELS = (("99%", Z_99), ("99.9%", Z_999))   # label -> normal quantile
+if any(a[1] >= b[1] for a, b in zip(LIQ_LEVELS, LIQ_LEVELS[1:])):
+    raise ValueError("LIQ_LEVELS must ascend in quantile: a wider confidence "
+                     "level has to produce a wider band, not a narrower one")
 TICKS_PER_POINT = 4           # ES and NQ both quote in quarter points
 
 CBOE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
@@ -706,7 +717,8 @@ def margin_buffer(inst, idx_close, margins_cfg):
     level, then converted from ticks to points at TICKS_PER_POINT. The inputs
     are kept in the payload so the figure can be audited without re-deriving
     it. Realized sigma is not part of this - it sizes the confidence bands
-    reported separately under "risk".
+    reported separately under "risk", though both families now step between
+    confidence levels on the same normal quantiles.
     """
     fut = inst["future"]
     up = _margin_leg(margins_cfg, fut, "UP")
@@ -715,10 +727,14 @@ def margin_buffer(inst, idx_close, margins_cfg):
     avg = (up + down) / 2.0
     tick = liq_factor(mult)
     # avg -> share at this level -> ticks to points -> liq_factor -> halved,
-    # since the posted margin covers moves in both directions.
-    liq = [{"label": label, "share": share,
-            "points": avg * share / TICKS_PER_POINT * tick / BAND_DIVISOR}
-           for label, share in LIQ_LEVELS]
+    # since the posted margin covers moves in both directions. The share is the
+    # 99% anchor stretched by this level's quantile, so 99% is unchanged and
+    # every wider level comes out wider.
+    liq = []
+    for label, z in LIQ_LEVELS:
+        share = LIQ_BASE_SHARE * z / Z_99
+        liq.append({"label": label, "share": round(share, 6), "z": z,
+                    "points": avg * share / TICKS_PER_POINT * tick / BAND_DIVISOR})
     return {"future": fut, "index_close": idx_close,
             "notional": idx_close * mult, "liq_factor": tick,
             "margin_up": up, "margin_down": down, "margin_avg": avg,
@@ -1341,8 +1357,9 @@ function panel(s){
       marg+=`<div class="mrow"><span>liquidation, off the ${m.liq_anchor} close: `
           +m.liq.map(b=>`<b style="color:var(--jade)">${b.label} ±${b.points}</b>`
                        +` (${b.lo}–${b.hi})`).join(" · ")
-          +` <span style="opacity:.7">avg ${m.compare_avg} × share ÷ 4`
-          +` × ${m.liq_factor} ÷ 2</span>`
+          +` <span style="opacity:.7">avg ${m.compare_avg} × `
+          +m.liq.map(b=>b.share).join(" / ")
+          +` ÷ 4 × ${m.liq_factor} ÷ 2</span>`
           +`</span></div>`;
     }
   }
