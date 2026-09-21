@@ -113,6 +113,16 @@ if ZoneInfo:
 logging.basicConfig(filename=LOG_PATH, level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s")
 
+# INFO stays in gex_span.log, but WARNING and above also go to stderr, which the
+# desktop publisher redirects into publish.log. Without this a feed regression -
+# the OI lookup quietly dropping to a fallback, say - would only ever be written
+# to a file nobody opens, and the dashboard would keep printing plausible
+# numbers derived the wrong way.
+_stderr_handler = logging.StreamHandler()
+_stderr_handler.setLevel(logging.WARNING)
+_stderr_handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+logging.getLogger().addHandler(_stderr_handler)
+
 MARKET_HOLIDAYS = {   # US equity holidays 2026 - verify yearly, no half-days
     date(2026, 1, 1), date(2026, 1, 19), date(2026, 2, 16),
     date(2026, 4, 3), date(2026, 5, 25), date(2026, 6, 19),
@@ -305,6 +315,10 @@ def active_contract(inst, d, stats=None):
 
     for key, source in (("oi", "open interest"), ("volume", "volume")):
         if any(r[key] for r in rows):
+            if key != "oi":
+                logging.warning("%s: no open interest, ranked on %s instead - "
+                                "the Yahoo v7 quote feed may have changed",
+                                inst["future"], source)
             # Ties go to the nearer contract, which is the order rows are in.
             idx = max(range(len(rows)), key=lambda i: rows[i][key] or -1)
             for i, r in enumerate(rows):
@@ -312,6 +326,8 @@ def active_contract(inst, d, stats=None):
             return {"expiry": date.fromisoformat(rows[idx]["expiry"]),
                     "source": source, "chosen": rows[idx], "candidates": rows}
 
+    logging.warning("%s: no OI and no volume for any candidate contract - "
+                    "falling back to the date rule", inst["future"])
     return {"expiry": next_futures_expiry(d, inst["cycle"]),
             "source": "date rule (no OI or volume)",
             "chosen": None, "candidates": rows}
@@ -877,6 +893,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
         "symbol": (active["chosen"] or {}).get("symbol"),
         "expiry": active["expiry"].isoformat(),
         "source": active["source"],
+        "degraded": active["source"] != "open interest",
         "date_rule": next_futures_expiry(today, inst["cycle"]).isoformat(),
         "candidates": active["candidates"],
     }
@@ -1337,8 +1354,10 @@ function contractRow(c){
       ? `<b class="con-on">${r.label} ${n}</b>`
       : `<span class="con-off">${r.label} ${n}</span>`;
   }).join(" · ");
-  return `<div class="scale">contract: ${list}`
-       + `<span style="opacity:.7"> · by ${c.source}</span>`
+  const by = c.degraded
+    ? `<b class="con-warn"> · by ${c.source} — OI feed down</b>`
+    : `<span style="opacity:.7"> · by ${c.source}</span>`;
+  return `<div class="scale">contract: ${list}${by}`
        + (rolled?` <span class="con-warn">date rule would use ${c.date_rule}</span>`:"")
        + `</div>`;
 }

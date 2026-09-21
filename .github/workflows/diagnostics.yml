@@ -1,10 +1,14 @@
 name: Feed diagnostics
 
-# Answers two things this repo cannot check from a dev machine behind a proxy:
+# Answers three things this repo cannot check from a dev machine behind a proxy:
 #   1. how often the Cboe delayed file is actually republished, which decides
 #      whether publishing faster than ~15 min is worth anything
 #   2. whether the history source is reachable, which scales levels into
 #      futures terms and supplies the prior-session high/low/close tags
+#   3. whether the futures open-interest feed still works. It rides Yahoo's
+#      undocumented v7 quote endpoint, which already grew a crumb requirement
+#      once, so it is the likeliest thing here to break quietly - the fallbacks
+#      keep printing plausible numbers derived the wrong way.
 #
 # Read-only. Publishes nothing, writes nothing to the repo.
 
@@ -66,6 +70,14 @@ jobs:
               print(f"  {inst['future']}: k_track={k_track:.4f} carry={carry:+.4f} "
                     f"-> {'ACCEPTED' if ok else 'REJECTED, falls back to index terms'}")
           PY
+      - name: Futures open interest feed
+        # Non-fatal: a red X here would be indistinguishable from the Cboe probe
+        # failing, and this step is the one most likely to trip on an upstream
+        # change rather than a bug. The ::warning:: still surfaces in the run
+        # summary and in the Actions notification.
+        continue-on-error: true
+        run: python tools/check_oi_feed.py
+
       - name: Cboe republish cadence
         env:
           PROBE_MINUTES: ${{ inputs.minutes }}
