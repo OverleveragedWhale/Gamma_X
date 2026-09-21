@@ -33,6 +33,14 @@ liqProd   = input.string("Auto (by symbol)", "Product",
      options=["Auto (by symbol)", "ES", "NQ", "GC", "CL"], group="Liquidation")
 liqPaste  = input.string("", "Paste (all products)", group="Liquidation")
 
+// Only the anchor in the paste changes day to day. The two distances are
+// fixed - points = margin/multiplier scaled by constants, with no price term -
+// so they stay right for every past session too. Given that, the anchor can be
+// read off the chart instead of the paste, which draws the bands across all
+// history and means the paste only needs replacing when margins change.
+liqAnchorSrc = input.string("Session close (18:00 ET)", "Anchor",
+     options=["Session close (18:00 ET)", "Paste (today only)"], group="Liquidation")
+
 showAnchor   = input.bool(true,  "Show Anchor (prev settle)", group="Liquidation Style")
 anchorColor  = input.color(color.new(color.gray, 40), "Anchor Color", group="Liquidation Style")
 liq99Color   = input.color(color.new(color.orange, 20), "99% Color", group="Liquidation Style")
@@ -78,6 +86,15 @@ else
 
 vwapValue = cumVol != 0 ? cumTPV / cumVol : na
 
+// The close carried into each new session, held for its duration, so the bands
+// step at 18:00 ET rather than sliding. close[1] on the boundary bar is the
+// last print before the 17:00-18:00 CME break - the session close the paste's
+// anchor is taken from. Same isNewSession the VWAP uses, so the two can never
+// disagree about where a session begins.
+var float sessAnchor = na
+if isNewSession
+    sessAnchor := close[1]
+
 // ===== Liquidation parsing =====
 // Which product this chart wants. syminfo.root is "ES"/"NQ"/"GC"/"CL" on CME
 // futures; anything else finds no entry unless Product is set manually.
@@ -111,11 +128,13 @@ if barstate.isfirst and liqPaste != ""
                 liq99Pts  := str.tonumber(array.get(vals, 1))
                 liq999Pts := str.tonumber(array.get(vals, 2))
 
-liqOK = showLiq and not na(liqAnchor) and liqAnchor > 0
-hi99  = liqOK and not na(liq99Pts)  ? liqAnchor + liq99Pts  : na
-lo99  = liqOK and not na(liq99Pts)  ? liqAnchor - liq99Pts  : na
-hi999 = liqOK and not na(liq999Pts) ? liqAnchor + liq999Pts : na
-lo999 = liqOK and not na(liq999Pts) ? liqAnchor - liq999Pts : na
+useSess = liqAnchorSrc == "Session close (18:00 ET)"
+anchorNow = useSess ? sessAnchor : liqAnchor
+liqOK = showLiq and not na(anchorNow) and anchorNow > 0
+hi99  = liqOK and not na(liq99Pts)  ? anchorNow + liq99Pts  : na
+lo99  = liqOK and not na(liq99Pts)  ? anchorNow - liq99Pts  : na
+hi999 = liqOK and not na(liq999Pts) ? anchorNow + liq999Pts : na
+lo999 = liqOK and not na(liq999Pts) ? anchorNow - liq999Pts : na
 
 // Gated on the distances rather than liqOK: these hang off the VWAP and never
 // touch liqAnchor, so a paste carrying points but no usable anchor still draws.
@@ -130,12 +149,12 @@ p13 = na(liq99Pts) ? na : liq99Pts / 3.0
 p12 = na(liq99Pts) ? na : liq99Pts / 2.0
 p23 = na(liq99Pts) ? na : liq99Pts * 2.0 / 3.0
 
-hi13 = liqOK and showLiq13 and not na(p13) ? liqAnchor + p13 : na
-lo13 = liqOK and showLiq13 and not na(p13) ? liqAnchor - p13 : na
-hi12 = liqOK and showLiq12 and not na(p12) ? liqAnchor + p12 : na
-lo12 = liqOK and showLiq12 and not na(p12) ? liqAnchor - p12 : na
-hi23 = liqOK and showLiq23 and not na(p23) ? liqAnchor + p23 : na
-lo23 = liqOK and showLiq23 and not na(p23) ? liqAnchor - p23 : na
+hi13 = liqOK and showLiq13 and not na(p13) ? anchorNow + p13 : na
+lo13 = liqOK and showLiq13 and not na(p13) ? anchorNow - p13 : na
+hi12 = liqOK and showLiq12 and not na(p12) ? anchorNow + p12 : na
+lo12 = liqOK and showLiq12 and not na(p12) ? anchorNow - p12 : na
+hi23 = liqOK and showLiq23 and not na(p23) ? anchorNow + p23 : na
+lo23 = liqOK and showLiq23 and not na(p23) ? anchorNow - p23 : na
 
 vHi13 = liqVwapOn and showLiq13 and not na(p13) ? vwapValue + p13 : na
 vLo13 = liqVwapOn and showLiq13 and not na(p13) ? vwapValue - p13 : na
@@ -147,7 +166,7 @@ vLo23 = liqVwapOn and showLiq23 and not na(p23) ? vwapValue - p23 : na
 // ===== Plots =====
 vwapPlot = plot(showVWAP ? vwapValue : na, title="VWAP", color=vwapColor, linewidth=vwapWidth)
 
-anchorPlot = plot(liqOK and showAnchor ? liqAnchor : na, title="Liq Anchor",
+anchorPlot = plot(liqOK and showAnchor ? anchorNow : na, title="Liq Anchor",
      color=anchorColor, linewidth=liqWidth, style=plot.style_linebr)
 
 hi99Plot  = plot(hi99,  title="Liq 99% Upper",   color=liq99Color,  linewidth=liqWidth, style=plot.style_linebr)
@@ -200,7 +219,8 @@ if barstate.islast and liqOK and showLiqLabel
     label.delete(lAnc)
     label.delete(lLo99)
     label.delete(lLo999)
-    tip = selProd + " liq, off " + str.tostring(liqAnchor, format.mintick)
+    tip = selProd + " liq, off " + str.tostring(anchorNow, format.mintick)
+         + (useSess ? " (18:00 ET session close)" : " (pasted)")
     if not na(hi999)
         lHi999 := label.new(bar_index, hi999, "99.9% " + str.tostring(hi999, format.mintick),
              style=label.style_label_left, color=color.new(color.black, 100),
@@ -210,7 +230,7 @@ if barstate.islast and liqOK and showLiqLabel
              style=label.style_label_left, color=color.new(color.black, 100),
              textcolor=liq99Color, size=size.small, tooltip=tip)
     if showAnchor
-        lAnc := label.new(bar_index, liqAnchor, "settle " + str.tostring(liqAnchor, format.mintick),
+        lAnc := label.new(bar_index, anchorNow, "settle " + str.tostring(anchorNow, format.mintick),
              style=label.style_label_left, color=color.new(color.black, 100),
              textcolor=anchorColor, size=size.small, tooltip=tip)
     if not na(lo99)
@@ -224,7 +244,7 @@ if barstate.islast and liqOK and showLiqLabel
 
 // A paste that is present but unreadable is worth saying out loud, otherwise
 // the bands simply fail to appear and look like a display bug.
-if barstate.islast and showLiq and liqPaste != "" and not liqOK
+if barstate.islast and showLiq and liqPaste != "" and not liqOK and na(liq99Pts)
     label.delete(lWarn)
     string msg = na
     if liqFound
