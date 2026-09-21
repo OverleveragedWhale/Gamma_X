@@ -839,6 +839,28 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     spot, options = fetch_chain(inst["chain"])   # SPX~6400 or QQQ~570
     contracts = load_contracts(options, today)
 
+    # Resolve the front contract BEFORE the ratio, because the ratio has to be
+    # built from that same contract. inst["fut"] is a continuous front-month
+    # series: it rolls, and across a roll its prior close and its live print
+    # are different deliveries, so m ends up carrying the basis of a contract
+    # nobody is looking at. Measured on the 2026-09-21 roll, that put the
+    # expiring September basis into ES and NQ and October's into CL, wrong by
+    # -0.72%, -1.01% and +4.39% respectively.
+    stats = {}
+    try:
+        stats = contract_stats([c[3] for c in contract_candidates(inst, today)]
+                               + [inst["fut"]])
+    except Exception:
+        logging.exception("%s: quote lookup failed", future)
+    try:
+        active = active_contract(inst, today, stats=stats or None)
+    except Exception:
+        logging.exception("active contract lookup failed for %s", future)
+        active = {"expiry": next_futures_expiry(today, inst["cycle"]),
+                  "source": "date rule (lookup failed)",
+                  "chosen": None, "candidates": []}
+    ratio_sym = (active["chosen"] or {}).get("symbol") or inst["fut"]
+
     # Every leg of the ratio is the most recent COMPLETED session, never the bar
     # in progress. Yahoo returns today's partial bar as the newest row, and
     # taking it made m drift through the day - worst over a weekend, when
@@ -855,31 +877,45 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
         prior, chain_close = None, None
 
     # prior cash-index close: margin notional + the tracking-ratio sanity anchor
+    # GC and CL have no free cash index, so their "index" IS the futures
+    # symbol. Point those at the same contract the ratio uses, or k_track is
+    # built from the continuous series while fc is not, and the carry gate
+    # measures the roll gap instead of the basis - which is how it rejected
+    # CL's correct close at -4.21% and fell back to index terms. Where a real
+    # cash index exists this is unchanged.
+    idx_sym = ratio_sym if inst["index"] == inst["fut"] else inst["index"]
     idx_close = None
     try:
-        idx_prior = prior_session(fetch_rows(inst["index"], max_rows=5), today)
+        idx_prior = prior_session(fetch_rows(idx_sym, max_rows=5), today)
         idx_close = idx_prior["c"] if idx_prior else None
     except Exception:
-        logging.exception("index close fetch failed for %s (%s)",
-                          future, inst["index"])
+        logging.exception("index close fetch failed for %s (%s)", future, idx_sym)
     k_track = (idx_close / chain_close) if (idx_close and chain_close) else 1.0
 
-    # futures/chain ratio m: auto Yahoo future close -> config -> index terms
+    # futures/chain ratio m: the front contract's own prior close -> config
+    # -> index terms
     m, fut_close, ratio_src = k_track, None, f"index terms (set [closes] {future})"
     fut_rows, fut_completed = [], []
-    try:
-        # Same call feeds the ratio and the realized-vol estimate below.
-        fut_rows = fetch_rows(inst["fut"], max_rows=VOL_LOOKBACK + 2)
-        fut_completed = [r for r in fut_rows if r["date"] < today.isoformat()]
-        fc = fut_completed[-1]["c"]
+    for sym in ([ratio_sym, inst["fut"]] if ratio_sym != inst["fut"]
+                else [inst["fut"]]):
+        try:
+            # Same bars feed the ratio, the realized-vol estimate and the
+            # liquidation anchor below - all three want the contract actually
+            # being held, and a specific contract has no roll step to inflate
+            # sigma either.
+            fut_rows = fetch_rows(sym, max_rows=VOL_LOOKBACK + 2)
+            fut_completed = [r for r in fut_rows if r["date"] < today.isoformat()]
+            fc = fut_completed[-1]["c"]
+        except Exception:
+            logging.info("%s: futures history %s unavailable", future, sym)
+            continue
         carry = fc / chain_close / k_track - 1.0     # implied future/index carry
         if -0.01 <= carry <= 0.04:                   # plausible front-month carry
-            fut_close, ratio_src = fc, f"auto {inst['fut']}"
+            fut_close, ratio_src = fc, f"auto {sym}"
         else:
             logging.info("%s: rejected auto %s close %.2f (implied carry %.3f)",
-                         future, inst["fut"], fc, carry)
-    except Exception:
-        logging.info("%s: auto futures close %s unavailable", future, inst["fut"])
+                         future, sym, fc, carry)
+        break
     if fut_close is None and future in closes_cfg:
         fut_close, ratio_src = closes_cfg[future], f"config [closes] {future}"
     if fut_close is not None and chain_close:
@@ -901,23 +937,16 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     # ranking further down. inst["fut"] rides along because it is the series m
     # was built from, so the live price and fut_close can never end up coming
     # from different contracts.
-    stats = {}
-    try:
-        stats = contract_stats([c[3] for c in contract_candidates(inst, today)]
-                               + [inst["fut"]])
-    except Exception:
-        logging.exception("%s: quote lookup failed", future)
-
     # The chain underlying stops printing when its cash session closes while
     # the future keeps trading, which left spot pinned to the prior settle for
     # most of the day. Take spot from the live future when there is one, and
     # measure distances from it; the levels themselves still come from the
     # settled book, and m still converts them at the prior close.
-    live = (stats.get(inst["fut"]) or {}).get("price")
+    live = (stats.get(ratio_sym) or {}).get("price")
     live = float(live) if isinstance(live, (int, float)) and live > 0 else None
     shown_spot = round(live, 2) if live else disp(spot)
     ref_spot = live / m if live else spot          # back to chain terms
-    spot_src = f"live {inst['fut']}" if live else f"{inst['chain'].lstrip('_')} x {m:.3f}"
+    spot_src = f"live {ratio_sym}" if live else f"{inst['chain'].lstrip('_')} x {m:.3f}"
 
     out = {"symbol": future, "future": future, "chain": inst["chain"],
            "ratio": round(m, 4),
@@ -940,13 +969,6 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     #   full = everything through MAX_DTE, as before
     # Which contract the near-term bucket belongs to, chosen on traded volume
     # rather than nearness to expiry - see active_contract.
-    try:
-        active = active_contract(inst, today, stats=stats or None)
-    except Exception:
-        logging.exception("active contract lookup failed for %s", future)
-        active = {"expiry": next_futures_expiry(today, inst["cycle"]),
-                  "source": "date rule (lookup failed)",
-                  "chosen": None, "candidates": []}
     out["contract"] = {
         "label": (active["chosen"] or {}).get("label"),
         "symbol": (active["chosen"] or {}).get("symbol"),
