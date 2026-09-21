@@ -1048,6 +1048,12 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
                 "compare_avg": round(mb["margin_avg"]),
                 "liq_factor": mb["liq_factor"],
                 "liq_anchor": (round(prior_fut["c"], 2) if prior_fut else None),
+                # anchor,99%,99.9% - the three numbers the TradingView overlay
+                # wants, in the order its paste field parses them.
+                "pine": (",".join(
+                    [f"{prior_fut['c']:.2f}"]
+                    + [f"{b['points']:.2f}" for b in mb["liq"]])
+                    if prior_fut else None),
                 "liq": [
                     {"label": b["label"], "points": round(b["points"], 2),
                      "lo": (round(prior_fut["c"] - b["points"], 2)
@@ -1216,6 +1222,8 @@ tr.spotrow td{color:var(--ink);font-weight:700;letter-spacing:.06em;
 .eff{margin-top:12px;font-size:12.5px}
 .eff b{color:var(--brass);letter-spacing:.08em}
 .thin{color:var(--stress)}
+code.pine{background:var(--raised);border:1px solid var(--line);border-radius:4px;
+  padding:1px 6px;color:var(--brass);cursor:pointer;user-select:all}
 .mrow{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:13px;
   padding-top:12px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
 .err{color:var(--stress);font-size:12.5px}
@@ -1338,6 +1346,12 @@ function panel(s){
           +m.liq.map(b=>b.share).join(" / ")
           +` ÷ 4 × ${m.liq_factor} ÷ 2</span>`
           +`</span></div>`;
+      if(m.pine){
+        marg+=`<div class="mrow"><span>TradingView paste `
+            +`<code class="pine" title="click to select" `
+            +`onclick="getSelection().selectAllChildren(this)">${m.pine}</code>`
+            +`</span></div>`;
+      }
     }
   }
   const regimes=s.regimes||{};
