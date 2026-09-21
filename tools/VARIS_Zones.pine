@@ -22,9 +22,11 @@ vwapWidth   = input.int(1, "VWAP Line Width", minval=1, maxval=5, group="VWAP")
 // the root does not match (continuous symbols, CFDs, or a broker with its own
 // naming). A product missing from the line simply draws nothing.
 //
-// These are anchored on a settled close, so they are a fixed frame for the
-// session and do NOT move with price. Repaste when the anchor date changes -
-// which is daily, and whenever the front contract or the margin config does.
+// The distances are drawn twice: once off the settle in the paste, a fixed
+// frame that does not move all session, and once off the session VWAP, which
+// drifts as the average trade does. Same two numbers, two reference points.
+// Repaste when the anchor date changes - which is daily, and whenever the
+// front contract or the margin config does.
 // ============================================================================
 showLiq   = input.bool(true, "Show Liquidation Bands", group="Liquidation")
 liqProd   = input.string("Auto (by symbol)", "Product",
@@ -39,6 +41,15 @@ liqWidth     = input.int(1, "Liquidation Line Width", minval=1, maxval=5, group=
 showLiqFill  = input.bool(true, "Shade 99% -> 99.9%", group="Liquidation Style")
 liqFillTrans = input.int(88, "Liquidation Fill Transparency", minval=0, maxval=100, group="Liquidation Style")
 showLiqLabel = input.bool(true, "Label Liquidation Lines", group="Liquidation Style")
+
+// The same two distances hung off the session VWAP instead of the settle.
+// Two frames answer different questions: the settle-anchored pair is where the
+// margin sat when the session opened and does not move; this pair tracks where
+// the average trade has got to, so it drifts with the session.
+showLiqVwap     = input.bool(true, "Liquidation Bands vs VWAP", group="Liquidation vs VWAP")
+liqV99Color     = input.color(color.new(color.aqua, 25), "99% vs VWAP Color", group="Liquidation vs VWAP")
+liqV999Color    = input.color(color.new(color.blue, 25), "99.9% vs VWAP Color", group="Liquidation vs VWAP")
+showLiqVwapFill = input.bool(false, "Shade 99% -> 99.9% vs VWAP", group="Liquidation vs VWAP")
 
 // ===== Session Reset Detection (timezone-safe) =====
 // Fixed - forces ET regardless of chart timezone
@@ -97,6 +108,14 @@ lo99  = liqOK and not na(liq99Pts)  ? liqAnchor - liq99Pts  : na
 hi999 = liqOK and not na(liq999Pts) ? liqAnchor + liq999Pts : na
 lo999 = liqOK and not na(liq999Pts) ? liqAnchor - liq999Pts : na
 
+// Gated on the distances rather than liqOK: these hang off the VWAP and never
+// touch liqAnchor, so a paste carrying points but no usable anchor still draws.
+liqVwapOn = showLiq and showLiqVwap and not na(vwapValue)
+vHi99  = liqVwapOn and not na(liq99Pts)  ? vwapValue + liq99Pts  : na
+vLo99  = liqVwapOn and not na(liq99Pts)  ? vwapValue - liq99Pts  : na
+vHi999 = liqVwapOn and not na(liq999Pts) ? vwapValue + liq999Pts : na
+vLo999 = liqVwapOn and not na(liq999Pts) ? vwapValue - liq999Pts : na
+
 // ===== Plots =====
 vwapPlot = plot(showVWAP ? vwapValue : na, title="VWAP", color=vwapColor, linewidth=vwapWidth)
 
@@ -108,12 +127,20 @@ lo99Plot  = plot(lo99,  title="Liq 99% Lower",   color=liq99Color,  linewidth=li
 hi999Plot = plot(hi999, title="Liq 99.9% Upper", color=liq999Color, linewidth=liqWidth, style=plot.style_linebr)
 lo999Plot = plot(lo999, title="Liq 99.9% Lower", color=liq999Color, linewidth=liqWidth, style=plot.style_linebr)
 
+vHi99Plot  = plot(vHi99,  title="Liq 99% Upper vs VWAP",   color=liqV99Color,  linewidth=liqWidth, style=plot.style_linebr)
+vLo99Plot  = plot(vLo99,  title="Liq 99% Lower vs VWAP",   color=liqV99Color,  linewidth=liqWidth, style=plot.style_linebr)
+vHi999Plot = plot(vHi999, title="Liq 99.9% Upper vs VWAP", color=liqV999Color, linewidth=liqWidth, style=plot.style_linebr)
+vLo999Plot = plot(vLo999, title="Liq 99.9% Lower vs VWAP", color=liqV999Color, linewidth=liqWidth, style=plot.style_linebr)
+
 // ===== Fills =====
 // Shade only the 99% -> 99.9% shoulders, not the whole span: the interesting
 // region is between the two confidence levels, and flooding the middle would
 // bury the VWAP.
 fill(hi99Plot,  hi999Plot, color=showLiqFill ? color.new(liq999Color, liqFillTrans) : na, title="Liq Upper Shoulder")
 fill(lo999Plot, lo99Plot,  color=showLiqFill ? color.new(liq999Color, liqFillTrans) : na, title="Liq Lower Shoulder")
+
+fill(vHi99Plot,  vHi999Plot, color=showLiqVwapFill ? color.new(liqV999Color, liqFillTrans) : na, title="Liq Upper Shoulder vs VWAP")
+fill(vLo999Plot, vLo99Plot,  color=showLiqVwapFill ? color.new(liqV999Color, liqFillTrans) : na, title="Liq Lower Shoulder vs VWAP")
 
 // ===== Liquidation labels =====
 // Drawn once, on the last bar only, so they sit at the right edge and do not
