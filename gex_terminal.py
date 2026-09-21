@@ -829,14 +829,17 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     spot, options = fetch_chain(inst["chain"])   # SPX~6400 or QQQ~570
     contracts = load_contracts(options, today)
 
-    # chain-scale prior close/session: feeds the chain->future ratio and PDH/
-    # PDL/PDC wall confluence. Isolated from GEX/walls/flip below, which come
-    # entirely from the Cboe chain - a history outage should degrade the ratio
-    # scaling and confluence tags, not blank the panel.
+    # Every leg of the ratio is the most recent COMPLETED session, never the bar
+    # in progress. Yahoo returns today's partial bar as the newest row, and
+    # taking it made m drift through the day - worst over a weekend, when
+    # futures reopen Sunday evening against an ETF that last traded Friday, so
+    # the numerator moved while the denominator could not. Freezing both on the
+    # same settled session means every level converts at one fixed number for
+    # the whole day: spot still moves, the axis it is drawn on does not.
     try:
         rows = fetch_rows(inst["hist"])
         prior = prior_session(rows, today)
-        chain_close = rows[-1]["c"]
+        chain_close = prior["c"] if prior else None
     except Exception as exc:
         logging.exception("history fetch failed for %s (%s)", future, inst["hist"])
         prior, chain_close = None, None
@@ -844,7 +847,8 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     # prior cash-index close: margin notional + the tracking-ratio sanity anchor
     idx_close = None
     try:
-        idx_close = fetch_closes(inst["index"], max_rows=5)[-1]
+        idx_prior = prior_session(fetch_rows(inst["index"], max_rows=5), today)
+        idx_close = idx_prior["c"] if idx_prior else None
     except Exception:
         logging.exception("index close fetch failed for %s (%s)",
                           future, inst["index"])
@@ -852,11 +856,12 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
 
     # futures/chain ratio m: auto Yahoo future close -> config -> index terms
     m, fut_close, ratio_src = k_track, None, f"index terms (set [closes] {future})"
-    fut_rows = []
+    fut_rows, fut_completed = [], []
     try:
         # Same call feeds the ratio and the realized-vol estimate below.
         fut_rows = fetch_rows(inst["fut"], max_rows=VOL_LOOKBACK + 2)
-        fc = fut_rows[-1]["c"]
+        fut_completed = [r for r in fut_rows if r["date"] < today.isoformat()]
+        fc = fut_completed[-1]["c"]
         carry = fc / chain_close / k_track - 1.0     # implied future/index carry
         if -0.01 <= carry <= 0.04:                   # plausible front-month carry
             fut_close, ratio_src = fc, f"auto {inst['fut']}"
@@ -869,19 +874,24 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
         fut_close, ratio_src = closes_cfg[future], f"config [closes] {future}"
     if fut_close is not None and chain_close:
         m = fut_close / chain_close
+    # The session both legs are pinned to, so the panel can show it.
+    ratio_date = prior["date"] if prior else None
 
     def disp(x):                                     # chain scale -> futures
         return round(x * m, 2)
 
-    scale_note = (f"{inst['chain'].lstrip('_')} x {m:.3f} -> {future} ({ratio_src})"
+    asof = f", {ratio_date} closes" if ratio_date else ""
+    scale_note = (f"{inst['chain'].lstrip('_')} x {m:.3f} -> {future} "
+                  f"({ratio_src}{asof})"
                   if fut_close is not None else
                   f"{inst['chain'].lstrip('_')} x {m:.3f} -> {future} "
-                  f"INDEX TERMS ({ratio_src})")
+                  f"INDEX TERMS ({ratio_src}{asof})")
 
     out = {"symbol": future, "future": future, "chain": inst["chain"],
            "ratio": round(m, 4),
            "fut_close": round(fut_close, 2) if fut_close else None,
-           "scale_note": scale_note, "ok": True, "error": None,
+           "scale_note": scale_note, "ratio_date": ratio_date,
+           "ok": True, "error": None,
            "spot": disp(spot), "regimes": {}}
 
     # GEX + walls, split into two expiration buckets (internal math in chain
@@ -942,8 +952,9 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     # rather than sliding with spot.
     # Futures reopen Sunday evening, so the newest bar is routinely an
     # in-progress session. Including it puts a partial move - and the weekend
-    # gap - into the vol estimate, which inflated sigma by ~6%.
-    completed = [r for r in fut_rows if r["date"] < today.isoformat()]
+    # gap - into the vol estimate, which inflated sigma by ~6%. fut_completed
+    # is the same settled-bars list the chain->future ratio is pinned to.
+    completed = fut_completed
     sigma = realized_sigma(completed)
     prior_fut = completed[-1] if completed else None
     if sigma and prior_fut:
