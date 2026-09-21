@@ -68,9 +68,9 @@ YAHOO_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
 #   fut   = Yahoo futures symbol for the prior settle
 INSTRUMENTS = [
     {"future": "ES",  "chain": "_SPX", "hist": "^GSPC", "index": "^GSPC",
-     "fut": "ES=F",  "multiplier": 50, "tick_value": 12.5},
+     "fut": "ES=F",  "multiplier": 50, "liq_factor": 1.0},
     {"future": "NQ",  "chain": "QQQ",  "hist": "QQQ",   "index": "^NDX",
-     "fut": "NQ=F",  "multiplier": 20, "tick_value": 5.0},
+     "fut": "NQ=F",  "multiplier": 20, "liq_factor": 5.0},
 ]
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -480,14 +480,17 @@ def margin_buffer(inst, idx_close, margins_cfg):
     down = _margin_leg(margins_cfg, fut, "DOWN")
     mult = inst["multiplier"]
     avg = (up + down) / 2.0
-    tick = inst["tick_value"]
-    # avg -> share at this level -> ticks to points -> tick value -> halved,
+    # Per-instrument scaling in the liquidation chain. NOT a contract spec:
+    # ES is 1.0 because the step it stood in for already cancels there, and
+    # NQ is 5.0. Do not "correct" these to tick values.
+    tick = inst["liq_factor"]
+    # avg -> share at this level -> ticks to points -> liq_factor -> halved,
     # since the posted margin covers moves in both directions.
     liq = [{"label": label, "share": share,
             "points": avg * share / TICKS_PER_POINT * tick / BAND_DIVISOR}
            for label, share in LIQ_LEVELS]
     return {"future": fut, "index_close": idx_close,
-            "notional": idx_close * mult, "tick_value": tick,
+            "notional": idx_close * mult, "liq_factor": tick,
             "margin_up": up, "margin_down": down, "margin_avg": avg,
             "points_up": up / mult, "points_down": down / mult,
             "liq": liq, "compare": avg * 0.01 / TICKS_PER_POINT}
@@ -706,7 +709,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
                 "margin_down": round(mb["margin_down"]),
                 "compare": round(mb["compare"], 2),
                 "compare_avg": round(mb["margin_avg"]),
-                "tick_value": mb["tick_value"],
+                "liq_factor": mb["liq_factor"],
                 "liq_anchor": (round(prior_fut["c"], 2) if prior_fut else None),
                 "liq": [
                     {"label": b["label"], "points": round(b["points"], 2),
@@ -1034,7 +1037,8 @@ function panel(s){
       marg+=`<div class="mrow"><span>liquidation, off the ${m.liq_anchor} close: `
           +m.liq.map(b=>`<b style="color:var(--jade)">${b.label} ±${b.points}</b>`
                        +` (${b.lo}–${b.hi})`).join(" · ")
-          +` <span style="opacity:.7">avg ${m.compare_avg} × share ÷ 4 × $${m.tick_value} ÷ 2</span>`
+          +` <span style="opacity:.7">avg ${m.compare_avg} × share ÷ 4`
+          +`${m.liq_factor!==1?" × "+m.liq_factor:""} ÷ 2</span>`
           +`</span></div>`;
     }
   }
