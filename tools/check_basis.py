@@ -11,10 +11,11 @@ Prints the recent closes of both series side by side, so a roll shows up as a
 step in one and not the other, and reports the basis each implies against the
 chain underlying.
 """
-import datetime
 import sys
 
-import gex_terminal as g
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
+
+import gex_terminal as g  # noqa: E402
 
 
 def closes(sym, n=6):
