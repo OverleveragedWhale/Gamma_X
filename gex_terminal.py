@@ -24,6 +24,7 @@ import logging
 import calendar
 import configparser
 import http.cookiejar
+import urllib.error
 import urllib.request
 from pathlib import Path
 from datetime import datetime, date, timedelta
@@ -57,6 +58,13 @@ TICKS_PER_POINT = 4           # ES and NQ both quote in quarter points
 CBOE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
 YAHOO_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
              "{sym}?range=1mo&interval=1d")
+# The v8 chart feed carries no open interest. v7 quote does, for futures, and
+# takes a whole basket in one call - but only with a cookie+crumb pair, which
+# is a free unauthenticated handshake, not a login.
+YAHOO_COOKIE_URL = "https://fc.yahoo.com"
+YAHOO_CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
+YAHOO_QUOTE_URL = ("https://query1.finance.yahoo.com/v7/finance/quote"
+                   "?symbols={syms}&crumb={crumb}")
 
 # GEX source per tradeable. SPX index options are free-with-greeks, so ES uses
 # the native cash-index chain. Cboe's free feed does NOT carry NDX greeks,
@@ -227,48 +235,86 @@ def contract_candidates(inst, d, n=CONTRACT_CANDIDATES):
     return [(exp, y, m, contract_symbol(inst, y, m)) for exp, y, m in out]
 
 
-def contract_volume(sym):
-    """Most recent session volume for one futures contract, or None."""
-    result = json.loads(http_get(YAHOO_URL.format(sym=quote(sym))))["chart"]["result"][0]
-    vols = [v for v in (result["indicators"]["quote"][0].get("volume") or []) if v]
-    return vols[-1] if vols else None
+_CRUMB = None
 
 
-def active_contract(inst, d):
-    """Pick the front contract by traded volume, not by proximity to expiry.
+def yahoo_crumb(refresh=False):
+    """Cookie + crumb pair the v7 quote endpoint wants. Cached per process."""
+    global _CRUMB
+    if refresh:
+        _CRUMB = None
+    if _CRUMB is None:
+        try:
+            http_get(YAHOO_COOKIE_URL)
+        except Exception:
+            pass          # this URL 404s; the Set-Cookie on the way past is the point
+        _CRUMB = http_get(YAHOO_CRUMB_URL).strip()
+    return _CRUMB
 
-    The nearest contract is not always the one being traded. Gold is the clear
-    case: with Oct two months from termination its volume is already a rounding
-    error against Dec, because metals liquidity concentrates in a few delivery
-    months rather than rolling evenly. A date rule would put the near-term
-    bucket on a contract almost nobody holds.
 
-    Open interest would be the better measure - it is positions rather than
-    turnover, and it does not spike in both legs during a roll - but no free
-    feed carries per-contract futures OI (CME's own endpoint returns 403), so
-    volume stands in. Falls back to the date rule if the fetch fails.
+def contract_stats(symbols):
+    """Open interest and session volume for several futures contracts at once.
+
+    One request covers every candidate across every instrument, so adding a
+    contract to compare costs nothing. A stale crumb comes back as a 401, which
+    is worth exactly one silent retry with a fresh one.
+    """
+    if not symbols:
+        return {}
+    for attempt in (0, 1):
+        url = YAHOO_QUOTE_URL.format(syms=quote(",".join(symbols)),
+                                     crumb=quote(yahoo_crumb(refresh=bool(attempt))))
+        try:
+            rows = json.loads(http_get(url))["quoteResponse"]["result"]
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code != 401 or attempt:
+                raise
+    return {r["symbol"]: {"oi": r.get("openInterest"),
+                          "volume": r.get("regularMarketVolume")}
+            for r in rows if r.get("symbol")}
+
+
+def active_contract(inst, d, stats=None):
+    """Pick the front contract by open interest, not by proximity to expiry.
+
+    The nearest contract is not always the one being held. Gold is the clear
+    case: Oct carries 43k open against Dec's 314k, because metals liquidity
+    concentrates in a few delivery months rather than rolling evenly, so a date
+    rule would anchor the near-term bucket to a contract almost nobody holds.
+
+    Open interest is preferred over volume because it measures positions rather
+    than turnover, and it does not light up in both legs at once during a roll
+    week. Volume is the fallback when a contract reports no OI, and the date
+    rule the fallback when the whole lookup fails.
     """
     candidates = contract_candidates(inst, d)
+    if stats is None:
+        try:
+            stats = contract_stats([c[3] for c in candidates])
+        except Exception:
+            logging.exception("%s: contract stats unavailable", inst["future"])
+            stats = {}
+
     rows = []
     for exp, year, month, sym in candidates:
-        try:
-            vol = contract_volume(sym)
-        except Exception:
-            logging.info("%s: contract volume unavailable for %s", inst["future"], sym)
-            vol = None
-        rows.append({"symbol": sym, "expiry": exp.isoformat(), "volume": vol,
+        st = stats.get(sym) or {}
+        rows.append({"symbol": sym, "expiry": exp.isoformat(),
+                     "oi": st.get("oi"), "volume": st.get("volume"),
                      "label": f"{calendar.month_abbr[month]} {year % 100:02d}"})
-    if not any(r["volume"] for r in rows):
-        exp = next_futures_expiry(d, inst["cycle"])
-        return {"expiry": exp, "source": "date rule (no volume)",
-                "chosen": None, "candidates": rows}
-    # Ties go to the nearer contract, which is what enumerate order gives.
-    idx = max(range(len(rows)), key=lambda i: rows[i]["volume"] or -1)
-    best = rows[idx]
-    for i, r in enumerate(rows):
-        r["active"] = (i == idx)
-    return {"expiry": date.fromisoformat(best["expiry"]),
-            "source": "volume", "chosen": best, "candidates": rows}
+
+    for key, source in (("oi", "open interest"), ("volume", "volume")):
+        if any(r[key] for r in rows):
+            # Ties go to the nearer contract, which is the order rows are in.
+            idx = max(range(len(rows)), key=lambda i: rows[i][key] or -1)
+            for i, r in enumerate(rows):
+                r["active"] = (i == idx)
+            return {"expiry": date.fromisoformat(rows[idx]["expiry"]),
+                    "source": source, "chosen": rows[idx], "candidates": rows}
+
+    return {"expiry": next_futures_expiry(d, inst["cycle"]),
+            "source": "date rule (no OI or volume)",
+            "chosen": None, "candidates": rows}
 
 
 _COOKIE_JAR = http.cookiejar.CookieJar()
@@ -1274,7 +1320,7 @@ function panel(s){
 
 function contractTag(c){
   if(!c||!c.label) return "";
-  return `<span class="active-con" title="front contract by traded volume">${c.label}</span>`;
+  return `<span class="active-con" title="front contract by ${c.source}">${c.label}</span>`;
 }
 
 // The runners-up are shown too: on a normal day one contract carries nearly all
@@ -1282,11 +1328,14 @@ function contractTag(c){
 function contractRow(c){
   if(!c||!(c.candidates||[]).length) return "";
   const rolled = c.date_rule && c.date_rule!==c.expiry;
+  // Rank on whichever measure actually drove the pick, so the highlighted
+  // contract is always the largest number shown.
+  const key = c.source==="volume" ? "volume" : "oi";
   const list = c.candidates.map(r=>{
-    const v = r.volume==null ? "n/a" : (+r.volume).toLocaleString();
+    const n = r[key]==null ? "n/a" : (+r[key]).toLocaleString();
     return r.active
-      ? `<b class="con-on">${r.label} ${v}</b>`
-      : `<span class="con-off">${r.label} ${v}</span>`;
+      ? `<b class="con-on">${r.label} ${n}</b>`
+      : `<span class="con-off">${r.label} ${n}</span>`;
   }).join(" · ");
   return `<div class="scale">contract: ${list}`
        + `<span style="opacity:.7"> · by ${c.source}</span>`
