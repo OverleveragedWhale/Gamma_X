@@ -1123,6 +1123,7 @@ def recompute():
         _cache["market"] = status
         _cache["symbols"] = syms
         _cache["pine"] = ";".join(chips)
+        _cache["build"] = PAGE_BUILD
         _cache["epoch"] = time.time()
 
 
@@ -1267,6 +1268,7 @@ code.pine{background:var(--raised);border:1px solid var(--line);border-radius:4p
 <div class="foot" id="foot"></div>
 </div>
 <script>
+const PAGE_BUILD = "__PAGE_BUILD__";
 const REFRESH_SECONDS = __REFRESH_SECONDS__;
 const SNAPSHOT_DATA = __SNAPSHOT_DATA__;
 const MAX_PAIN_DAILY_DAYS = __MAX_PAIN_DAILY_DAYS__;
@@ -1444,9 +1446,28 @@ async function fetchData(){
   return SNAPSHOT_DATA;
 }
 
+// The payload is fetched every poll but the code drawing it is baked into
+// index.html, so a browser holding a stale page renders fresh numbers with old
+// markup - a new column simply never appears and the page still looks live.
+// The build stamp travels with the data; when it moves past the page's own,
+// reload once through a URL the CDN has not cached.
+function checkBuild(d){
+  if(!IS_SNAPSHOT || !d || !d.build || d.build === PAGE_BUILD) return false;
+  let tried = null;
+  try{ tried = sessionStorage.getItem("gxBuild"); }catch(e){}
+  // Only ever one reload per build: if the fresh HTML still disagrees - a
+  // deploy mid-flight, or a proxy that ignores the query - stop rather than
+  // spin. The stale page keeps working, just without the newest markup.
+  if(tried === d.build) return false;
+  try{ sessionStorage.setItem("gxBuild", d.build); }catch(e){}
+  location.replace(location.pathname + "?b=" + encodeURIComponent(d.build));
+  return true;
+}
+
 async function load(){
   try{
     const d = await fetchData();
+    if(checkBuild(d)) return;
     secs=d.seconds_to_refresh;
     dataEpoch=d.epoch||null;
     document.getElementById("mkt").textContent=d.market;
@@ -1505,6 +1526,14 @@ document.getElementById("refresh").addEventListener("click",async()=>{
 load(); setInterval(load,IS_SNAPSHOT?POLL_MS:30000); setInterval(tick,1000);
 </script>
 </body></html>"""
+# Fingerprint of the rendering code itself, taken before any data is baked in,
+# so it moves when the markup changes and not when the numbers do. Carried in
+# the payload as well, which also means a pure code change alters the digest
+# and so survives --skip-unchanged - otherwise new markup would sit unpublished
+# until the figures happened to move.
+PAGE_BUILD = hashlib.sha256(PAGE.encode()).hexdigest()[:12]
+
+PAGE = PAGE.replace("__PAGE_BUILD__", PAGE_BUILD)
 PAGE = PAGE.replace("__REFRESH_SECONDS__", str(REFRESH_SECONDS))
 PAGE = PAGE.replace("__MAX_PAIN_DAILY_DAYS__", str(MAX_PAIN_DAILY_DAYS))
 PAGE = PAGE.replace("__SNAPSHOT_DATA__", "null")
