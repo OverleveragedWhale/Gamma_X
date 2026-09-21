@@ -41,6 +41,8 @@ from urllib.parse import urlparse, parse_qs, quote
 # ---------------- settings ----------------
 MAX_DTE = 95                 # GEX: ignore contracts beyond this many days
 NEAR_MAX_DTE = 32            # near-term bucket: never look further than this
+MAX_PAIN_DAILY_DAYS = 5      # max pain: every expiry inside this many days,
+                             # and nothing but monthly opex beyond it
 SHARES_PER_CONTRACT = 100
 WALL_COUNT = 3               # ranked walls reported per side
 MIN_WALL_SEP = 0.004         # min gap between reported walls (0.4% of spot)
@@ -279,8 +281,23 @@ def top_walls(per, side, spot, n=None, min_sep=None):
     return kept
 
 
-def max_pain_by_expiry(contracts):
-    """Return the max-pain strike for each expiration in the option book.
+def is_monthly_opex(d):
+    """True for a standard monthly expiration: the third Friday of the month.
+
+    The third Friday is the only one that can land between the 15th and the
+    21st, so the day-of-month range identifies it without counting weeks.
+    """
+    return d.weekday() == 4 and 15 <= d.day <= 21
+
+
+def max_pain_by_expiry(contracts, today):
+    """Max-pain strike per expiration, for the expirations worth showing.
+
+    A full chain carries 30+ expirations, most of them thinly traded dailies
+    months out that pin nothing. Kept here: every expiry within
+    MAX_PAIN_DAILY_DAYS days, plus monthly opex - the two that actually have
+    the open interest behind them. Filtering before the loop rather than after
+    also means no max pain is computed for a row that gets thrown away.
 
     Open-interest loss at settlement S is sum((S-K)*oi) over calls struck at or
     below S, plus sum((K-S)*oi) over puts struck at or above S. Dropping the
@@ -290,7 +307,9 @@ def max_pain_by_expiry(contracts):
     """
     by_expiry = {}
     for c in contracts:
-        by_expiry.setdefault(c["exp"], []).append(c)
+        exp = c["exp"]
+        if (exp - today).days <= MAX_PAIN_DAILY_DAYS or is_monthly_opex(exp):
+            by_expiry.setdefault(exp, []).append(c)
 
     out = {}
     for expiry in sorted(by_expiry):
@@ -320,7 +339,8 @@ def max_pain_by_expiry(contracts):
         # min over (loss, strike) keeps the original tie-break: lowest strike.
         loss, strike = min(((call_loss[i] + put_loss[i]) * SHARES_PER_CONTRACT, k)
                            for i, k in enumerate(strikes))
-        out[expiry] = {"strike": strike, "loss": loss}
+        out[expiry] = {"strike": strike, "loss": loss,
+                       "monthly": is_monthly_opex(expiry)}
     return out
 
 
@@ -743,8 +763,9 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
         out["max_pain"] = [
             {"expiry": expiry.isoformat(), "strike": disp(item["strike"]),
              "dist": round(100 * (item["strike"] - spot) / spot, 2),
-             "loss_str": fmt_dollars(item["loss"])}
-            for expiry, item in max_pain_by_expiry(contracts).items()
+             "loss_str": fmt_dollars(item["loss"]),
+             "monthly": item["monthly"]}
+            for expiry, item in max_pain_by_expiry(contracts, today).items()
         ]
     else:
         out["error_note"] = "no usable option contracts returned (verify chain is free)"
@@ -973,6 +994,10 @@ td.num{text-align:right}
   padding:1px 6px;border-radius:4px;border:1px solid var(--line);color:var(--muted)}
 .chip.conf{color:var(--ink);border-color:rgba(255,255,255,.25)}
 .max-pain{margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
+.max-pain .sub{letter-spacing:.04em;text-transform:none;opacity:.6;font-weight:400}
+.max-pain tr.opex td{color:var(--ink)}
+.max-pain .tag{font-size:9px;letter-spacing:.1em;padding:1px 5px;margin-left:6px;
+  border:1px solid var(--line);border-radius:3px;color:var(--muted);vertical-align:middle}
 .max-pain .k{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);
   margin-bottom:5px}
 .eff{margin-top:12px;font-size:12.5px}
@@ -1000,6 +1025,7 @@ td.num{text-align:right}
 <script>
 const REFRESH_SECONDS = __REFRESH_SECONDS__;
 const SNAPSHOT_DATA = __SNAPSHOT_DATA__;
+const MAX_PAIN_DAILY_DAYS = __MAX_PAIN_DAILY_DAYS__;
 // A published snapshot has its figures baked in so it renders standalone, and
 // also polls data.json, which the publisher writes beside index.html. That is
 // what lets a static page follow later snapshots without the viewer reloading.
@@ -1128,8 +1154,10 @@ function panel(s){
   }
   const regimes=s.regimes||{};
   const maxPain=(s.max_pain||[]).length
-    ? `<div class="max-pain"><div class="k">Max pain by expiry</div><table><thead><tr><th>Expiry</th><th class="num">Level</th><th class="num">Dist</th><th class="num">Open-interest loss</th></tr></thead><tbody>`
-      +(s.max_pain||[]).map(p=>`<tr><td>${p.expiry}</td><td class="num">${(+p.strike).toFixed(2)}</td><td class="num">${p.dist>0?"+":""}${p.dist}%</td><td class="num">${p.loss_str}</td></tr>`).join("")
+    ? `<div class="max-pain"><div class="k">Max pain by expiry `
+      +`<span class="sub">next ${MAX_PAIN_DAILY_DAYS}d + monthly opex</span></div>`
+      +`<table><thead><tr><th>Expiry</th><th class="num">Level</th><th class="num">Dist</th><th class="num">Open-interest loss</th></tr></thead><tbody>`
+      +(s.max_pain||[]).map(p=>`<tr${p.monthly?' class="opex"':''}><td>${p.expiry}${p.monthly?' <span class="tag">OPEX</span>':''}</td><td class="num">${(+p.strike).toFixed(2)}</td><td class="num">${p.dist>0?"+":""}${p.dist}%</td><td class="num">${p.loss_str}</td></tr>`).join("")
       +`</tbody></table></div>`
     : "";
   const body = (regimes.near||regimes.full)
@@ -1209,6 +1237,7 @@ load(); setInterval(load,IS_SNAPSHOT?POLL_MS:30000); setInterval(tick,1000);
 </script>
 </body></html>"""
 PAGE = PAGE.replace("__REFRESH_SECONDS__", str(REFRESH_SECONDS))
+PAGE = PAGE.replace("__MAX_PAIN_DAILY_DAYS__", str(MAX_PAIN_DAILY_DAYS))
 PAGE = PAGE.replace("__SNAPSHOT_DATA__", "null")
 # stray-char guard from hand-authored CSS var line
 PAGE = PAGE.replace("--muted:#7f8 da0;", "")
