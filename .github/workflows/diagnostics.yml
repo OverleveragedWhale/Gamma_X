@@ -70,6 +70,13 @@ jobs:
               print(f"  {inst['future']}: k_track={k_track:.4f} carry={carry:+.4f} "
                     f"-> {'ACCEPTED' if ok else 'REJECTED, falls back to index terms'}")
           PY
+      - name: Contract the ratio is built from
+        # m comes from a continuous front-month series while the near-term
+        # bucket names a specific contract. Across a roll those are different
+        # deliveries, which silently puts the wrong basis into every level.
+        continue-on-error: true
+        run: python tools/check_basis.py
+
       - name: Futures open interest feed
         # Non-fatal: a red X here would be indistinguishable from the Cboe probe
         # failing, and this step is the one most likely to trip on an upstream
