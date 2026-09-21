@@ -42,6 +42,15 @@ showLiqFill  = input.bool(true, "Shade 99% -> 99.9%", group="Liquidation Style")
 liqFillTrans = input.int(88, "Liquidation Fill Transparency", minval=0, maxval=100, group="Liquidation Style")
 showLiqLabel = input.bool(true, "Label Liquidation Lines", group="Liquidation Style")
 
+// Fractions of the 99% distance. Margin burn is linear in points - the 99%
+// distance IS margin/multiplier - so a third of the distance is a third of the
+// margin gone, not an approximation of it. Off by default; twelve extra lines
+// on by default would bury the two levels that matter.
+showLiq13 = input.bool(false, "1/3 Level", inline="frac", group="Liquidation")
+showLiq12 = input.bool(false, "1/2 Level", inline="frac", group="Liquidation")
+showLiq23 = input.bool(false, "2/3 Level", inline="frac", group="Liquidation")
+liqFracColor = input.color(color.new(color.orange, 55), "Fraction Color", group="Liquidation Style")
+
 // The same two distances hung off the session VWAP instead of the settle.
 // Two frames answer different questions: the settle-anchored pair is where the
 // margin sat when the session opened and does not move; this pair tracks where
@@ -116,6 +125,25 @@ vLo99  = liqVwapOn and not na(liq99Pts)  ? vwapValue - liq99Pts  : na
 vHi999 = liqVwapOn and not na(liq999Pts) ? vwapValue + liq999Pts : na
 vLo999 = liqVwapOn and not na(liq999Pts) ? vwapValue - liq999Pts : na
 
+// Fractional levels, off the same 99% distance, in both frames.
+p13 = na(liq99Pts) ? na : liq99Pts / 3.0
+p12 = na(liq99Pts) ? na : liq99Pts / 2.0
+p23 = na(liq99Pts) ? na : liq99Pts * 2.0 / 3.0
+
+hi13 = liqOK and showLiq13 and not na(p13) ? liqAnchor + p13 : na
+lo13 = liqOK and showLiq13 and not na(p13) ? liqAnchor - p13 : na
+hi12 = liqOK and showLiq12 and not na(p12) ? liqAnchor + p12 : na
+lo12 = liqOK and showLiq12 and not na(p12) ? liqAnchor - p12 : na
+hi23 = liqOK and showLiq23 and not na(p23) ? liqAnchor + p23 : na
+lo23 = liqOK and showLiq23 and not na(p23) ? liqAnchor - p23 : na
+
+vHi13 = liqVwapOn and showLiq13 and not na(p13) ? vwapValue + p13 : na
+vLo13 = liqVwapOn and showLiq13 and not na(p13) ? vwapValue - p13 : na
+vHi12 = liqVwapOn and showLiq12 and not na(p12) ? vwapValue + p12 : na
+vLo12 = liqVwapOn and showLiq12 and not na(p12) ? vwapValue - p12 : na
+vHi23 = liqVwapOn and showLiq23 and not na(p23) ? vwapValue + p23 : na
+vLo23 = liqVwapOn and showLiq23 and not na(p23) ? vwapValue - p23 : na
+
 // ===== Plots =====
 vwapPlot = plot(showVWAP ? vwapValue : na, title="VWAP", color=vwapColor, linewidth=vwapWidth)
 
@@ -131,6 +159,20 @@ vHi99Plot  = plot(vHi99,  title="Liq 99% Upper vs VWAP",   color=liqV99Color,  l
 vLo99Plot  = plot(vLo99,  title="Liq 99% Lower vs VWAP",   color=liqV99Color,  linewidth=liqWidth, style=plot.style_linebr)
 vHi999Plot = plot(vHi999, title="Liq 99.9% Upper vs VWAP", color=liqV999Color, linewidth=liqWidth, style=plot.style_linebr)
 vLo999Plot = plot(vLo999, title="Liq 99.9% Lower vs VWAP", color=liqV999Color, linewidth=liqWidth, style=plot.style_linebr)
+
+plot(hi13, title="Liq 1/3 Upper", color=liqFracColor, linewidth=liqWidth, style=plot.style_linebr)
+plot(lo13, title="Liq 1/3 Lower", color=liqFracColor, linewidth=liqWidth, style=plot.style_linebr)
+plot(hi12, title="Liq 1/2 Upper", color=liqFracColor, linewidth=liqWidth, style=plot.style_linebr)
+plot(lo12, title="Liq 1/2 Lower", color=liqFracColor, linewidth=liqWidth, style=plot.style_linebr)
+plot(hi23, title="Liq 2/3 Upper", color=liqFracColor, linewidth=liqWidth, style=plot.style_linebr)
+plot(lo23, title="Liq 2/3 Lower", color=liqFracColor, linewidth=liqWidth, style=plot.style_linebr)
+
+plot(vHi13, title="Liq 1/3 Upper vs VWAP", color=liqFracColor, linewidth=liqWidth, style=plot.style_linebr)
+plot(vLo13, title="Liq 1/3 Lower vs VWAP", color=liqFracColor, linewidth=liqWidth, style=plot.style_linebr)
+plot(vHi12, title="Liq 1/2 Upper vs VWAP", color=liqFracColor, linewidth=liqWidth, style=plot.style_linebr)
+plot(vLo12, title="Liq 1/2 Lower vs VWAP", color=liqFracColor, linewidth=liqWidth, style=plot.style_linebr)
+plot(vHi23, title="Liq 2/3 Upper vs VWAP", color=liqFracColor, linewidth=liqWidth, style=plot.style_linebr)
+plot(vLo23, title="Liq 2/3 Lower vs VWAP", color=liqFracColor, linewidth=liqWidth, style=plot.style_linebr)
 
 // ===== Fills =====
 // Shade only the 99% -> 99.9% shoulders, not the whole span: the interesting
