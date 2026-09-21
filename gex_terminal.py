@@ -68,7 +68,7 @@ YAHOO_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
 #   fut   = Yahoo futures symbol for the prior settle
 INSTRUMENTS = [
     {"future": "ES",  "chain": "_SPX", "hist": "^GSPC", "index": "^GSPC",
-     "fut": "ES=F",  "multiplier": 50, "liq_factor": 1.0},
+     "fut": "ES=F",  "multiplier": 50, "liq_factor": 2.0},
     {"future": "NQ",  "chain": "QQQ",  "hist": "QQQ",   "index": "^NDX",
      "fut": "NQ=F",  "multiplier": 20, "liq_factor": 5.0},
 ]
@@ -480,9 +480,12 @@ def margin_buffer(inst, idx_close, margins_cfg):
     down = _margin_leg(margins_cfg, fut, "DOWN")
     mult = inst["multiplier"]
     avg = (up + down) / 2.0
-    # Per-instrument scaling in the liquidation chain. NOT a contract spec:
-    # ES is 1.0 because the step it stood in for already cancels there, and
-    # NQ is 5.0. Do not "correct" these to tick values.
+    # Per-instrument scaling in the liquidation chain. NOT a tick value:
+    # it is 100 / multiplier, which is what makes the band the same fraction
+    # of margin for every symbol (ES 100/50 = 2.0, NQ 100/20 = 5.0). NQ's 5.0
+    # coincides with its $5.00 tick; ES's does not - its tick is $12.50. So do
+    # not "correct" either of these to a tick value.
+    #   band / (margin in points) = 0.01 * liq_factor * multiplier / 8 = 12.5%
     tick = inst["liq_factor"]
     # avg -> share at this level -> ticks to points -> liq_factor -> halved,
     # since the posted margin covers moves in both directions.
@@ -1038,7 +1041,7 @@ function panel(s){
           +m.liq.map(b=>`<b style="color:var(--jade)">${b.label} ±${b.points}</b>`
                        +` (${b.lo}–${b.hi})`).join(" · ")
           +` <span style="opacity:.7">avg ${m.compare_avg} × share ÷ 4`
-          +`${m.liq_factor!==1?" × "+m.liq_factor:""} ÷ 2</span>`
+          +` × ${m.liq_factor} ÷ 2</span>`
           +`</span></div>`;
     }
   }
