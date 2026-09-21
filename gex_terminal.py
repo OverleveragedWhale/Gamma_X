@@ -1101,10 +1101,24 @@ def recompute():
     for t in threads:
         t.join()
 
+    # One line covering every product, so the TradingView overlay is a single
+    # copy and a single paste rather than one per chart:
+    #   ES=anchor,99%,99.9%;NQ=...;GC=...;CL=...
+    # Products whose margins are unset simply do not appear, and the overlay
+    # draws nothing for those rather than guessing.
+    chips = []
+    for sym in syms:
+        if not (sym and sym.get("ok")):
+            continue
+        chip = (sym.get("margin") or {}).get("pine")
+        if chip:
+            chips.append(f"{sym['symbol']}={chip}")
+
     with _lock:
         _cache["generated"] = now.strftime("%Y-%m-%d %H:%M:%S ET")
         _cache["market"] = status
         _cache["symbols"] = syms
+        _cache["pine"] = ";".join(chips)
         _cache["epoch"] = time.time()
 
 
@@ -1222,6 +1236,9 @@ tr.spotrow td{color:var(--ink);font-weight:700;letter-spacing:.06em;
 .eff{margin-top:12px;font-size:12.5px}
 .eff b{color:var(--brass);letter-spacing:.08em}
 .thin{color:var(--stress)}
+#pinebar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 0 2px}
+#pinebar .k{font-size:11px;letter-spacing:.05em;color:var(--muted);text-transform:uppercase}
+#pinebar code.pine{flex:1 1 320px;overflow-x:auto;white-space:nowrap}
 code.pine{background:var(--raised);border:1px solid var(--line);border-radius:4px;
   padding:1px 6px;color:var(--brass);cursor:pointer;user-select:all}
 .mrow{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:13px;
@@ -1241,6 +1258,7 @@ code.pine{background:var(--raised);border:1px solid var(--line);border-radius:4p
   </div>
 </header>
 <div id="panels"></div>
+<div id="pinebar"></div>
 <div class="foot" id="foot"></div>
 </div>
 <script>
@@ -1346,12 +1364,7 @@ function panel(s){
           +m.liq.map(b=>b.share).join(" / ")
           +` ÷ 4 × ${m.liq_factor} ÷ 2</span>`
           +`</span></div>`;
-      if(m.pine){
-        marg+=`<div class="mrow"><span>TradingView paste `
-            +`<code class="pine" title="click to select" `
-            +`onclick="getSelection().selectAllChildren(this)">${m.pine}</code>`
-            +`</span></div>`;
-      }
+
     }
   }
   const regimes=s.regimes||{};
@@ -1443,6 +1456,20 @@ async function load(){
         last[gk]=r.net_gex_str;
       }
     });
+    const pineEl=document.getElementById("pinebar");
+    if(d.pine){
+      pineEl.innerHTML=`<span class="k">TradingView liquidation bands</span>`
+        +`<code class="pine" id="pinestr" title="click to select" `
+        +`onclick="getSelection().selectAllChildren(this)">${d.pine}</code>`
+        +`<button id="pinecopy">Copy</button>`;
+      const btn=document.getElementById("pinecopy");
+      btn.onclick=async()=>{
+        const txt=document.getElementById("pinestr").textContent;
+        try{ await navigator.clipboard.writeText(txt); }
+        catch(e){ getSelection().selectAllChildren(document.getElementById("pinestr")); }
+        btn.textContent="Copied"; setTimeout(()=>btn.textContent="Copy",1200);
+      };
+    } else { pineEl.innerHTML=""; }
     document.getElementById("foot").innerHTML=
       `Data ~15&nbsp;min delayed · open interest is T-1 · index close proxies the futures close.`
       +(IS_SNAPSHOT

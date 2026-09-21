@@ -43,28 +43,25 @@ fill2Trans      = input.int(90, "Band 2 Fill Transparency", minval=0, maxval=100
 // ============================================================================
 // Liquidation bands, pasted from the Gamma Terminal
 // ----------------------------------------------------------------------------
-// Each product's panel prints a "TradingView paste" chip holding three numbers:
+// The terminal prints ONE line covering every product. Hit Copy there, paste it
+// into the single field below, and every chart reads its own slice of it:
 //
-//     anchor,99%,99.9%        e.g.  7712.50,62.52,83.06
+//   ES=7712.50,62.52,83.06;NQ=29917.25,240.10,318.90;GC=...;CL=...
 //
-// anchor is the front contract's previous settle; the other two are distances
-// in points either side of it. Paste the chip for the product into the matching
-// field below. The chart picks its own field from syminfo.root, so one copy of
-// this indicator serves all four - set Product manually if the root does not
-// match (continuous symbols, CFDs, or a broker with its own naming).
+// Per product that is anchor,99%,99.9% - the front contract's previous settle,
+// then the two distances in points either side of it. The chart picks its entry
+// by syminfo.root, so the same paste serves all four; set Product manually if
+// the root does not match (continuous symbols, CFDs, or a broker with its own
+// naming). A product missing from the line simply draws nothing.
 //
 // These are anchored on a settled close, so they are a fixed frame for the
-// session and do NOT move with price. Repaste when the terminal's anchor date
-// changes - the chip updates when the margin config or the front contract does.
+// session and do NOT move with price. Repaste when the anchor date changes -
+// which is daily, and whenever the front contract or the margin config does.
 // ============================================================================
 showLiq   = input.bool(true, "Show Liquidation Bands", group="Liquidation")
 liqProd   = input.string("Auto (by symbol)", "Product",
      options=["Auto (by symbol)", "ES", "NQ", "GC", "CL"], group="Liquidation")
-
-pasteES   = input.string("", "ES   anchor,99%,99.9%", group="Liquidation")
-pasteNQ   = input.string("", "NQ   anchor,99%,99.9%", group="Liquidation")
-pasteGC   = input.string("", "GC   anchor,99%,99.9%", group="Liquidation")
-pasteCL   = input.string("", "CL   anchor,99%,99.9%", group="Liquidation")
+liqPaste  = input.string("", "Paste (all products)", group="Liquidation")
 
 showAnchor   = input.bool(true,  "Show Anchor (prev settle)", group="Liquidation Style")
 anchorColor  = input.color(color.new(color.gray, 40), "Anchor Color", group="Liquidation Style")
@@ -101,22 +98,34 @@ upperBand2 = vwapValue + band2Points
 lowerBand2 = vwapValue - band2Points
 
 // ===== Liquidation parsing =====
-// Which paste field applies to this chart. syminfo.root is "ES"/"NQ"/"GC"/"CL"
-// on CME futures; anything else falls through to blank unless Product is set.
+// Which product this chart wants. syminfo.root is "ES"/"NQ"/"GC"/"CL" on CME
+// futures; anything else finds no entry unless Product is set manually.
 selProd = liqProd == "Auto (by symbol)" ? syminfo.root : liqProd
-liqPaste = selProd == "ES" ? pasteES :
-           selProd == "NQ" ? pasteNQ :
-           selProd == "GC" ? pasteGC :
-           selProd == "CL" ? pasteCL : ""
 
-// Spaces stripped first so "7712.50, 62.52, 83.06" parses as readily as the
-// bare chip. str.tonumber returns na on anything it cannot read, which is what
-// keeps a half-pasted string from drawing a line at a wrong price.
-liqParts = str.split(str.replace_all(liqPaste, " ", ""), ",")
-liqN     = array.size(liqParts)
-liqAnchor = liqN > 0 ? str.tonumber(array.get(liqParts, 0)) : na
-liq99Pts  = liqN > 1 ? str.tonumber(array.get(liqParts, 1)) : na
-liq999Pts = liqN > 2 ? str.tonumber(array.get(liqParts, 2)) : na
+// Parsed once on the first bar rather than per bar - the string never changes
+// mid-run, and Pine re-executes the whole script when an input does.
+// Spaces are stripped first so a line broken across an email still reads, and
+// str.tonumber returns na on anything unreadable, which is what stops a
+// half-pasted string from drawing a line at a wrong price.
+var float liqAnchor = na
+var float liq99Pts  = na
+var float liq999Pts = na
+var bool  liqFound  = false
+
+if barstate.isfirst and liqPaste != ""
+    chunks = str.split(str.replace_all(liqPaste, " ", ""), ";")
+    for i = 0 to array.size(chunks) - 1
+        kv = str.split(array.get(chunks, i), "=")
+        if array.size(kv) == 2 and str.upper(array.get(kv, 0)) == str.upper(selProd)
+            // Set on the key matching, not on the values parsing, so a
+            // truncated entry reports itself as unreadable rather than as
+            // absent - two different things to go and fix.
+            liqFound := true
+            vals = str.split(array.get(kv, 1), ",")
+            if array.size(vals) > 2
+                liqAnchor := str.tonumber(array.get(vals, 0))
+                liq99Pts  := str.tonumber(array.get(vals, 1))
+                liq999Pts := str.tonumber(array.get(vals, 2))
 
 liqOK = showLiq and not na(liqAnchor) and liqAnchor > 0
 hi99  = liqOK and not na(liq99Pts)  ? liqAnchor + liq99Pts  : na
@@ -189,7 +198,9 @@ if barstate.islast and liqOK and showLiqLabel
 if barstate.islast and showLiq and liqPaste != "" and not liqOK
     var label lWarn = na
     label.delete(lWarn)
-    lWarn := label.new(bar_index, close,
-         "VARIS: could not read " + selProd + " paste\nexpected anchor,99%,99.9%",
+    msg = liqFound
+         ? "VARIS: " + selProd + " entry unreadable\nexpected " + selProd + "=anchor,99%,99.9%"
+         : "VARIS: no entry for " + selProd + " in the paste\nset Product manually if the symbol root differs"
+    lWarn := label.new(bar_index, close, msg,
          style=label.style_label_left, color=color.new(color.red, 20),
          textcolor=color.white, size=size.small)
