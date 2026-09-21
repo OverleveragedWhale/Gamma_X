@@ -292,7 +292,8 @@ def contract_stats(symbols):
             if exc.code != 401 or attempt:
                 raise
     return {r["symbol"]: {"oi": r.get("openInterest"),
-                          "volume": r.get("regularMarketVolume")}
+                          "volume": r.get("regularMarketVolume"),
+                          "price": r.get("regularMarketPrice")}
             for r in rows if r.get("symbol")}
 
 
@@ -493,10 +494,19 @@ def bs_gamma(S, K, T, sigma):
     return pdf / (S * sigma * math.sqrt(T))
 
 
-def build_regime(contracts, spot, today, prior, disp):
+def build_regime(contracts, spot, today, prior, disp, ref_spot=None):
     """GEX/flip/walls for one bucket of contracts (chain terms in, disp() maps
     strikes/flip to display terms). Isolated so it can run once per expiration
-    bucket (near-term vs full book) instead of once per symbol."""
+    bucket (near-term vs full book) instead of once per symbol.
+
+    ref_spot (chain terms, defaults to spot) is the price the reported
+    distances are measured from. It is separate from spot because the chain
+    underlying stops printing outside its cash session while the future keeps
+    trading: the levels stay where the settled book put them, and "how far is
+    that from here" is answered from wherever the future is now.
+    """
+    if ref_spot is None:
+        ref_spot = spot
     if not contracts:
         return {"net_gex_str": "n/a", "regime": "unknown",
                 "role": "no contracts in this expiration bucket",
@@ -511,7 +521,7 @@ def build_regime(contracts, spot, today, prior, disp):
         "net_gex_str": fmt_dollars(net),
         "regime": "positive" if net >= 0 else "negative",
         "flip": disp(flip) if flip else None,
-        "flip_dist": round(100 * (spot - flip) / flip, 2) if flip else None,
+        "flip_dist": round(100 * (ref_spot - flip) / flip, 2) if flip else None,
         "walls": {"call": [], "put": []},
         "dispersed": [],
     }
@@ -525,7 +535,7 @@ def build_regime(contracts, spot, today, prior, disp):
         if ratio is not None and ratio < 1.5:
             out["dispersed"].append(side)
         for i, (kk, v) in enumerate(walls):
-            off = kk - spot                   # relative %: ratio cancels
+            off = kk - ref_spot               # relative %: ratio cancels
             conf = None
             if prior:
                 for ref, name in ((prior["h"], "PDH"), (prior["l"], "PDL"),
@@ -534,7 +544,7 @@ def build_regime(contracts, spot, today, prior, disp):
                         conf = name
                         break
             w = {"strike": disp(kk), "gex": v, "gex_str": fmt_dollars(v),
-                 "dist": round(100 * off / spot, 2),
+                 "dist": round(100 * off / ref_spot, 2),
                  "lead": round(ratio, 1) if (i == 0 and ratio) else None,
                  "conf": conf}
             out["walls"][side].append(w)
@@ -887,12 +897,35 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
                   f"{inst['chain'].lstrip('_')} x {m:.3f} -> {future} "
                   f"INDEX TERMS ({ratio_src}{asof})")
 
+    # One quote call covers both the live futures print and the contract
+    # ranking further down. inst["fut"] rides along because it is the series m
+    # was built from, so the live price and fut_close can never end up coming
+    # from different contracts.
+    stats = {}
+    try:
+        stats = contract_stats([c[3] for c in contract_candidates(inst, today)]
+                               + [inst["fut"]])
+    except Exception:
+        logging.exception("%s: quote lookup failed", future)
+
+    # The chain underlying stops printing when its cash session closes while
+    # the future keeps trading, which left spot pinned to the prior settle for
+    # most of the day. Take spot from the live future when there is one, and
+    # measure distances from it; the levels themselves still come from the
+    # settled book, and m still converts them at the prior close.
+    live = (stats.get(inst["fut"]) or {}).get("price")
+    live = float(live) if isinstance(live, (int, float)) and live > 0 else None
+    shown_spot = round(live, 2) if live else disp(spot)
+    ref_spot = live / m if live else spot          # back to chain terms
+    spot_src = f"live {inst['fut']}" if live else f"{inst['chain'].lstrip('_')} x {m:.3f}"
+
     out = {"symbol": future, "future": future, "chain": inst["chain"],
            "ratio": round(m, 4),
            "fut_close": round(fut_close, 2) if fut_close else None,
            "scale_note": scale_note, "ratio_date": ratio_date,
            "ok": True, "error": None,
-           "spot": disp(spot), "regimes": {}}
+           "spot": shown_spot, "spot_src": spot_src,
+           "chain_spot": disp(spot), "regimes": {}}
 
     # GEX + walls, split into two expiration buckets (internal math in chain
     # terms; strikes/flip shifted to display terms via disp()):
@@ -908,7 +941,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     # Which contract the near-term bucket belongs to, chosen on traded volume
     # rather than nearness to expiry - see active_contract.
     try:
-        active = active_contract(inst, today)
+        active = active_contract(inst, today, stats=stats or None)
     except Exception:
         logging.exception("active contract lookup failed for %s", future)
         active = {"expiry": next_futures_expiry(today, inst["cycle"]),
@@ -928,17 +961,19 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
         fut_exp = active["expiry"]
         near_cutoff = min(fut_exp, today + timedelta(days=NEAR_MAX_DTE))
         near_contracts = [c for c in contracts if c["exp"] <= near_cutoff]
-        out["regimes"]["near"] = build_regime(near_contracts, spot, today, prior, disp)
+        out["regimes"]["near"] = build_regime(near_contracts, spot, today, prior,
+                                             disp, ref_spot)
         label_contract = (active["chosen"] or {}).get("label") or "fut"
         out["regimes"]["near"]["label"] = (
             f"Near-term (thru {near_cutoff.strftime('%m/%d')} {label_contract})"
             if near_cutoff == fut_exp else
             f"Near-term (thru {near_cutoff.strftime('%m/%d')}, {NEAR_MAX_DTE}d cap)")
-        out["regimes"]["full"] = build_regime(contracts, spot, today, prior, disp)
+        out["regimes"]["full"] = build_regime(contracts, spot, today, prior,
+                                             disp, ref_spot)
         out["regimes"]["full"]["label"] = f"Full book (thru {MAX_DTE}d)"
         out["max_pain"] = [
             {"expiry": expiry.isoformat(), "strike": disp(item["strike"]),
-             "dist": round(100 * (item["strike"] - spot) / spot, 2),
+             "dist": round(100 * (item["strike"] - ref_spot) / ref_spot, 2),
              "loss_str": fmt_dollars(item["loss"]),
              "monthly": item["monthly"]}
             for expiry, item in max_pain_by_expiry(contracts, today).items()
@@ -978,7 +1013,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     if margins_cfg is not None and idx_close:
         try:
             mb = margin_buffer(inst, idx_close, margins_cfg)
-            fut_spot = disp(spot)
+            fut_spot = shown_spot
             out["margin"] = {
                 "future": mb["future"],
                 "points_up": round(mb["points_up"], 2),
