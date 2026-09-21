@@ -1140,6 +1140,9 @@ th{text-align:left;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase
 td{padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.04)}
 td.num{text-align:right}
 .side-c{color:var(--jade)}.side-p{color:var(--verm)}
+tr.spotrow td{color:var(--ink);font-weight:700;letter-spacing:.06em;
+  background:rgba(255,255,255,.05);
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 .chip{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
   padding:1px 6px;border-radius:4px;border:1px solid var(--line);color:var(--muted)}
 .chip.conf{color:var(--ink);border-color:rgba(255,255,255,.25)}
@@ -1241,9 +1244,14 @@ function rail(s,r){
   return html;
 }
 
-function wallRows(list, side){
+// Walls are ranked by GEX size in the payload; here they are re-sorted by how
+// far they sit from spot so the table reads outward from the spot row in both
+// directions. `order` is -1 for the block above spot (farthest first, nearest
+// last, against the spot row) and +1 for the block below it.
+// Sorted on a copy: the payload array is re-rendered on every poll.
+function wallRows(list, side, order){
   if(!list||!list.length) return "";
-  return list.map(w=>{
+  return [...list].sort((a,b)=>order*(Math.abs(a.dist)-Math.abs(b.dist))).map(w=>{
     let chips="";
     if(w.lead) chips+=`<span class="chip">${w.lead>=2?"dominant":"lead"} x${w.lead}</span>`;
     if(w.conf) chips+=` <span class="chip conf">~${w.conf}</span>`;
@@ -1253,6 +1261,15 @@ function wallRows(list, side){
       +`<td class="num">${w.dist>0?"+":""}${w.dist}%</td>`
       +`<td>${chips}</td></tr>`;
   }).join("");
+}
+
+// Divider between the call and put blocks, carrying spot itself so the two
+// sides are read against the level they are measured from.
+function spotRow(spot){
+  if(spot==null) return "";
+  return `<tr class="spotrow"><td>SPOT</td>`
+    +`<td class="num">${(+spot).toFixed(2)}</td>`
+    +`<td class="num">—</td><td class="num">0.00%</td><td></td></tr>`;
 }
 
 function regimeBlock(s,key,r){
@@ -1274,7 +1291,7 @@ function regimeBlock(s,key,r){
       <div>
         ${rail(s,r)}
         <div class="walls"><table><thead><tr><th>Side</th><th class="num">Strike</th><th class="num">GEX</th><th class="num">Dist</th><th>Tags</th></tr></thead>
-        <tbody>${wallRows(r.walls.call,"call")}${wallRows(r.walls.put,"put")}</tbody></table></div>
+        <tbody>${wallRows(r.walls.call,"call",-1)}${spotRow(s.spot)}${wallRows(r.walls.put,"put",1)}</tbody></table></div>
         ${eff}
       </div>
     </div>
