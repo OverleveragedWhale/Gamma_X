@@ -4,7 +4,7 @@ indicator("VARIS Zones", overlay=true, max_labels_count=50)
 // ===== Visibility Inputs =====
 showVWAP    = input.bool(true, "Show VWAP", group="VWAP")
 
-// ===== VWAP Style =====
+// ===== VWAP Line Style =====
 vwapColor   = input.color(color.rgb(255, 0, 0, 10), "VWAP Line Color", group="VWAP")
 vwapWidth   = input.int(1, "VWAP Line Width", minval=1, maxval=5, group="VWAP")
 
