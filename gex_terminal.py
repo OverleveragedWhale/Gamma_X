@@ -521,6 +521,7 @@ def build_regime(contracts, spot, today, prior, disp, ref_spot=None):
         "net_gex_str": fmt_dollars(net),
         "regime": "positive" if net >= 0 else "negative",
         "flip": disp(flip) if flip else None,
+        "flip_pre": round(flip, 2) if flip else None,
         "flip_dist": round(100 * (ref_spot - flip) / flip, 2) if flip else None,
         "walls": {"call": [], "put": []},
         "dispersed": [],
@@ -543,7 +544,8 @@ def build_regime(contracts, spot, today, prior, disp, ref_spot=None):
                     if ref > 0 and abs(kk - ref) / spot <= WALL_CONFLUENCE_TOL:
                         conf = name
                         break
-            w = {"strike": disp(kk), "gex": v, "gex_str": fmt_dollars(v),
+            w = {"strike": disp(kk), "strike_pre": round(kk, 2),
+                 "gex": v, "gex_str": fmt_dollars(v),
                  "dist": round(100 * off / ref_spot, 2),
                  "lead": round(ratio, 1) if (i == 0 and ratio) else None,
                  "conf": conf}
@@ -954,7 +956,8 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
            "scale_note": scale_note, "ratio_date": ratio_date,
            "ok": True, "error": None,
            "spot": shown_spot, "spot_src": spot_src,
-           "chain_spot": disp(spot), "regimes": {}}
+           "chain_spot": disp(spot), "spot_pre": round(ref_spot, 2),
+           "regimes": {}}
 
     # GEX + walls, split into two expiration buckets (internal math in chain
     # terms; strikes/flip shifted to display terms via disp()):
@@ -995,6 +998,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
         out["regimes"]["full"]["label"] = f"Full book (thru {MAX_DTE}d)"
         out["max_pain"] = [
             {"expiry": expiry.isoformat(), "strike": disp(item["strike"]),
+             "strike_pre": round(item["strike"], 2),
              "dist": round(100 * (item["strike"] - ref_spot) / ref_spot, 2),
              "loss_str": fmt_dollars(item["loss"]),
              "monthly": item["monthly"]}
@@ -1236,6 +1240,7 @@ tr.spotrow td{color:var(--ink);font-weight:700;letter-spacing:.06em;
 .eff{margin-top:12px;font-size:12.5px}
 .eff b{color:var(--brass);letter-spacing:.08em}
 .thin{color:var(--stress)}
+.pre{color:var(--muted);opacity:.85}
 #pinebar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 0 2px}
 #pinebar .k{font-size:11px;letter-spacing:.05em;color:var(--muted);text-transform:uppercase}
 #pinebar code.pine{flex:1 1 320px;overflow-x:auto;white-space:nowrap}
@@ -1274,6 +1279,9 @@ let secs=REFRESH_SECONDS, last = {}, dataEpoch = null;
 
 function fmtCd(s){const m=Math.floor(s/60),x=s%60;return m+":"+String(x).padStart(2,"0");}
 
+// Strips the leading underscore Cboe uses on index chains (_SPX).
+function chainName(s){ return String((s&&s.chain)||"").replace(/^_/,""); }
+
 function wallRow(w){
   let chips="";
   if(w.lead) chips+=`<span class="chip">${w.lead>=2?"dominant":"lead"} x${w.lead}</span>`;
@@ -1282,6 +1290,7 @@ function wallRow(w){
     +`<td class="num">${(+w.strike).toFixed(0)}</td>`
     +`<td class="num">${w.gex_str}</td>`
     +`<td class="num">${w.dist>0?"+":""}${w.dist}%</td>`
+    +`<td class="num pre">${w.strike_pre!==undefined&&w.strike_pre!==null?(+w.strike_pre).toFixed(2):"\u2014"}</td>`
     +`<td>${chips}</td></tr>`;
 }
 
@@ -1292,7 +1301,7 @@ function wallRow(w){
 // direction. Walls are still *chosen* by GEX size in the payload; this only
 // decides the order they appear in, and it sorts a copy because the payload
 // array is re-rendered on every poll.
-function wallLadder(walls, spot){
+function wallLadder(walls, spot, spotPre){
   const rows=[];
   for(const side of ["call","put"])
     ((walls&&walls[side])||[]).forEach(w=>rows.push(Object.assign({},w,{side})));
@@ -1302,16 +1311,18 @@ function wallLadder(walls, spot){
   if(spot==null) return rows.map(wallRow).join("");
   const above=rows.filter(w=>+w.strike>+spot);
   const below=rows.filter(w=>+w.strike<=+spot);
-  return above.map(wallRow).join("")+spotRow(spot)+below.map(wallRow).join("");
+  return above.map(wallRow).join("")+spotRow(spot,spotPre)+below.map(wallRow).join("");
 }
 
 // Divider between the call and put blocks, carrying spot itself so the two
 // sides are read against the level they are measured from.
-function spotRow(spot){
+function spotRow(spot, spotPre){
   if(spot==null) return "";
   return `<tr class="spotrow"><td>SPOT</td>`
     +`<td class="num">${(+spot).toFixed(2)}</td>`
-    +`<td class="num">—</td><td class="num">0.00%</td><td></td></tr>`;
+    +`<td class="num">—</td><td class="num">0.00%</td>`
+    +`<td class="num pre">${spotPre!==undefined&&spotPre!==null?(+spotPre).toFixed(2):"\u2014"}</td>`
+    +`<td></td></tr>`;
 }
 
 function regimeBlock(s,key,r){
@@ -1328,11 +1339,11 @@ function regimeBlock(s,key,r){
     <div class="grid">
       <div class="stats">
         <div class="stat"><div class="k">Net GEX</div><div class="v ${gexClass}" data-k="${s.symbol}-${key}-gex">${r.net_gex_str}</div></div>
-        <div class="stat"><div class="k">Flip</div><div class="v">${r.flip!==null&&r.flip!==undefined?r.flip.toFixed(2):"—"}${r.flip_dist!==null&&r.flip_dist!==undefined?` <span style="font-size:12px;color:var(--muted)">(${r.flip_dist>0?"+":""}${r.flip_dist}%)</span>`:""}</div></div>
+        <div class="stat"><div class="k">Flip</div><div class="v">${r.flip!==null&&r.flip!==undefined?r.flip.toFixed(2):"—"}${r.flip_dist!==null&&r.flip_dist!==undefined?` <span style="font-size:12px;color:var(--muted)">(${r.flip_dist>0?"+":""}${r.flip_dist}%)</span>`:""}${r.flip_pre!==null&&r.flip_pre!==undefined?` <span class="pre" style="font-size:12px">${(+r.flip_pre).toFixed(2)}</span>`:""}</div></div>
       </div>
       <div>
-        <div class="walls"><table><thead><tr><th>Side</th><th class="num">Strike</th><th class="num">GEX</th><th class="num">Dist</th><th>Tags</th></tr></thead>
-        <tbody>${wallLadder(r.walls,s.spot)}</tbody></table></div>
+        <div class="walls"><table><thead><tr><th>Side</th><th class="num">Strike</th><th class="num">GEX</th><th class="num">Dist</th><th class="num">${chainName(s)}</th><th>Tags</th></tr></thead>
+        <tbody>${wallLadder(r.walls,s.spot,s.spot_pre)}</tbody></table></div>
         ${eff}
       </div>
     </div>
@@ -1371,8 +1382,8 @@ function panel(s){
   const maxPain=(s.max_pain||[]).length
     ? `<div class="max-pain"><div class="k">Max pain by expiry `
       +`<span class="sub">next ${MAX_PAIN_DAILY_DAYS}d + monthly opex</span></div>`
-      +`<table><thead><tr><th>Expiry</th><th class="num">Level</th><th class="num">Dist</th><th class="num">Open-interest loss</th></tr></thead><tbody>`
-      +(s.max_pain||[]).map(p=>`<tr${p.monthly?' class="opex"':''}><td>${p.expiry}${p.monthly?' <span class="tag">OPEX</span>':''}</td><td class="num">${(+p.strike).toFixed(2)}</td><td class="num">${p.dist>0?"+":""}${p.dist}%</td><td class="num">${p.loss_str}</td></tr>`).join("")
+      +`<table><thead><tr><th>Expiry</th><th class="num">Level</th><th class="num">Dist</th><th class="num">${chainName(s)}</th><th class="num">Open-interest loss</th></tr></thead><tbody>`
+      +(s.max_pain||[]).map(p=>`<tr${p.monthly?' class="opex"':''}><td>${p.expiry}${p.monthly?' <span class="tag">OPEX</span>':''}</td><td class="num">${(+p.strike).toFixed(2)}</td><td class="num">${p.dist>0?"+":""}${p.dist}%</td><td class="num pre">${p.strike_pre!==undefined&&p.strike_pre!==null?(+p.strike_pre).toFixed(2):"\u2014"}</td><td class="num">${p.loss_str}</td></tr>`).join("")
       +`</tbody></table></div>`
     : "";
   const body = (regimes.near||regimes.full)
