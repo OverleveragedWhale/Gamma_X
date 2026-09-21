@@ -1,44 +1,12 @@
 //@version=6
-indicator("VARIS Zones", overlay=true, max_lines_count=100, max_labels_count=50)
+indicator("VARIS Zones", overlay=true, max_labels_count=50)
 
 // ===== Visibility Inputs =====
 showVWAP    = input.bool(true, "Show VWAP", group="VWAP")
 
-showUpper1  = input.bool(true, "Show Upper Band 1", group="VWAP")
-showLower1  = input.bool(true, "Show Lower Band 1", group="VWAP")
-showUpper2  = input.bool(true, "Show Upper Band 2", group="VWAP")
-showLower2  = input.bool(true, "Show Lower Band 2", group="VWAP")
-
-// ===== Distance Inputs =====
-band1Points = input.float(10.0, "1/2 Risk Interval (Points)", step=0.25, minval=0.001, group="VWAP")
-band2Points = input.float(25.0, "1 Full Risk Interval (Points)", step=0.25, minval=0.0, group="VWAP")
-
 // ===== VWAP Style =====
-vwapColor   = input.color(color.rgb(255, 0, 0, 10), "VWAP Line Color", group="VWAP Style")
-vwapWidth   = input.int(1, "VWAP Line Width", minval=1, maxval=5, group="VWAP Style")
-
-// ===== Band 1 Style =====
-upper1Color = input.color(color.rgb(0, 0, 0, 90), "Upper Band 1 Color", group="VWAP Style")
-upper1Width = input.int(1, "Upper Band 1 Width", minval=1, maxval=5, group="VWAP Style")
-
-lower1Color = input.color(color.rgb(0, 0, 0, 90), "Lower Band 1 Color", group="VWAP Style")
-lower1Width = input.int(1, "Lower Band 1 Width", minval=1, maxval=5, group="VWAP Style")
-
-// ===== Band 2 Style =====
-upper2Color = input.color(color.rgb(0, 0, 0, 100), "Upper Band 2 Color", group="VWAP Style")
-upper2Width = input.int(1, "Upper Band 2 Width", minval=1, maxval=5, group="VWAP Style")
-
-lower2Color = input.color(color.rgb(0, 0, 0, 100), "Lower Band 2 Color", group="VWAP Style")
-lower2Width = input.int(1, "Lower Band 2 Width", minval=1, maxval=5, group="VWAP Style")
-
-// ===== Fill Inputs =====
-showFill1       = input.bool(true, "Show Fill Band 1", group="VWAP Style")
-fill1Color      = input.color(color.rgb(255, 255, 255), "Band 1 Fill Color", group="VWAP Style")
-fill1Trans      = input.int(75, "Band 1 Fill Transparency", minval=0, maxval=100, group="VWAP Style")
-
-showFill2       = input.bool(true, "Show Fill Band 2", group="VWAP Style")
-fill2Color      = input.color(color.rgb(0, 0, 0), "Band 2 Fill Color", group="VWAP Style")
-fill2Trans      = input.int(90, "Band 2 Fill Transparency", minval=0, maxval=100, group="VWAP Style")
+vwapColor   = input.color(color.rgb(255, 0, 0, 10), "VWAP Line Color", group="VWAP")
+vwapWidth   = input.int(1, "VWAP Line Width", minval=1, maxval=5, group="VWAP")
 
 // ============================================================================
 // Liquidation bands, pasted from the Gamma Terminal
@@ -68,7 +36,7 @@ anchorColor  = input.color(color.new(color.gray, 40), "Anchor Color", group="Liq
 liq99Color   = input.color(color.new(color.orange, 20), "99% Color", group="Liquidation Style")
 liq999Color  = input.color(color.new(color.red, 20), "99.9% Color", group="Liquidation Style")
 liqWidth     = input.int(1, "Liquidation Line Width", minval=1, maxval=5, group="Liquidation Style")
-showLiqFill  = input.bool(true, "Shade 99% → 99.9%", group="Liquidation Style")
+showLiqFill  = input.bool(true, "Shade 99% -> 99.9%", group="Liquidation Style")
 liqFillTrans = input.int(88, "Liquidation Fill Transparency", minval=0, maxval=100, group="Liquidation Style")
 showLiqLabel = input.bool(true, "Label Liquidation Lines", group="Liquidation Style")
 
@@ -89,13 +57,6 @@ else
     cumVol += volume
 
 vwapValue = cumVol != 0 ? cumTPV / cumVol : na
-
-// ===== Bands =====
-upperBand1 = vwapValue + band1Points
-lowerBand1 = vwapValue - band1Points
-
-upperBand2 = vwapValue + band2Points
-lowerBand2 = vwapValue - band2Points
 
 // ===== Liquidation parsing =====
 // Which product this chart wants. syminfo.root is "ES"/"NQ"/"GC"/"CL" on CME
@@ -137,13 +98,7 @@ hi999 = liqOK and not na(liq999Pts) ? liqAnchor + liq999Pts : na
 lo999 = liqOK and not na(liq999Pts) ? liqAnchor - liq999Pts : na
 
 // ===== Plots =====
-vwapPlot   = plot(showVWAP   ? vwapValue   : na, title="VWAP",         color=vwapColor,   linewidth=vwapWidth)
-
-upper1Plot = plot(showUpper1 ? upperBand1  : na, title="Upper Band 1", color=upper1Color, linewidth=upper1Width)
-lower1Plot = plot(showLower1 ? lowerBand1  : na, title="Lower Band 1", color=lower1Color, linewidth=lower1Width)
-
-upper2Plot = plot(showUpper2 ? upperBand2  : na, title="Upper Band 2", color=upper2Color, linewidth=upper2Width)
-lower2Plot = plot(showLower2 ? lowerBand2  : na, title="Lower Band 2", color=lower2Color, linewidth=lower2Width)
+vwapPlot = plot(showVWAP ? vwapValue : na, title="VWAP", color=vwapColor, linewidth=vwapWidth)
 
 anchorPlot = plot(liqOK and showAnchor ? liqAnchor : na, title="Liq Anchor",
      color=anchorColor, linewidth=liqWidth, style=plot.style_linebr)
@@ -154,15 +109,9 @@ hi999Plot = plot(hi999, title="Liq 99.9% Upper", color=liq999Color, linewidth=li
 lo999Plot = plot(lo999, title="Liq 99.9% Lower", color=liq999Color, linewidth=liqWidth, style=plot.style_linebr)
 
 // ===== Fills =====
-fill(vwapPlot, upper1Plot, color=showFill1 and showUpper1 ? color.new(fill1Color, fill1Trans) : na, title="Upper Fill 1")
-fill(vwapPlot, lower1Plot, color=showFill1 and showLower1 ? color.new(fill1Color, fill1Trans) : na, title="Lower Fill 1")
-
-fill(vwapPlot, upper2Plot, color=showFill2 and showUpper2 ? color.new(fill2Color, fill2Trans) : na, title="Upper Fill 2")
-fill(vwapPlot, lower2Plot, color=showFill2 and showLower2 ? color.new(fill2Color, fill2Trans) : na, title="Lower Fill 2")
-
 // Shade only the 99% -> 99.9% shoulders, not the whole span: the interesting
 // region is between the two confidence levels, and flooding the middle would
-// bury the VWAP bands this indicator exists to show.
+// bury the VWAP.
 fill(hi99Plot,  hi999Plot, color=showLiqFill ? color.new(liq999Color, liqFillTrans) : na, title="Liq Upper Shoulder")
 fill(lo999Plot, lo99Plot,  color=showLiqFill ? color.new(liq999Color, liqFillTrans) : na, title="Liq Lower Shoulder")
 
