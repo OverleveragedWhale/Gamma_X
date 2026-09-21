@@ -48,6 +48,7 @@ PRIOR_SESSION_ROWS = 5        # daily bars kept for prior close + chain-scale ra
 VOL_LOOKBACK = 20             # daily bars behind the realized-vol estimate
 Z_99, Z_999 = 2.3263, 3.0902  # two-sided normal quantiles for 99% / 99.9%
 BAND_DIVISOR = 2.0            # bands reported halved: margin is bi-directional
+LIQ_LEVELS = (("99%", 0.01), ("99.9%", 0.001))   # share of margin at each level
 TICKS_PER_POINT = 4           # ES and NQ both quote in quarter points
 
 CBOE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
@@ -67,9 +68,9 @@ YAHOO_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
 #   fut   = Yahoo futures symbol for the prior settle
 INSTRUMENTS = [
     {"future": "ES",  "chain": "_SPX", "hist": "^GSPC", "index": "^GSPC",
-     "fut": "ES=F",  "multiplier": 50},
+     "fut": "ES=F",  "multiplier": 50, "tick_value": 12.5},
     {"future": "NQ",  "chain": "QQQ",  "hist": "QQQ",   "index": "^NDX",
-     "fut": "NQ=F",  "multiplier": 20},
+     "fut": "NQ=F",  "multiplier": 20, "tick_value": 5.0},
 ]
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -479,11 +480,17 @@ def margin_buffer(inst, idx_close, margins_cfg):
     down = _margin_leg(margins_cfg, fut, "DOWN")
     mult = inst["multiplier"]
     avg = (up + down) / 2.0
+    tick = inst["tick_value"]
+    # avg -> share at this level -> ticks to points -> tick value -> halved,
+    # since the posted margin covers moves in both directions.
+    liq = [{"label": label, "share": share,
+            "points": avg * share / TICKS_PER_POINT * tick / BAND_DIVISOR}
+           for label, share in LIQ_LEVELS]
     return {"future": fut, "index_close": idx_close,
-            "notional": idx_close * mult,
+            "notional": idx_close * mult, "tick_value": tick,
             "margin_up": up, "margin_down": down, "margin_avg": avg,
             "points_up": up / mult, "points_down": down / mult,
-            "compare": avg * 0.01 / TICKS_PER_POINT}
+            "liq": liq, "compare": avg * 0.01 / TICKS_PER_POINT}
 
 
 # ---------------- assembly ----------------
@@ -661,13 +668,17 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     # Confidence bands from the future's own realized vol, drawn about the
     # previous session's close so the reference is fixed for the whole day
     # rather than sliding with spot.
-    sigma = realized_sigma(fut_rows) if fut_rows else None
-    prior_fut = prior_session(fut_rows, today) if fut_rows else None
+    # Futures reopen Sunday evening, so the newest bar is routinely an
+    # in-progress session. Including it puts a partial move - and the weekend
+    # gap - into the vol estimate, which inflated sigma by ~6%.
+    completed = [r for r in fut_rows if r["date"] < today.isoformat()]
+    sigma = realized_sigma(completed)
+    prior_fut = completed[-1] if completed else None
     if sigma and prior_fut:
         anchor = prior_fut["c"]
         out["risk"] = {
             "anchor": round(anchor, 2), "anchor_date": prior_fut["date"],
-            "sigma_pct": round(100 * sigma, 3), "bars": len(fut_rows),
+            "sigma_pct": round(100 * sigma, 3), "bars": len(completed),
             "bands": [
                 {"label": label, "z": z,
                  "points": round(anchor * z * sigma / BAND_DIVISOR, 2),
@@ -695,6 +706,16 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
                 "margin_down": round(mb["margin_down"]),
                 "compare": round(mb["compare"], 2),
                 "compare_avg": round(mb["margin_avg"]),
+                "tick_value": mb["tick_value"],
+                "liq_anchor": (round(prior_fut["c"], 2) if prior_fut else None),
+                "liq": [
+                    {"label": b["label"], "points": round(b["points"], 2),
+                     "lo": (round(prior_fut["c"] - b["points"], 2)
+                            if prior_fut else None),
+                     "hi": (round(prior_fut["c"] + b["points"], 2)
+                            if prior_fut else None)}
+                    for b in mb["liq"]
+                ],
                 "notional": round(mb["notional"]),
                 "set_at": margins_cfg.get("set_at") or "date not recorded",
             }
@@ -836,6 +857,9 @@ button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
   border-right:1px dashed rgba(255,255,255,.28)}
 .band.r999{background:rgba(217,164,65,.07)}
 .band.r99{background:rgba(217,164,65,.13)}
+.tick.liq{background:rgba(75,191,138,.8);z-index:3}
+.tick.liq.l999{background:rgba(75,191,138,.45)}
+.lab.liq{color:var(--jade)}
 .tick{position:absolute;top:0;bottom:0;width:2px;transform:translateX(-1px)}
 .tick.spot{background:var(--ink);width:2px;z-index:6}
 .tick.flip{background:var(--brass);z-index:5}
@@ -908,6 +932,8 @@ function rail(s,r){
   if(m.band_lo!==undefined){lo=Math.min(lo,m.band_lo);hi=Math.max(hi,m.band_hi);}
   const rb=((s.risk||{}).bands)||[];
   rb.forEach(b=>{lo=Math.min(lo,b.lo);hi=Math.max(hi,b.hi);});
+  const lb=(m.liq||[]).filter(b=>b.lo!==null&&b.lo!==undefined);
+  lb.forEach(b=>{lo=Math.min(lo,b.lo);hi=Math.max(hi,b.hi);});
   const pad=(hi-lo)*0.06; lo-=pad; hi+=pad;
   const L=(v)=>clamp(pct(v,lo,hi));
   let html=`<div class="rail-wrap"><div class="rail-scale"><span>${lo.toFixed(1)}</span><span>${hi.toFixed(1)}</span></div><div class="rail">`;
@@ -918,6 +944,13 @@ function rail(s,r){
   });
   if(m.band_lo!==undefined)
     html+=`<div class="band margin" style="left:${L(m.band_lo)}%;right:${100-L(m.band_hi)}%"></div>`;
+  lb.forEach(b=>{
+    const cls=b.label==="99%"?"liq":"liq l999";
+    [b.lo,b.hi].forEach(v=>{
+      if(v<lo||v>hi) return;
+      html+=`<div class="tick ${cls}" style="left:${L(v)}%"></div>`;
+    });
+  });
   // walls (only in-domain)
   for(const side of ["call","put"]) (r.walls[side]||[]).forEach(w=>{
     if(w.strike<lo||w.strike>hi) return;
@@ -933,7 +966,8 @@ function rail(s,r){
   html+=`</div>`;
   html+=`<div class="legend"><span><i style="background:var(--ink)"></i>spot</span>`
       +`<span><i style="background:var(--brass)"></i>flip</span>`;
-  rb.forEach(b=>html+=`<span><i style="background:rgba(217,164,65,${b.label==="99%"?".45":".22"})"></i>${b.label} ±${b.points} pts</span>`);
+  rb.forEach(b=>html+=`<span><i style="background:rgba(217,164,65,${b.label==="99%"?".45":".22"})"></i>σ ${b.label} ±${b.points}</span>`);
+  lb.forEach(b=>html+=`<span><i style="background:rgba(75,191,138,${b.label==="99%"?".8":".45"})"></i>liq ${b.label} ±${b.points}</span>`);
   if(m.band_lo!==undefined) html+=`<span>┊ margin +${m.points_up}/−${m.points_down} pts</span>`;
   html+=`</div></div>`;
   return html;
@@ -995,9 +1029,14 @@ function panel(s){
     marg+=`<div class="mrow"><span>${m.future} margin `
         +`<b style="color:var(--ink)">+${m.points_up}/−${m.points_down} pts</b>`
         +` → band ${m.band_lo}–${m.band_hi}`
-        +` · compare <b style="color:var(--ink)">${m.compare}</b>`
-        +` <span style="opacity:.7">(${m.compare_avg} × 0.01 ÷ 4)</span>`
         +` · set ${m.set_at}</span></div>`;
+    if((m.liq||[]).length&&m.liq[0].points!==undefined){
+      marg+=`<div class="mrow"><span>liquidation, off the ${m.liq_anchor} close: `
+          +m.liq.map(b=>`<b style="color:var(--jade)">${b.label} ±${b.points}</b>`
+                       +` (${b.lo}–${b.hi})`).join(" · ")
+          +` <span style="opacity:.7">avg ${m.compare_avg} × share ÷ 4 × $${m.tick_value} ÷ 2</span>`
+          +`</span></div>`;
+    }
   }
   const regimes=s.regimes||{};
   const maxPain=(s.max_pain||[]).length
