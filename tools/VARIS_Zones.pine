@@ -22,11 +22,16 @@ vwapWidth   = input.int(1, "VWAP Line Width", minval=1, maxval=5, group="VWAP")
 // the root does not match (continuous symbols, CFDs, or a broker with its own
 // naming). A product missing from the line simply draws nothing.
 //
-// The distances are drawn twice: once off the settle in the paste, a fixed
-// frame that does not move all session, and once off the session VWAP, which
+// The distances are drawn twice: once off the session settle, a fixed frame
+// that holds for the whole session, and once off the session VWAP, which
 // drifts as the average trade does. Same two numbers, two reference points.
-// Repaste when the anchor date changes - which is daily, and whenever the
-// front contract or the margin config does.
+//
+// By default the settle is read off the chart at the 18:00 ET boundary, not
+// from the paste, so the bands step through history instead of showing today's
+// frame over old bars. Only the anchor was ever daily - the distances are
+// margin/multiplier scaled by constants with no price term - so the paste now
+// only needs replacing when the margins in config.ini change. Switch Anchor to
+// "Paste (today only)" if today's bands must match the dashboard to the tick.
 // ============================================================================
 showLiq   = input.bool(true, "Show Liquidation Bands", group="Liquidation")
 liqProd   = input.string("Auto (by symbol)", "Product",
@@ -219,8 +224,8 @@ if barstate.islast and liqOK and showLiqLabel
     label.delete(lAnc)
     label.delete(lLo99)
     label.delete(lLo999)
-    tip = selProd + " liq, off " + str.tostring(anchorNow, format.mintick)
-         + (useSess ? " (18:00 ET session close)" : " (pasted)")
+    anchorSrc = useSess ? " (18:00 ET session close)" : " (pasted)"
+    tip = selProd + " liq, off " + str.tostring(anchorNow, format.mintick) + anchorSrc
     if not na(hi999)
         lHi999 := label.new(bar_index, hi999, "99.9% " + str.tostring(hi999, format.mintick),
              style=label.style_label_left, color=color.new(color.black, 100),
