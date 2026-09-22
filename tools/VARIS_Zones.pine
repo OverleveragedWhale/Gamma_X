@@ -26,25 +26,40 @@ vwapWidth   = input.int(1, "VWAP Line Width", minval=1, maxval=5, group="VWAP")
 // that holds for the whole session, and once off the session VWAP, which
 // drifts as the average trade does. Same two numbers, two reference points.
 //
-// By default the settle is read off the chart at the 18:00 ET boundary, not
-// from the paste, so the bands step through history instead of showing today's
-// frame over old bars. Only the anchor was ever daily - the distances are
-// margin/multiplier scaled by constants with no price term - so the paste now
-// only needs replacing when the margins in config.ini change. Switch Anchor to
-// "Paste (today only)" if today's bands must match the dashboard to the tick.
+// ANCHOR. Only the anchor is ever daily - the distances are margin/multiplier
+// scaled by constants, with no price term, so they are right for every past
+// session too. Three sources, picked by the Anchor input:
+//
+//   "Chart close, paste for today" - the default. The pasted anchor for the
+//       session in progress, the chart's own session close for every past one.
+//       Repasting always moves today's levels and they match the dashboard to
+//       the tick, while history keeps its own frame.
+//   "Chart close (every session)" - the chart on every bar, stepping at each
+//       trading-day boundary. Needs no paste at all, and ignores the pasted
+//       anchor completely: repasting moves the distances and leaves the anchor
+//       alone, which is the one way this can look like it did nothing.
+//   "Paste (every session)" - the pasted anchor on every bar, so today's frame
+//       is drawn over old bars too.
+//
+// The anchor label names its live source, "· 18:00 ET" or "· pasted", so a
+// stale-looking anchor can be told apart from a chart-supplied one. Any setting
+// falls back to the paste while the chart has not crossed a boundary yet.
 // ============================================================================
 showLiq   = input.bool(true, "Show Liquidation Bands", group="Liquidation")
 liqProd   = input.string("Auto (by symbol)", "Product",
      options=["Auto (by symbol)", "ES", "NQ", "GC", "CL"], group="Liquidation")
 liqPaste  = input.string("", "Paste (all products)", group="Liquidation")
 
-// Only the anchor in the paste changes day to day. The two distances are
-// fixed - points = margin/multiplier scaled by constants, with no price term -
-// so they stay right for every past session too. Given that, the anchor can be
-// read off the chart instead of the paste, which draws the bands across all
-// history and means the paste only needs replacing when margins change.
-liqAnchorSrc = input.string("Session close (18:00 ET)", "Anchor",
-     options=["Session close (18:00 ET)", "Paste (today only)"], group="Liquidation")
+// The default is the hybrid, because the other two each fail
+// one of the two things asked of this script: a pure chart anchor draws history
+// but ignores the paste, so a fresh paste never moves the anchor, and a pure
+// paste anchor tracks the terminal but hangs today's frame over every old bar.
+// "Paste (today only)" was also a misnomer - it applied the pasted anchor to
+// every bar - so both survivors are renamed to what they do. Renaming an
+// option resets a saved selection of it, so charts land on the new default.
+liqAnchorSrc = input.string("Chart close, paste for today", "Anchor",
+     options=["Chart close, paste for today", "Chart close (every session)",
+              "Paste (every session)"], group="Liquidation")
 
 showAnchor   = input.bool(true,  "Show Anchor (prev settle)", group="Liquidation Style")
 anchorColor  = input.color(color.new(color.gray, 40), "Anchor Color", group="Liquidation Style")
@@ -73,9 +88,22 @@ liqV99Color     = input.color(color.new(color.aqua, 25), "99% vs VWAP Color", gr
 liqV999Color    = input.color(color.new(color.blue, 25), "99.9% vs VWAP Color", group="Liquidation vs VWAP")
 showLiqVwapFill = input.bool(false, "Shade 99% -> 99.9% vs VWAP", group="Liquidation vs VWAP")
 
-// ===== Session Reset Detection (timezone-safe) =====
-// Fixed - forces ET regardless of chart timezone
-isNewSession = hour(time, "America/New_York") == 18 and minute(time, "America/New_York") == 0
+// ===== Session Reset Detection =====
+// The exchange's own trading-day boundary, not a clock match on 18:00 ET.
+//
+// hour(time)=="18" and minute(time)=="0" fires only on a bar that OPENS exactly
+// on the boundary, so it never fired at all on a chart that has no such bar: a
+// daily or weekly bar timestamped at exchange midnight, a regular-hours-only
+// session template, an interval not aligned to the session open, or a symbol
+// whose root the feed prices off a different open. Where it never fired,
+// sessAnchor was never assigned, so the settle-anchored bands held their first
+// value for the whole run - the anchor simply did not step at 18:00.
+//
+// time_tradingday is the start of the trading day a bar belongs to, so CME's
+// 18:00-to-17:00 session comes from the exchange's own definition. It is right
+// on every timeframe and session template, and through DST, without a clock
+// match. The na guard makes the first bar a boundary so the VWAP starts clean.
+isNewSession = na(time_tradingday[1]) or time_tradingday != time_tradingday[1]
 
 tp = (high + low + close) / 3
 
@@ -96,8 +124,12 @@ vwapValue = cumVol != 0 ? cumTPV / cumVol : na
 // last print before the 17:00-18:00 CME break - the session close the paste's
 // anchor is taken from. Same isNewSession the VWAP uses, so the two can never
 // disagree about where a session begins.
+// Guarded on close[1] because the first bar in the loaded history is a
+// boundary with nothing before it; assigning na there would leave the anchor
+// unset on charts that hold only one session. Until a real boundary arrives,
+// sessAnchor stays na and the selection below falls back to the paste.
 var float sessAnchor = na
-if isNewSession
+if isNewSession and not na(close[1])
     sessAnchor := close[1]
 
 // ===== Liquidation parsing =====
@@ -133,8 +165,39 @@ if barstate.isfirst and liqPaste != ""
                 liq99Pts  := str.tonumber(array.get(vals, 1))
                 liq999Pts := str.tonumber(array.get(vals, 2))
 
-useSess = liqAnchorSrc == "Session close (18:00 ET)"
-anchorNow = useSess ? sessAnchor : liqAnchor
+// Which bars belong to the session in progress, so the paste can anchor today
+// while the chart anchors history.
+//
+// Done from the wall clock, not by looking for the newest bar: Pine cannot see
+// ahead from a historical bar, and reading the last bar's session with
+// lookahead would repaint. timenow is the same value on every bar, so both
+// sides of the comparison can be computed on every bar without either.
+//
+// Shifting a timestamp forward six hours is the 18:00 boundary without any
+// day arithmetic: it carries 18:00-23:59 into the next calendar date and
+// leaves everything earlier where it is, so the ET calendar date of ts+6h IS
+// the trade date. US DST shifts at 02:00 on a Sunday, never between 18:00 and
+// midnight, so those six hours are never stretched or squeezed.
+tdKey(ts) =>
+    s = ts + 6 * 60 * 60 * 1000
+    year(s, "America/New_York") * 10000 + month(s, "America/New_York") * 100 + dayofmonth(s, "America/New_York")
+
+isCurrentSession = tdKey(time) == tdKey(timenow)
+
+// Anchor selection. The hybrid is the default: the paste supplies the anchor
+// for the session in progress, so repasting always moves today's levels and
+// they match the dashboard to the tick, and the chart supplies it for every
+// past session, so history keeps its own frame instead of wearing today's.
+//
+// Under the pure-chart setting the pasted anchor is not used at all, which is
+// why a fresh paste could look like it had done nothing. Either way the anchor
+// falls back to the paste when sessAnchor has no value yet - that is the whole
+// first session of the loaded history, and without the fallback a perfectly
+// good paste drew an empty pane.
+useSess = liqAnchorSrc != "Paste (every session)"
+pasteToday = liqAnchorSrc == "Chart close, paste for today"
+anchorIsSess = useSess and not na(sessAnchor) and not (pasteToday and isCurrentSession and not na(liqAnchor))
+anchorNow = anchorIsSess ? sessAnchor : liqAnchor
 liqOK = showLiq and not na(anchorNow) and anchorNow > 0
 hi99  = liqOK and not na(liq99Pts)  ? anchorNow + liq99Pts  : na
 lo99  = liqOK and not na(liq99Pts)  ? anchorNow - liq99Pts  : na
@@ -224,8 +287,11 @@ if barstate.islast and liqOK and showLiqLabel
     label.delete(lAnc)
     label.delete(lLo99)
     label.delete(lLo999)
-    anchorSrc = useSess ? " (18:00 ET session close)" : " (pasted)"
+    anchorSrc = anchorIsSess ? " (18:00 ET session close)" : " (pasted)"
     tip = selProd + " liq, off " + str.tostring(anchorNow, format.mintick) + anchorSrc
+    // On the anchor line itself, not just the tooltip: if the anchor looks
+    // stale, the first thing to know is which of the two supplied it.
+    ancTxt = "settle " + str.tostring(anchorNow, format.mintick) + (anchorIsSess ? " · 18:00 ET" : " · pasted")
     if not na(hi999)
         lHi999 := label.new(bar_index, hi999, "99.9% " + str.tostring(hi999, format.mintick),
              style=label.style_label_left, color=color.new(color.black, 100),
@@ -235,7 +301,7 @@ if barstate.islast and liqOK and showLiqLabel
              style=label.style_label_left, color=color.new(color.black, 100),
              textcolor=liq99Color, size=size.small, tooltip=tip)
     if showAnchor
-        lAnc := label.new(bar_index, anchorNow, "settle " + str.tostring(anchorNow, format.mintick),
+        lAnc := label.new(bar_index, anchorNow, ancTxt,
              style=label.style_label_left, color=color.new(color.black, 100),
              textcolor=anchorColor, size=size.small, tooltip=tip)
     if not na(lo99)
@@ -247,15 +313,20 @@ if barstate.islast and liqOK and showLiqLabel
              style=label.style_label_left, color=color.new(color.black, 100),
              textcolor=liq999Color, size=size.small, tooltip=tip)
 
-// A paste that is present but unreadable is worth saying out loud, otherwise
-// the bands simply fail to appear and look like a display bug.
-if barstate.islast and showLiq and liqPaste != "" and not liqOK and na(liq99Pts)
+// A paste that is present but unusable is worth saying out loud, otherwise the
+// bands simply fail to appear and look like a display bug. Was gated on
+// na(liq99Pts), which stayed silent in the one case that draws nothing while
+// the paste itself is perfectly good: distances parsed, no anchor to hang them
+// on. That case now has its own message.
+if barstate.islast and showLiq and liqPaste != "" and not liqOK
     label.delete(lWarn)
     string msg = na
-    if liqFound
+    if not liqFound
+        msg := "VARIS: no entry for " + selProd + " in the paste - set Product manually if the symbol root differs"
+    else if na(liq99Pts)
         msg := "VARIS: " + selProd + " entry unreadable - expected " + selProd + "=anchor,99%,99.9%"
     else
-        msg := "VARIS: no entry for " + selProd + " in the paste - set Product manually if the symbol root differs"
+        msg := "VARIS: no anchor for " + selProd + " - the paste carries none and this chart has not crossed a session boundary"
     lWarn := label.new(bar_index, close, msg,
          style=label.style_label_left, color=color.new(color.red, 20),
          textcolor=color.white, size=size.small)
