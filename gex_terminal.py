@@ -65,6 +65,9 @@ if any(a[1] >= b[1] for a, b in zip(LIQ_LEVELS, LIQ_LEVELS[1:])):
     raise ValueError("LIQ_LEVELS must ascend in quantile: a wider confidence "
                      "level has to produce a wider band, not a narrower one")
 TICKS_PER_POINT = 4           # ES and NQ both quote in quarter points
+FUT_SESSION_OPEN_HOUR = 18    # ET hour Globex opens the next trade date, so
+                              # the hour the settled-session anchor steps. All
+                              # four products (CME, CMX, NYM) share it.
 
 CBOE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
 YAHOO_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
@@ -689,6 +692,37 @@ def prior_session(rows, today):
     return None
 
 
+def futures_trade_date(now):
+    """Trade date of the futures session in progress at `now` (ET).
+
+    Globex runs 18:00 ET to 17:00 ET the next day and a daily bar carries the
+    calendar date of its CLOSE, so from 18:00 onward the session in progress is
+    already dated tomorrow. Outside a session - the 17:00-18:00 break, or the
+    weekend - this names the next one, which is what the caller wants: nothing
+    is in progress, so every bar on the tape is settled.
+    """
+    d = now.date()
+    return d + timedelta(days=1) if now.hour >= FUT_SESSION_OPEN_HOUR else d
+
+
+def settled_futures(rows, now):
+    """Futures bars whose session has finished, by the 18:00 ET boundary.
+
+    `date < today` calls a session in progress until midnight ET, but the one
+    dated today settled at 17:00. That left the liquidation anchor and the
+    realized-vol estimate on yesterday's close for six hours after the new
+    session opened - exactly the window the TradingView overlay is pasted in,
+    so the levels looked frozen at 18:00 when they were due to step. Measured
+    2026-09-21 21:29 ET: anchor 7712.50 (Friday) against a live 7832.75.
+
+    The in-progress bar is still excluded, which is the point of the original
+    rule: futures reopen Sunday evening, and folding a partial session and the
+    weekend gap into sigma inflated it by ~6%.
+    """
+    cutoff = futures_trade_date(now).isoformat()
+    return [r for r in rows if r["date"] < cutoff]
+
+
 # ---------------- margin buffer ----------------
 def _margin_leg(margins_cfg, fut, side):
     """Margin for one side, falling back to a single symmetric value."""
@@ -837,7 +871,8 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     close: auto from Yahoo (sanity-checked vs the index ratio to reject
     back-adjusted continuous series), else config [closes], else index terms."""
     future = inst["future"]
-    today = now_et().date()
+    now = now_et()
+    today = now.date()
     spot, options = fetch_chain(inst["chain"])   # SPX~6400 or QQQ~570
     contracts = load_contracts(options, today)
 
@@ -897,16 +932,24 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     # futures/chain ratio m: the front contract's own prior close -> config
     # -> index terms
     m, fut_close, ratio_src = k_track, None, f"index terms (set [closes] {future})"
-    fut_rows, fut_completed = [], []
+    fut_rows, fut_completed, fut_settled = [], [], []
     for sym in ([ratio_sym, inst["fut"]] if ratio_sym != inst["fut"]
                 else [inst["fut"]]):
         try:
             # Same bars feed the ratio, the realized-vol estimate and the
             # liquidation anchor below - all three want the contract actually
             # being held, and a specific contract has no roll step to inflate
-            # sigma either.
+            # sigma either. They do NOT share a session rule. The ratio's two
+            # legs have to name one session, and chain_close comes off the cash
+            # calendar, so the futures leg stays on it: advancing this one
+            # alone at 18:00 would read Monday's futures against Friday's
+            # chain and book the whole session's move as basis - 1.6% onto
+            # every converted level on 2026-09-21, which the carry gate would
+            # not reliably catch. The anchor is already in futures terms and
+            # needs no ratio, so it takes the futures session boundary.
             fut_rows = fetch_rows(sym, max_rows=VOL_LOOKBACK + 2)
             fut_completed = [r for r in fut_rows if r["date"] < today.isoformat()]
+            fut_settled = settled_futures(fut_rows, now)
             fc = fut_completed[-1]["c"]
         except Exception:
             logging.info("%s: futures history %s unavailable", future, sym)
@@ -1013,9 +1056,11 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     # rather than sliding with spot.
     # Futures reopen Sunday evening, so the newest bar is routinely an
     # in-progress session. Including it puts a partial move - and the weekend
-    # gap - into the vol estimate, which inflated sigma by ~6%. fut_completed
-    # is the same settled-bars list the chain->future ratio is pinned to.
-    completed = fut_completed
+    # gap - into the vol estimate, which inflated sigma by ~6%. fut_settled
+    # still excludes that bar; it counts a session that settled at 17:00 as
+    # over, so this anchor and the overlay's own step land on the same 18:00
+    # boundary. The ratio keeps the calendar rule - see the note above it.
+    completed = fut_settled or fut_completed
     sigma = realized_sigma(completed)
     prior_fut = completed[-1] if completed else None
     if sigma and prior_fut:
@@ -1052,6 +1097,9 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
                 "compare_avg": round(mb["margin_avg"]),
                 "liq_factor": mb["liq_factor"],
                 "liq_anchor": (round(prior_fut["c"], 2) if prior_fut else None),
+                # Printed beside it: the anchor steps once a session, so
+                # without the date a correct hold and a stale feed look alike.
+                "liq_anchor_date": (prior_fut["date"] if prior_fut else None),
                 # anchor,99%,99.9% - the three numbers the TradingView overlay
                 # wants, in the order its paste field parses them.
                 "pine": (",".join(
@@ -1370,7 +1418,8 @@ function panel(s){
         +` → band ${m.band_lo}–${m.band_hi}`
         +` · set ${m.set_at}</span></div>`;
     if((m.liq||[]).length&&m.liq[0].points!==undefined){
-      marg+=`<div class="mrow"><span>liquidation, off the ${m.liq_anchor} close: `
+      marg+=`<div class="mrow"><span>liquidation, off the `
+          +`${m.liq_anchor_date?m.liq_anchor_date+" ":""}${m.liq_anchor} close: `
           +m.liq.map(b=>`<b style="color:var(--jade)">${b.label} ±${b.points}</b>`
                        +` (${b.lo}–${b.hi})`).join(" · ")
           +` <span style="opacity:.7">avg ${m.compare_avg} × `
