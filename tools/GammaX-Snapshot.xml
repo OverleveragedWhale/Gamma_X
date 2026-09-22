@@ -2,7 +2,7 @@
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Author>Gamma_X</Author>
-    <Description>Generates the GEX dashboard and publishes it to the snapshot branch that GitHub Pages serves. Weekdays: every 15 minutes from 09:15 to 14:45, then every 5 minutes from 15:00 to 17:00. Every 4 hours otherwise. Runs only push when the figures actually change (--skip-unchanged). All times are the machine's local clock, so set it to Eastern.</Description>
+    <Description>Generates the GEX dashboard and publishes it to the snapshot branch that GitHub Pages serves. Weekdays: every 15 minutes from 09:15 to 14:45, then every 5 minutes from 15:00 to 17:00. Every 4 hours otherwise. Runs only push when the figures actually change (--skip-unchanged). All times are the machine's local clock, so set it to Eastern. DEPENDS ON Gamma_X Stay Awake: WakeToRun below wakes the PC for a trigger's start boundary but never for a repetition inside its duration, so if the machine is allowed to sleep during the session every repeat is silently lost.</Description>
     <URI>\Gamma_X Snapshot</URI>
   </RegistrationInfo>
   <Triggers>
@@ -91,6 +91,10 @@
     <Hidden>false</Hidden>
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <WakeToRun>true</WakeToRun>
+    <!-- Wakes the machine for each trigger's START BOUNDARY only. Repetition
+         instances inside a <Duration> do not wake it, which is why
+         Gamma_X Stay Awake holds sleep off across the session - without it
+         this task fires 4 times a day instead of 53. -->
     <!-- A run is seconds of work; cap it well under the 5 minute close-window
          cadence so a hung fetch cannot block the runs behind it for long.
          IgnoreNew above means a slow run is skipped, not queued up. -->

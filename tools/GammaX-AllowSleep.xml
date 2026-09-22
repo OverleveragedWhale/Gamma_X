@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Author>Gamma_X</Author>
+    <Description>Restores the normal 10 minute AC idle-sleep timeout after the close window ends, undoing GammaX-Stay Awake. If this one is ever missed the PC simply stays awake until it next runs, which is the harmless direction to fail in.</Description>
+    <URI>\Gamma_X Allow Sleep</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <!-- 17:15, after the 17:00 end of the close-window repetition. -->
+    <CalendarTrigger>
+      <StartBoundary>2026-01-01T17:15:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByWeek>
+        <DaysOfWeek>
+          <Monday /><Tuesday /><Wednesday /><Thursday /><Friday />
+        </DaysOfWeek>
+        <WeeksInterval>1</WeeksInterval>
+      </ScheduleByWeek>
+    </CalendarTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <!-- InteractiveToken, not Password: powercfg /change edits the calling
+           user's own active power scheme and needs neither elevation nor
+           network, so there is no reason to store a password for it. -->
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <!-- Catch up on the next wake if the PC was off at 17:15. -->
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <!-- No need to wake the machine just to let it sleep. -->
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT1M</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>C:\GammaX\Gamma_X\tools\market_sleep.bat</Command>
+      <Arguments>10</Arguments>
+    </Exec>
+  </Actions>
+</Task>
