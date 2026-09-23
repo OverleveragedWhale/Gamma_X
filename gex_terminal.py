@@ -955,8 +955,20 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     future = inst["future"]
     now = now_et()
     today = now.date()
+    # Which expirations are still live. The calendar date keeps a contract in
+    # the book until midnight ET, but it stopped existing at the cash close and
+    # its gamma is enormous on the way out because it is 0 DTE, so for the six
+    # hours between 18:00 and midnight a dead session dominated the numbers:
+    # measured 2026-09-22 23:42 ET, the already-expired 09-22 strikes were 53%
+    # of NQ's net GEX, 19% of GC's and 13% of ES's. Rolling at 18:00 drops them
+    # as the new session opens and keeps the current day in right up to it.
+    #
+    # Deliberately NOT applied to the chain history or the ratio's futures leg
+    # below: those two have to name one shared session, and the note above the
+    # fetch loop explains what advancing the futures leg alone costs.
+    book_date = futures_trade_date(now)
     spot, options = fetch_chain(inst["chain"])   # SPX~6400 or QQQ~570
-    contracts = load_contracts(options, today)
+    contracts = load_contracts(options, book_date)
 
     # Resolve the front contract BEFORE the ratio, because the ratio has to be
     # built from that same contract. inst["fut"] is a continuous front-month
@@ -1111,7 +1123,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
 
     if contracts:
         fut_exp = active["expiry"]
-        near_cutoff = min(fut_exp, today + timedelta(days=NEAR_MAX_DTE))
+        near_cutoff = min(fut_exp, book_date + timedelta(days=NEAR_MAX_DTE))
         near_contracts = [c for c in contracts if c["exp"] <= near_cutoff]
         out["regimes"]["near"] = build_regime(near_contracts, spot, today, prior,
                                              disp, ref_spot)
@@ -1129,7 +1141,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
              "dist": round(100 * (item["strike"] - ref_spot) / ref_spot, 2),
              "loss_str": fmt_dollars(item["loss"]),
              "monthly": item["monthly"]}
-            for expiry, item in max_pain_by_expiry(contracts, today).items()
+            for expiry, item in max_pain_by_expiry(contracts, book_date).items()
         ]
     else:
         out["error_note"] = "no usable option contracts returned (verify chain is free)"
