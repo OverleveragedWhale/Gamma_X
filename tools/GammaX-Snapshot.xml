@@ -2,7 +2,7 @@
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Author>Gamma_X</Author>
-    <Description>Generates the GEX dashboard and publishes it to the snapshot branch that GitHub Pages serves. Weekdays: every 15 minutes from 09:15 to 14:45, then every 5 minutes from 15:00 to 16:45, then once at 18:20. Every 4 hours otherwise. Runs only push when the figures actually change (--skip-unchanged). All times are the machine's local clock, so set it to Eastern. WakeToRun below wakes the PC for a trigger's start boundary but never for a repetition inside its duration, so publish_snapshot.bat disables idle sleep for the session on every run - without that the 09:15 run happens and every repeat behind it is lost.</Description>
+    <Description>Generates the GEX dashboard and publishes it to the snapshot branch that GitHub Pages serves. Weekdays: every 15 minutes from 09:15 to 14:45, then every 5 minutes from 15:00 to 16:45, then once at 18:20. Every 4 hours otherwise. Runs only push when the figures actually change (--skip-unchanged). All times are the machine's local clock, so set it to Eastern. WakeToRun below wakes the PC for a trigger's start boundary but never for a repetition inside its duration, so publish_snapshot.bat holds the machine awake for the session on every run - without that the 09:15 run happens and every repeat behind it is lost. That means BOTH sleep timers: the attended idle one, and the unattended one Windows uses after a wake no human initiated, whose 120s default is what actually put the PC back to sleep after each run on 09-21 through 09-23. See market_sleep.bat.</Description>
     <URI>\Gamma_X Snapshot</URI>
   </RegistrationInfo>
   <Triggers>
@@ -110,8 +110,10 @@
     <WakeToRun>true</WakeToRun>
     <!-- Wakes the machine for each trigger's START BOUNDARY only. Repetition
          instances inside a <Duration> do not wake it, which is why the
-         publisher disables idle sleep across the session - without that this
-         task lands 3 scheduled runs a day instead of 50. -->
+         publisher holds the machine awake across the session - without that
+         this task lands 3 scheduled runs a day instead of 50. Measured on the
+         snapshot branch 09-21 to 09-23: the 3 start boundaries fired
+         unattended every day, and 0 of the other 47 occurrences ever did. -->
     <!-- A run is seconds of work; cap it well under the 5 minute close-window
          cadence so a hung fetch cannot block the runs behind it for long.
          IgnoreNew above means a slow run is skipped, not queued up. -->

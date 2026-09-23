@@ -18,10 +18,10 @@ rem      to sign in and stores the credential in Windows Credential Manager,
 rem      so no token is ever written to disk.
 rem   6. Set GitHub Pages to: Deploy from a branch -> snapshot / (root).
 rem   7. powershell -NoProfile -ExecutionPolicy Bypass -File tools\install_tasks.ps1
-rem      Registers all three tasks. Gamma_X Stay Awake / Allow Sleep are not
-rem      optional: Task Scheduler wakes the PC for a trigger's start boundary
-rem      but not for a repetition inside it, so on a machine that sleeps this
-rem      publisher runs 4 times a day rather than 53.
+rem      Registers the snapshot task. There is only one task now - the sleep
+rem      handling that used to live in Gamma_X Stay Awake / Allow Sleep runs
+rem      inside this script instead, because those fired as InteractiveToken
+rem      and did nothing on a wake-from-sleep. See market_sleep.bat.
 rem
 rem Adjust these four paths if you cloned somewhere else.
 
