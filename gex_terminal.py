@@ -405,20 +405,31 @@ def gex_by_strike(contracts, spot):
     return per
 
 
-def top_walls(per, side, spot, n=None, min_sep=None):
+def top_walls(per, side, spot, n=None, min_sep=None, ref=None, half=None):
     """Rank distinct walls for one side ('call' or 'put') by GEX size.
 
     Keeps up to n strikes, skipping any within min_sep (fraction of spot)
     of an already-kept strike so clustered adjacent strikes collapse into
     one reported wall.
+
+    `half` restricts the search to strikes above or below `ref`. Ranking the
+    whole book and letting the halves fall where they may produced badly
+    lopsided ladders - when price had run, the largest gamma was all on one
+    side of spot and the table showed 2 levels above against 10 below - so the
+    two halves are now filled independently and each gets its own n.
     """
     n = n if n is not None else WALL_COUNT
     min_sep = min_sep if min_sep is not None else MIN_WALL_SEP
+    ref = ref if ref is not None else spot
     ranked = sorted(per.items(), key=lambda kv: kv[1][side], reverse=True)
     kept = []
     for k, v in ranked:
         if v[side] <= 0:
             break
+        if half == "above" and k <= ref:
+            continue
+        if half == "below" and k > ref:
+            continue
         if all(abs(k - kk) / spot >= min_sep for kk, _ in kept):
             kept.append((k, v[side]))
         if len(kept) >= n:
@@ -530,8 +541,13 @@ def build_regime(contracts, spot, today, prior, disp, ref_spot=None):
         "dispersed": [],
     }
 
-    for side in ("call", "put"):
-        walls = top_walls(per, side, spot)
+    # Calls are ranked only above spot and puts only below it, so the ladder
+    # always carries WALL_COUNT levels each way. Splitting on ref_spot rather
+    # than spot matters outside the cash session: the chain is pinned to the
+    # prior settle while the future has moved, and selecting around the stale
+    # price puts walls on the wrong side of the spot row the page draws.
+    for side, half in (("call", "above"), ("put", "below")):
+        walls = top_walls(per, side, spot, ref=ref_spot, half=half)
         if not walls:
             continue
         ratio = (walls[0][1] / walls[1][1]

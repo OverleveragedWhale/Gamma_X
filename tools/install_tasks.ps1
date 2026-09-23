@@ -41,8 +41,14 @@ foreach ($t in $tasks) {
     try {
         if ($t.NeedsPassword) {
             # Needs the Windows account password to mint a network-capable token.
+            # Updating a LogonType=Password task always re-asks for it; there is
+            # no way to edit one of these in place without the credential.
             $cred = Get-Credential -UserName "$env:USERNAME" `
                 -Message "Windows password for $($t.Name) (needed to push to GitHub)"
+            # The XML ships a placeholder so the repo is not machine-specific;
+            # point it at whoever is actually installing.
+            $xml = $xml -replace '<UserId>REPLACE\WITH_YOUR_USER</UserId>',
+                                 "<UserId>$($cred.UserName)</UserId>"
             Register-ScheduledTask -TaskName $t.Name -Xml $xml -Force `
                 -User $cred.UserName `
                 -Password $cred.GetNetworkCredential().Password | Out-Null

@@ -2,7 +2,7 @@
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Author>Gamma_X</Author>
-    <Description>Generates the GEX dashboard and publishes it to the snapshot branch that GitHub Pages serves. Weekdays: every 15 minutes from 09:15 to 14:45, then every 5 minutes from 15:00 to 17:00. Every 4 hours otherwise. Runs only push when the figures actually change (--skip-unchanged). All times are the machine's local clock, so set it to Eastern. DEPENDS ON Gamma_X Stay Awake: WakeToRun below wakes the PC for a trigger's start boundary but never for a repetition inside its duration, so if the machine is allowed to sleep during the session every repeat is silently lost.</Description>
+    <Description>Generates the GEX dashboard and publishes it to the snapshot branch that GitHub Pages serves. Weekdays: every 15 minutes from 09:15 to 14:45, then every 5 minutes from 15:00 to 16:45, then once at 18:20. Every 4 hours otherwise. Runs only push when the figures actually change (--skip-unchanged). All times are the machine's local clock, so set it to Eastern. DEPENDS ON Gamma_X Stay Awake: WakeToRun below wakes the PC for a trigger's start boundary but never for a repetition inside its duration, so if the machine is allowed to sleep during the session every repeat is silently lost.</Description>
     <URI>\Gamma_X Snapshot</URI>
   </RegistrationInfo>
   <Triggers>
@@ -28,14 +28,31 @@
         <WeeksInterval>1</WeeksInterval>
       </ScheduleByWeek>
     </CalendarTrigger>
-    <!-- Close window: every 5 minutes, 15:00 through 17:00, weekdays. 25 runs. -->
+    <!-- Close window: every 5 minutes, 15:00 through 16:45, weekdays. 22 runs. -->
     <CalendarTrigger>
       <Repetition>
         <Interval>PT5M</Interval>
-        <Duration>PT2H</Duration>
+        <Duration>PT1H45M</Duration>
         <StopAtDurationEnd>false</StopAtDurationEnd>
       </Repetition>
       <StartBoundary>2026-01-01T15:00:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByWeek>
+        <DaysOfWeek>
+          <Monday />
+          <Tuesday />
+          <Wednesday />
+          <Thursday />
+          <Friday />
+        </DaysOfWeek>
+        <WeeksInterval>1</WeeksInterval>
+      </ScheduleByWeek>
+    </CalendarTrigger>
+    <!-- Settlement follow-up: one run at 18:20, weekdays. No repetition, so
+         this is a start boundary and WakeToRun picks it up even though
+         Gamma_X Allow Sleep restored the idle timeout at 17:15. -->
+    <CalendarTrigger>
+      <StartBoundary>2026-01-01T18:20:00</StartBoundary>
       <Enabled>true</Enabled>
       <ScheduleByWeek>
         <DaysOfWeek>
@@ -94,7 +111,7 @@
     <!-- Wakes the machine for each trigger's START BOUNDARY only. Repetition
          instances inside a <Duration> do not wake it, which is why
          Gamma_X Stay Awake holds sleep off across the session - without it
-         this task fires 4 times a day instead of 53. -->
+         this task fires 5 times a day instead of 51. -->
     <!-- A run is seconds of work; cap it well under the 5 minute close-window
          cadence so a hung fetch cannot block the runs behind it for long.
          IgnoreNew above means a slow run is skipped, not queued up. -->
