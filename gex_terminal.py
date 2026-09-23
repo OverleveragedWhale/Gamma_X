@@ -714,6 +714,15 @@ def fetch_rows(sym, max_rows=PRIOR_SESSION_ROWS):
 
 _SESSION_CLOSE = {}
 
+# Yahoo intermittently serves this chart from a cache tier that has the newest
+# day stripped to a single bar at 23:59, with every earlier day byte-identical
+# and intact. Observed 2026-09-23 00:1x ET: 4 of 6 consecutive requests for the
+# same URL came back with 09-22 holding 1 non-null close instead of 269, and a
+# re-measure ten minutes later was clean 8 of 8. Consecutive calls flip, so a
+# retry is worth more than a different endpoint - range=1mo, explicit
+# period1/period2, query2 and interval=1m all showed the same behaviour.
+SESSION_CLOSE_TRIES = 3
+
 
 def session_close(sym, session_date):
     """The 16:59 futures close for `session_date` - the session's last print.
@@ -731,6 +740,27 @@ def session_close(sym, session_date):
     if key in _SESSION_CLOSE:
         return _SESSION_CLOSE[key]
 
+    for attempt in range(SESSION_CLOSE_TRIES):
+        last = _session_close_once(sym, session_date)
+        if last is not None:
+            # Successes only. A miss is a bad response, not a fact about the
+            # session; caching it pinned every later caller in the same process
+            # to the daily-bar fallback, which is how one stripped response
+            # moved all four symbols off the 16:59 anchor at once.
+            _SESSION_CLOSE[key] = last
+            return last
+        if attempt + 1 < SESSION_CLOSE_TRIES:
+            time.sleep(0.5)
+
+    logging.info("no intraday close for %s on %s after %d tries; "
+                 "caller falls back to the daily bar",
+                 sym, session_date, SESSION_CLOSE_TRIES)
+    return None
+
+
+def _session_close_once(sym, session_date):
+    """One attempt at the 16:59 print. None when the response has no bars for
+    that session, which is a transient feed fault rather than an answer."""
     result = json.loads(http_get(YAHOO_INTRADAY_URL.format(sym=quote(sym))))
     result = result["chart"]["result"][0]
     off = result.get("meta", {}).get("gmtoffset") or 0
@@ -747,7 +777,6 @@ def session_close(sym, session_date):
             break                     # past the halt: the next session's tape
         last = float(close)
 
-    _SESSION_CLOSE[key] = last
     return last
 
 
@@ -1077,7 +1106,23 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
             # on 2026-09-21 (m 0.6465 against 0.6207). The chain leg is a cash
             # close, so the two are within an hour of each other rather than
             # eight.
-            fc = settled_close(sym, fut_completed[-1])
+            # Pin the futures leg to the chain leg's session BY DATE, not to
+            # "newest completed". Both use prior_session against the same
+            # `today`, but that only aligns them when both feeds have posted
+            # the bar. Yahoo publishes the futures daily bar hours before the
+            # cash/ETF one, so from a session's close until that posting the
+            # futures series is a day ahead and the ratio books the whole
+            # session's move as basis. Measured 2026-09-23 00:14 ET, when
+            # every cash series still ended 09-21 and every futures series
+            # had 09-22: NQ m 41.5135 -> 41.8115 (+0.72%) and CL 0.6207 ->
+            # 0.6064 (-2.3%), both well inside the carry gate below.
+            fut_row = None
+            if prior:
+                fut_row = next((r for r in reversed(fut_completed)
+                                if r["date"] <= prior["date"]), None)
+            if fut_row is None:
+                fut_row = fut_completed[-1]
+            fc = settled_close(sym, fut_row)
         except Exception:
             logging.info("%s: futures history %s unavailable", future, sym)
             continue
