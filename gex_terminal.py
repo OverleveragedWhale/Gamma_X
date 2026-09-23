@@ -780,6 +780,111 @@ def _session_close_once(sym, session_date):
     return last
 
 
+CASH_SESSION_END = "16:00"          # regular cash close
+_CASH_CLOSE = {}
+
+
+def newest_cash_close(sym, today):
+    """Newest completed cash session as an o/h/l/c row, from the intraday feed.
+
+    Yahoo posts a cash symbol's DAILY bar hours after the futures one, so from
+    a session's close until that posting the ratio's chain leg has no bar for
+    the session its futures leg already has. Pinning the two legs to a common
+    session then holds the whole ratio a day stale through every evening and
+    overnight snapshot. This fills that gap, and is consulted ONLY when it is
+    strictly newer than the daily series - once the official bar posts it wins.
+
+    Which bar is the close depends on the instrument. Measured over 20 sessions
+    against the official daily closes:
+
+        INDEX   the bar stamped 16:00 IS the close             max err 0.0005%
+        ETF     that bar is the first AFTER-HOURS bar and misses the closing
+                auction - 0.107% mean and 0.34% worst on USO - so the regular
+                session's last bar is the close          0.007-0.024% mean
+
+    Either residual is two orders of magnitude under what it removes: a whole
+    session's move, 0.72% on NQ and 2.3% on CL on 2026-09-23.
+    """
+    key = (sym, today.isoformat())
+    if key in _CASH_CLOSE:
+        return _CASH_CLOSE[key]
+
+    for attempt in range(SESSION_CLOSE_TRIES):
+        got = _newest_cash_close_once(sym, today)
+        if got is not None:
+            _CASH_CLOSE[key] = got           # successes only, as above
+            return got
+        if attempt + 1 < SESSION_CLOSE_TRIES:
+            time.sleep(0.5)
+    logging.info("no intraday cash close for %s before %s after %d tries",
+                 sym, today, SESSION_CLOSE_TRIES)
+    return None
+
+
+def _newest_cash_close_once(sym, today):
+    """A full o/h/l/c row, because `prior` also supplies PDH/PDL downstream."""
+    result = json.loads(http_get(YAHOO_INTRADAY_URL.format(sym=quote(sym))))
+    result = result["chart"]["result"][0]
+    meta = result.get("meta", {})
+    off = meta.get("gmtoffset") or 0
+    is_index = meta.get("instrumentType") == "INDEX"
+    q = result["indicators"]["quote"][0]
+    closes = q.get("close") or []
+    highs, lows, opens = q.get("high") or [], q.get("low") or [], q.get("open") or []
+
+    days = {}
+    iso = today.isoformat()
+    for n, ts in enumerate(result.get("timestamp") or []):
+        close = closes[n] if n < len(closes) else None
+        if close is None:
+            continue
+        stamp = datetime.utcfromtimestamp(ts + off)
+        day = stamp.date().isoformat()
+        if day >= iso:                       # never the session in progress
+            continue
+        hhmm = stamp.strftime("%H:%M")
+        # Regular cash session only, so the high/low are the session's and not
+        # a thin pre-market print. The index stamps a final value AT 16:00 and
+        # that bar is its close; an ETF's 16:00 bar is already after-hours.
+        if hhmm < "09:30" or hhmm > CASH_SESSION_END:
+            continue
+        if not is_index and hhmm == CASH_SESSION_END:
+            continue
+        d = days.setdefault(day, {"date": day, "o": None, "h": None,
+                                  "l": None, "c": None})
+        hi = highs[n] if n < len(highs) else None
+        lo = lows[n] if n < len(lows) else None
+        op = opens[n] if n < len(opens) else None
+        if d["o"] is None and op is not None:
+            d["o"] = float(op)
+        if hi is not None:
+            d["h"] = float(hi) if d["h"] is None else max(d["h"], float(hi))
+        if lo is not None:
+            d["l"] = float(lo) if d["l"] is None else min(d["l"], float(lo))
+        d["c"] = float(close)
+
+    usable = [d for d in days.values()
+              if None not in (d["o"], d["h"], d["l"], d["c"])]
+    if not usable:
+        return None
+    return max(usable, key=lambda d: d["date"])
+
+
+def prior_cash_session(sym, today, rows=None):
+    """prior_session() for a cash symbol, advanced past the daily bar's lag."""
+    if rows is None:
+        rows = fetch_rows(sym, max_rows=5)
+    prior = prior_session(rows, today)
+    try:
+        newer = newest_cash_close(sym, today)
+    except Exception:
+        logging.info("intraday cash close unavailable for %s", sym)
+        newer = None
+    if newer and (prior is None or newer["date"] > prior["date"]):
+        return newer
+    return prior
+
+
 def settled_close(sym, row):
     """A daily bar's close, replaced by the session's real 16:59 print.
 
@@ -1048,7 +1153,12 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     # the whole day: spot still moves, the axis it is drawn on does not.
     try:
         rows = fetch_rows(inst["hist"])
-        prior = prior_session(rows, today)
+        # prior_cash_session, not prior_session: Yahoo posts this symbol's
+        # daily bar hours after the futures one, so plain prior_session leaves
+        # the chain leg a session behind from the close until that posting -
+        # which is every evening and overnight snapshot, the 18:20, 20:00,
+        # 00:00 and 04:00 runs.
+        prior = prior_cash_session(inst["hist"], today, rows=rows)
         chain_close = prior["c"] if prior else None
     except Exception as exc:
         logging.exception("history fetch failed for %s (%s)", future, inst["hist"])
@@ -1064,7 +1174,9 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     idx_sym = ratio_sym if inst["index"] == inst["fut"] else inst["index"]
     idx_close = None
     try:
-        idx_prior = prior_session(fetch_rows(idx_sym, max_rows=5), today)
+        idx_prior = (prior_session(fetch_rows(idx_sym, max_rows=5), today)
+                     if idx_sym == ratio_sym
+                     else prior_cash_session(idx_sym, today))
         # When the "index" is really the futures contract - GC and CL, which
         # have no free cash index - it has to be read on the same 16:59 basis
         # as the futures leg below. Leaving it on the 23:55 daily bar made
