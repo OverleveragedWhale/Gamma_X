@@ -75,6 +75,13 @@ YAHOO_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
 # The v8 chart feed carries no open interest. v7 quote does, for futures, and
 # takes a whole basket in one call - but only with a cookie+crumb pair, which
 # is a free unauthenticated handshake, not a login.
+# Intraday series, used only to recover the real 16:59 session close - see
+# session_close. 5 minute bars are enough: the bar stamped 16:55 covers
+# 16:55:00-16:59:59, so its close IS the 16:59 print. Checked against 1 minute
+# bars on 2026-09-21 - identical for all four products, at a fifth the payload.
+YAHOO_INTRADAY_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
+                      "{sym}?range=5d&interval=5m&includePrePost=true")
+SESSION_END_HHMM = "17:00"     # CME maintenance halt; last print before it
 YAHOO_COOKIE_URL = "https://fc.yahoo.com"
 YAHOO_CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
 YAHOO_QUOTE_URL = ("https://query1.finance.yahoo.com/v7/finance/quote"
@@ -705,6 +712,45 @@ def fetch_rows(sym, max_rows=PRIOR_SESSION_ROWS):
     return rows[-max_rows:]
 
 
+_SESSION_CLOSE = {}
+
+
+def session_close(sym, session_date):
+    """The 16:59 futures close for `session_date` - the session's last print.
+
+    Yahoo's DAILY bar is a calendar day, 00:00 to 23:55 ET, not a trading
+    session, so its close is the evening Globex print belonging to the NEXT
+    session. On 2026-09-21 that made CL's daily close 95.78 against a real
+    16:59 close of 91.97, 4.1% out, and ES 7,833.50 against 7,829.25.
+
+    The intraday series is broken by the 17:00-18:00 maintenance halt, so the
+    last bar on the session's own date before 17:00 is the close. Cached per
+    session, which cannot change once the session has ended.
+    """
+    key = (sym, session_date)
+    if key in _SESSION_CLOSE:
+        return _SESSION_CLOSE[key]
+
+    result = json.loads(http_get(YAHOO_INTRADAY_URL.format(sym=quote(sym))))
+    result = result["chart"]["result"][0]
+    off = result.get("meta", {}).get("gmtoffset") or 0
+    closes = result["indicators"]["quote"][0].get("close") or []
+
+    last = None
+    for ts, close in zip(result.get("timestamp") or [], closes):
+        if close is None:
+            continue
+        stamp = datetime.utcfromtimestamp(ts + off)
+        if stamp.date().isoformat() != session_date:
+            continue
+        if stamp.strftime("%H:%M") >= SESSION_END_HHMM:
+            break                     # past the halt: the next session's tape
+        last = float(close)
+
+    _SESSION_CLOSE[key] = last
+    return last
+
+
 def fetch_closes(sym, max_rows=PRIOR_SESSION_ROWS):
     return [r["c"] for r in fetch_rows(sym, max_rows)]
 
@@ -969,6 +1015,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     # -> index terms
     m, fut_close, ratio_src = k_track, None, f"index terms (set [closes] {future})"
     fut_rows, fut_completed, fut_settled = [], [], []
+    fut_sym = inst["fut"]          # contract the anchor bars actually came from
     for sym in ([ratio_sym, inst["fut"]] if ratio_sym != inst["fut"]
                 else [inst["fut"]]):
         try:
@@ -984,6 +1031,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
             # not reliably catch. The anchor is already in futures terms and
             # needs no ratio, so it takes the futures session boundary.
             fut_rows = fetch_rows(sym, max_rows=VOL_LOOKBACK + 2)
+            fut_sym = sym
             fut_completed = [r for r in fut_rows if r["date"] < today.isoformat()]
             fut_settled = settled_futures(fut_rows, now)
             fc = fut_completed[-1]["c"]
@@ -1099,6 +1147,24 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     completed = fut_settled or fut_completed
     sigma = realized_sigma(completed)
     prior_fut = completed[-1] if completed else None
+
+    # The TradingView overlay - and only it - anchors on the 16:59 close.
+    # settled_futures above fixed WHICH session the anchor comes from; this
+    # fixes WHICH PRICE inside it. prior_fut carries Yahoo's daily bar, which
+    # spans 00:00-23:55 ET and so closes on the evening reopen rather than at
+    # the 17:00 halt: on 2026-09-21 that read CL at 95.78 against a 16:59 close
+    # of 91.97, 4.1% out. Every figure the terminal prints still uses prior_fut
+    # untouched, and the chip falls back to it when the intraday series is
+    # unavailable, so it degrades rather than disappearing.
+    pine_anchor, pine_src = None, None
+    if prior_fut:
+        try:
+            pine_anchor = session_close(fut_sym, prior_fut["date"])
+        except Exception:
+            logging.info("%s: intraday close unavailable for %s", future, fut_sym)
+        pine_src = "16:59" if pine_anchor is not None else "daily bar"
+        if pine_anchor is None:
+            pine_anchor = prior_fut["c"]
     if sigma and prior_fut:
         anchor = prior_fut["c"]
         out["risk"] = {
@@ -1139,9 +1205,15 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
                 # anchor,99%,99.9% - the three numbers the TradingView overlay
                 # wants, in the order its paste field parses them.
                 "pine": (",".join(
-                    [f"{prior_fut['c']:.2f}"]
+                    [f"{pine_anchor:.2f}"]
                     + [f"{b['points']:.2f}" for b in mb["liq"]])
-                    if prior_fut else None),
+                    if pine_anchor is not None else None),
+                # Surfaced because it deliberately differs from liq_anchor: two
+                # numbers that look like the same thing quietly disagreeing is
+                # worse than the difference itself.
+                "pine_anchor": (round(pine_anchor, 2)
+                                if pine_anchor is not None else None),
+                "pine_src": pine_src,
                 "liq": [
                     {"label": b["label"], "points": round(b["points"], 2),
                      "lo": (round(prior_fut["c"] - b["points"], 2)
@@ -1332,6 +1404,8 @@ tr.spotrow td{color:var(--ink);font-weight:700;letter-spacing:.06em;
 .pre{color:var(--muted);opacity:.85}
 #pinebar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 0 2px}
 #pinebar .k{font-size:11px;letter-spacing:.05em;color:var(--muted);text-transform:uppercase}
+#pinebar .pnote{font-size:10px;letter-spacing:.04em;color:var(--muted);opacity:.8}
+#pinebar .pnote.warn{color:var(--brass);opacity:1}
 #pinebar code.pine{flex:1 1 320px;overflow-x:auto;white-space:nowrap}
 code.pine{background:var(--raised);border:1px solid var(--line);border-radius:4px;
   padding:1px 6px;color:var(--brass);cursor:pointer;user-select:all}
@@ -1588,9 +1662,21 @@ async function load(){
     });
     const pineEl=document.getElementById("pinebar");
     if(d.pine){
+      // The overlay anchors on the 16:59 close while the panels below anchor
+      // on Yahoo's daily bar, so the two disagree on purpose. Say which is in
+      // use, and call out any product that had to fall back.
+      const srcs=(d.symbols||[]).map(x=>(x.margin||{}).pine_src).filter(Boolean);
+      const stale=(d.symbols||[]).filter(x=>(x.margin||{}).pine_src==="daily bar")
+                                 .map(x=>x.future);
+      const note = srcs.length
+        ? (stale.length
+            ? `<span class="pnote warn">${stale.join("/")} on daily bar, no intraday</span>`
+            : `<span class="pnote">16:59 close</span>`)
+        : "";
       pineEl.innerHTML=`<span class="k">TradingView liquidation bands</span>`
         +`<code class="pine" id="pinestr" title="click to select" `
         +`onclick="getSelection().selectAllChildren(this)">${d.pine}</code>`
+        +note
         +`<button id="pinecopy">Copy</button>`;
       const btn=document.getElementById("pinecopy");
       btn.onclick=async()=>{
