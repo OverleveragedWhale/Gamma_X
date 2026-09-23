@@ -58,7 +58,17 @@ foreach ($t in $tasks) {
             Register-ScheduledTask -TaskName $t.Name -Xml $xml -Force | Out-Null
         }
         $info = Get-ScheduledTaskInfo -TaskName $t.Name
-        "{0,-20} registered, next run {1}" -f $t.Name, $info.NextRunTime
+        # Count the triggers back off the registered task, not the file. The
+        # schedule is 50 separate triggers now rather than 4 with repetitions
+        # inside them, and a registration that silently kept only some of them
+        # would look exactly like the sleep problem it was meant to fix:
+        # snapshots quietly missing for part of the day.
+        $want = ([regex]::Matches((Get-Content $path -Raw), '<CalendarTrigger>')).Count
+        $got  = (Get-ScheduledTask -TaskName $t.Name).Triggers.Count
+        "{0,-20} registered, {1}/{2} triggers, next run {3}" -f $t.Name, $got, $want, $info.NextRunTime
+        if ($got -ne $want) {
+            Write-Warning "$($t.Name): registered $got of $want triggers - the schedule is incomplete"
+        }
     } catch {
         "{0,-20} FAILED: {1}" -f $t.Name, $_.Exception.Message
     }
