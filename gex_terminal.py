@@ -751,6 +751,24 @@ def session_close(sym, session_date):
     return last
 
 
+def settled_close(sym, row):
+    """A daily bar's close, replaced by the session's real 16:59 print.
+
+    Yahoo's daily close is the 23:55 calendar-day print, which for a future is
+    the evening reopen and not the close at all. Falls back to the daily bar
+    when the intraday series is unavailable, so a feed outage degrades the
+    figure rather than removing it.
+    """
+    if not row:
+        return None
+    try:
+        close = session_close(sym, row["date"])
+    except Exception:
+        logging.info("intraday close unavailable for %s %s", sym, row["date"])
+        close = None
+    return close if close is not None else row["c"]
+
+
 def fetch_closes(sym, max_rows=PRIOR_SESSION_ROWS):
     return [r["c"] for r in fetch_rows(sym, max_rows)]
 
@@ -1018,7 +1036,14 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     idx_close = None
     try:
         idx_prior = prior_session(fetch_rows(idx_sym, max_rows=5), today)
-        idx_close = idx_prior["c"] if idx_prior else None
+        # When the "index" is really the futures contract - GC and CL, which
+        # have no free cash index - it has to be read on the same 16:59 basis
+        # as the futures leg below. Leaving it on the 23:55 daily bar made
+        # carry the gap between two different clocks: -4.0% for CL, which the
+        # gate rejects outright. A real cash index stops printing at its own
+        # close, so it stays on the daily bar.
+        idx_close = (settled_close(idx_sym, idx_prior) if idx_sym == ratio_sym
+                     else (idx_prior["c"] if idx_prior else None))
     except Exception:
         logging.exception("index close fetch failed for %s (%s)", future, idx_sym)
     k_track = (idx_close / chain_close) if (idx_close and chain_close) else 1.0
@@ -1046,7 +1071,13 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
             fut_sym = sym
             fut_completed = [r for r in fut_rows if r["date"] < today.isoformat()]
             fut_settled = settled_futures(fut_rows, now)
-            fc = fut_completed[-1]["c"]
+            # The ratio's futures leg is the 16:59 close, not the daily bar:
+            # the bar spans the calendar day and closes on the evening reopen,
+            # which put 4.14% of overnight drift into every converted CL level
+            # on 2026-09-21 (m 0.6465 against 0.6207). The chain leg is a cash
+            # close, so the two are within an hour of each other rather than
+            # eight.
+            fc = settled_close(sym, fut_completed[-1])
         except Exception:
             logging.info("%s: futures history %s unavailable", future, sym)
             continue
