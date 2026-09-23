@@ -16,20 +16,22 @@ Two things about this that are not obvious:
    Hence the declaration swap below. Converting the files themselves to UTF-16
    would work too, at the cost of every future diff.
 
-2. Only the snapshot task needs a stored password. It pushes to GitHub, and an
-   S4U task has no network; LogonType=Password is what gets it a token that
-   does. The two power tasks call powercfg against the calling user's own
-   scheme, which needs neither network nor elevation, so they run as
-   InteractiveToken and prompt for nothing.
+2. The snapshot task needs a stored password. It pushes to GitHub, and an S4U
+   task has no network; LogonType=Password is what gets it a token that does.
+   Password is also the only logon type observed to actually run its action on
+   a wake-from-sleep on this machine, which is why the sleep handling was moved
+   into the publisher instead of living in its own task.
 #>
 
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 
+# One task. Idle sleep is handled inside publish_snapshot.bat rather than by
+# separate 09:00/17:15 tasks: those ran as InteractiveToken, and a task with
+# that logon type reports success without running its action when it fires on
+# a wake-from-sleep, which is precisely when it was needed.
 $tasks = @(
-    @{ File = "GammaX-Snapshot.xml";  Name = "Gamma_X Snapshot";   NeedsPassword = $true  },
-    @{ File = "GammaX-StayAwake.xml"; Name = "Gamma_X Stay Awake"; NeedsPassword = $false },
-    @{ File = "GammaX-AllowSleep.xml";Name = "Gamma_X Allow Sleep";NeedsPassword = $false }
+    @{ File = "GammaX-Snapshot.xml";  Name = "Gamma_X Snapshot";   NeedsPassword = $true  }
 )
 
 foreach ($t in $tasks) {

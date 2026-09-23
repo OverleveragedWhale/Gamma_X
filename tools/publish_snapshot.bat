@@ -33,6 +33,14 @@ set "LOG=C:\GammaX\publish.log"
 for /f "tokens=* usebackq" %%t in (`powershell -NoProfile -Command "Get-Date -Format 'yyyy-MM-dd HH:mm:ss'"`) do set "NOW=%%t"
 echo [%NOW%] --- run start >> "%LOG%"
 
+rem Hold the machine awake across the session. This has to ride the publisher
+rem rather than its own scheduled task: WakeToRun wakes the PC for a trigger's
+rem start boundary but not for a repetition inside it, so without this the
+rem 09:15 run happens and every 15-minute repeat behind it is lost to sleep.
+rem A no-op when the setting already matches, so it costs nothing on the other
+rem 49 runs of the day.
+call "%~dp0market_sleep.bat" auto
+
 rem Discard the previous run's generated page and match the remote exactly.
 rem Safe because this clone holds nothing but the generated index.html - it is
 rem never a working copy. Keeps this machine from diverging if the GitHub
