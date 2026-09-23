@@ -16,11 +16,17 @@ vwapWidth   = input.int(1, "VWAP Line Width", minval=1, maxval=5, group="VWAP")
 //
 //   ES=7712.50,62.52,83.06;NQ=29917.25,240.10,318.90;GC=...;CL=...
 //
-// Per product that is anchor,99%,99.9% - the front contract's previous settle,
+// Per product that is anchor,99%,99.9% - the front contract's 16:59 close,
 // then the two distances in points either side of it. The chart picks its entry
 // by syminfo.root, so the same paste serves all four; set Product manually if
 // the root does not match (continuous symbols, CFDs, or a broker with its own
 // naming). A product missing from the line simply draws nothing.
+//
+// The anchor is the session's last print before the 17:00 halt. It used to be
+// the daily bar's close, which is a CALENDAR day - 00:00 to 23:55 ET - so its
+// close was the evening reopen belonging to the next session. On 2026-09-21
+// that put CL 4.1% out (95.78 against a real 16:59 close of 91.97) and ES
+// 0.05%. The terminal now reads the intraday series for it.
 //
 // The distances are drawn twice: once off the session settle, a fixed frame
 // that holds for the whole session, and once off the session VWAP, which
@@ -44,6 +50,16 @@ vwapWidth   = input.int(1, "VWAP Line Width", minval=1, maxval=5, group="VWAP")
 // The anchor label names its live source, "· 18:00 ET" or "· pasted", so a
 // stale-looking anchor can be told apart from a chart-supplied one. Any setting
 // falls back to the paste while the chart has not crossed a boundary yet.
+//
+// Since the terminal moved to the 16:59 close the two sources are the SAME
+// quantity: the chart's is close[1] on the boundary bar, the last print before
+// the 18:00 reopen, and the halt from 17:00 carries no bars, so that is the
+// 16:59 print the terminal now sends. They used to differ - the paste carried
+// the 23:55 calendar close - so switching Anchor moved the line, on CL by 4%.
+// It should now barely move. A visible gap means one of three things: the
+// paste is from an older session, this chart's feed disagrees with Yahoo's, or
+// the terminal fell back to the daily bar, which its own bar flags when the
+// intraday series is unavailable.
 // ============================================================================
 showLiq   = input.bool(true, "Show Liquidation Bands", group="Liquidation")
 liqProd   = input.string("Auto (by symbol)", "Product",
@@ -121,9 +137,10 @@ vwapValue = cumVol != 0 ? cumTPV / cumVol : na
 
 // The close carried into each new session, held for its duration, so the bands
 // step at 18:00 ET rather than sliding. close[1] on the boundary bar is the
-// last print before the 17:00-18:00 CME break - the session close the paste's
-// anchor is taken from. Same isNewSession the VWAP uses, so the two can never
-// disagree about where a session begins.
+// last print before the 17:00-18:00 CME break, so it IS the 16:59 close - the
+// same quantity the terminal now puts in the paste, arrived at from the other
+// side. Same isNewSession the VWAP uses, so the two can never disagree about
+// where a session begins.
 // Guarded on close[1] because the first bar in the loaded history is a
 // boundary with nothing before it; assigning na there would leave the anchor
 // unset on charts that hold only one session. Until a real boundary arrives,
