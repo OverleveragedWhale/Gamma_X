@@ -57,24 +57,16 @@ jobs:
           git push origin HEAD:snapshot
           echo "published=true" >> "$GITHUB_OUTPUT"
 
-      - name: Request a Pages build
-        if: steps.publish.outputs.published == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # A push authenticated with GITHUB_TOKEN does not start the
-          # pages-build-deployment run, so the build has to be asked for.
-          code=$(curl -sS -o resp.json -w '%{http_code}' -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${{ github.repository }}/pages/builds")
-          cat resp.json
-          if [ "$code" != "201" ] && [ "$code" != "200" ]; then
-            echo "::error::Pages build request returned HTTP $code. The commit is"
-            echo "::error::pushed but the site may not rebuild. Check that Pages"
-            echo "::error::source is 'Deploy from a branch -> snapshot / (root)'."
-            exit 1
-          fi
-          echo "Pages build requested."
+      # No explicit POST /pages/builds here. It was added on the premise that
+      # a push authenticated with GITHUB_TOKEN does not start the
+      # pages-build-deployment run. For a branch-source Pages site it does, so
+      # the POST only ever asked for a SECOND build of the same commit, and
+      # Pages cannot build twice at once: the first was cancelled and recorded
+      # as "Page build failed" with duration 0ms. Every manual-backup run left
+      # one behind -
+      #
+      #   22:59:41  Publish snapshot (manual backup)  success
+      #   22:59:51  pages build and deployment        cancelled   <- the push
+      #   22:59:53  pages build and deployment        success     <- the POST
+      #
+      # - and the site still came out correct, which is why it went unnoticed.
