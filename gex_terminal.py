@@ -1362,7 +1362,7 @@ html,body{margin:0}
 body{background:var(--bg);color:var(--ink);
   font-family:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
   font-size:14px;line-height:1.4;-webkit-font-smoothing:antialiased}
-.wrap{max-width:1180px;margin:0 auto;padding:20px 18px 60px}
+.wrap{max-width:1400px;margin:0 auto;padding:20px 18px 60px}
 header{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px 20px;
   padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:22px}
 h1{font-family:system-ui,sans-serif;font-weight:800;font-size:19px;
@@ -1396,23 +1396,32 @@ button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
 .role{font-size:12px;color:var(--muted);margin-left:auto}
 .scale{font-size:10.5px;color:var(--brass);letter-spacing:.05em;
   margin:-6px 0 12px;opacity:.85}
-.regimes{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-@media(max-width:900px){.regimes{grid-template-columns:1fr}}
+/* minmax(0,1fr), not 1fr: a grid track is min-width:auto, so a track
+   holding a table wider than its share grows instead of shrinking and the
+   wall ladder paints outside the panel. The breakpoint is 1200 because the
+   ladder needs ~502px of min-content and two of them alongside each other
+   only clear that above ~1168px of viewport. */
+.regimes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
+@media(max-width:1200px){.regimes{grid-template-columns:1fr}}
 .regime-block{background:var(--raised);border:1px solid var(--line);
   border-radius:10px;padding:14px 16px}
 .rhead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:12px}
 .rlabel{font-family:system-ui,sans-serif;font-weight:700;font-size:11.5px;
   letter-spacing:.05em;color:var(--ink)}
-.grid{display:grid;grid-template-columns:150px 1fr;gap:18px}
-@media(max-width:640px){.grid{grid-template-columns:1fr}}
-.stat{margin-bottom:11px}
+/* Net GEX and Flip sat in a 150px sidebar beside the ladder, which cost the
+   table 168px it could not spare and left the sidebar mostly empty. */
+.rbody{min-width:0}
+.stats{display:flex;flex-wrap:wrap;gap:4px 30px;margin-bottom:4px}
+.stat{margin-bottom:0}
 .stat .k{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted)}
 .stat .v{font-size:17px;font-weight:600}
 .v.pos{color:var(--jade)}.v.neg{color:var(--verm)}
 .flash{animation:flash 1s ease-out}
 @keyframes flash{from{background:rgba(217,164,65,.25)}to{background:transparent}}
 /* walls */
-.walls{margin-top:16px}
+/* overflow-x is the backstop: tag text is data-driven, so a long enough
+   chip run scrolls inside the block rather than over it. */
+.walls{margin-top:16px;min-width:0;overflow-x:auto}
 table{width:100%;border-collapse:collapse;font-size:12.5px}
 th{text-align:left;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;
   color:var(--muted);font-weight:500;padding:4px 8px;border-bottom:1px solid var(--line)}
@@ -1552,7 +1561,7 @@ function regimeBlock(s,key,r){
       <span class="regime ${r.regime}">${r.regime} gamma</span>
       <span class="role">${r.role||""}</span>
     </div>
-    <div class="grid">
+    <div class="rbody">
       <div class="stats">
         <div class="stat"><div class="k">Net GEX</div><div class="v ${gexClass}" data-k="${s.symbol}-${key}-gex">${r.net_gex_str}</div></div>
         <div class="stat"><div class="k">Flip</div><div class="v">${r.flip!==null&&r.flip!==undefined?r.flip.toFixed(2):"—"}${r.flip_dist!==null&&r.flip_dist!==undefined?` <span style="font-size:12px;color:var(--muted)">(${r.flip_dist>0?"+":""}${r.flip_dist}%)</span>`:""}${r.flip_pre!==null&&r.flip_pre!==undefined?` <span class="pre" style="font-size:12px">${(+r.flip_pre).toFixed(2)}</span>`:""}</div></div>
