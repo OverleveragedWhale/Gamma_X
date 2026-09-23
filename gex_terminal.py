@@ -563,8 +563,28 @@ def build_regime(contracts, spot, today, prior, disp, ref_spot=None):
                     if ref > 0 and abs(kk - ref) / spot <= WALL_CONFLUENCE_TOL:
                         conf = name
                         break
+            # A strike carries call AND put gamma; ranking a wall on one side
+            # alone hides how much of it the other side cancels. ES 8,071 was
+            # a 35.63B call wall with 29.45B of put gamma on the same strike -
+            # 6.18B net - and 7,834 ranked as the second largest call wall
+            # while being net SHORT 5.48B. Both components are reported so the
+            # headline figure can be checked against them.
+            call_gex, put_gex = per[kk]["call"], per[kk]["put"]
+            net = call_gex - put_gex
             w = {"strike": disp(kk), "strike_pre": round(kk, 2),
                  "gex": v, "gex_str": fmt_dollars(v),
+                 "call_gex": call_gex, "call_str": fmt_dollars(call_gex),
+                 "put_gex": put_gex, "put_str": fmt_dollars(put_gex),
+                 "net_gex": net, "net_str": fmt_dollars(net),
+                 # How much of the ranked side survives netting, signed so
+                 # that it reads the same for both sides: 1.0 is uncontested,
+                 # near 0 is a wall the other side has almost entirely
+                 # cancelled, and negative means the other side owns the
+                 # strike outright. A put wall's net is negative by nature, so
+                 # it is negated here - without that every put wall would
+                 # score below zero and the flag would say nothing.
+                 "net_frac": round((net if side == "call" else -net) / v, 2)
+                             if v else None,
                  "dist": round(100 * off / ref_spot, 2),
                  "lead": round(ratio, 1) if (i == 0 and ratio) else None,
                  "conf": conf}
@@ -1284,6 +1304,10 @@ th{text-align:left;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase
 td{padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.04)}
 td.num{text-align:right}
 .side-c{color:var(--jade)}.side-p{color:var(--verm)}
+.split{font-size:11px;white-space:nowrap}
+.split .sep{color:var(--muted);opacity:.6}
+.chip.cut{color:var(--brass);border-color:rgba(217,164,65,.4)}
+.chip.flip{color:var(--stress);border-color:rgba(255,93,99,.45)}
 tr.spotrow td{color:var(--ink);font-weight:700;letter-spacing:.06em;
   background:rgba(255,255,255,.05);
   border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
@@ -1352,9 +1376,18 @@ function wallRow(w){
   let chips="";
   if(w.lead) chips+=`<span class="chip">${w.lead>=2?"dominant":"lead"} x${w.lead}</span>`;
   if(w.conf) chips+=` <span class="chip conf">~${w.conf}</span>`;
+  // net_frac is how much of the ranked side survives netting. At or below
+  // zero the opposite side owns the strike outright despite it being listed
+  // here, which is worth saying rather than leaving to the reader's
+  // arithmetic across two columns.
+  if(w.net_frac!==null&&w.net_frac!==undefined&&w.net_frac<0.35)
+    chips+=` <span class="chip ${w.net_frac<=0?"flip":"cut"}">`
+        +`${w.net_frac<=0?"net "+((w.net_gex||0)>0?"call":"put"):"offset"}</span>`;
   return `<tr><td class="side-${w.side[0]}">${w.side.toUpperCase()}</td>`
     +`<td class="num">${(+w.strike).toFixed(0)}</td>`
-    +`<td class="num">${w.gex_str}</td>`
+    +`<td class="num ${(w.net_gex||0)>=0?"pos":"neg"}"><b>${w.net_str}</b></td>`
+    +`<td class="num split"><span class="side-c">${w.call_str}</span>`
+    +` <span class="sep">/</span> <span class="side-p">${w.put_str}</span></td>`
     +`<td class="num">${w.dist>0?"+":""}${w.dist}%</td>`
     +`<td class="num pre">${w.strike_pre!==undefined&&w.strike_pre!==null?(+w.strike_pre).toFixed(2):"\u2014"}</td>`
     +`<td>${chips}</td></tr>`;
@@ -1386,7 +1419,7 @@ function spotRow(spot, spotPre){
   if(spot==null) return "";
   return `<tr class="spotrow"><td>SPOT</td>`
     +`<td class="num">${(+spot).toFixed(2)}</td>`
-    +`<td class="num">—</td><td class="num">0.00%</td>`
+    +`<td class="num">—</td><td class="num">&mdash;</td><td class="num">0.00%</td>`
     +`<td class="num pre">${spotPre!==undefined&&spotPre!==null?(+spotPre).toFixed(2):"\u2014"}</td>`
     +`<td></td></tr>`;
 }
@@ -1408,7 +1441,7 @@ function regimeBlock(s,key,r){
         <div class="stat"><div class="k">Flip</div><div class="v">${r.flip!==null&&r.flip!==undefined?r.flip.toFixed(2):"—"}${r.flip_dist!==null&&r.flip_dist!==undefined?` <span style="font-size:12px;color:var(--muted)">(${r.flip_dist>0?"+":""}${r.flip_dist}%)</span>`:""}${r.flip_pre!==null&&r.flip_pre!==undefined?` <span class="pre" style="font-size:12px">${(+r.flip_pre).toFixed(2)}</span>`:""}</div></div>
       </div>
       <div>
-        <div class="walls"><table><thead><tr><th>Side</th><th class="num">Strike</th><th class="num">GEX</th><th class="num">Dist</th><th class="num">${chainName(s)}</th><th>Tags</th></tr></thead>
+        <div class="walls"><table><thead><tr><th>Side</th><th class="num">Strike</th><th class="num">Net GEX</th><th class="num">Call / Put</th><th class="num">Dist</th><th class="num">${chainName(s)}</th><th>Tags</th></tr></thead>
         <tbody>${wallLadder(r.walls,s.spot,s.spot_pre)}</tbody></table></div>
         ${eff}
       </div>
