@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Author>Gamma_X</Author>
+    <Description>Shows a Windows notification when the snapshot publisher fails (started on demand by publish_snapshot.bat, which cannot show one itself from its non-interactive session), and every 15 minutes through the weekday session checks that runs are still succeeding. See tools/alert.ps1.</Description>
+    <URI>\Gamma_X Alert</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <!-- Watchdog: weekdays 09:00 to 17:15, every 15 minutes. A repetition is
+         fine here, unlike the snapshot tasks: this should NOT wake the PC,
+         only check while someone could see the notification. -->
+    <CalendarTrigger>
+      <Repetition>
+        <Interval>PT15M</Interval>
+        <Duration>PT8H15M</Duration>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+      <StartBoundary>2026-01-01T09:00:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByWeek>
+        <DaysOfWeek>
+          <Monday />
+          <Tuesday />
+          <Wednesday />
+          <Thursday />
+          <Friday />
+        </DaysOfWeek>
+        <WeeksInterval>1</WeeksInterval>
+      </ScheduleByWeek>
+    </CalendarTrigger>
+    <!-- A failure raised while nobody was signed in is still waiting in
+         alert.txt; show it at the next sign-in. -->
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>REPLACE\WITH_YOUR_USER</UserId>
+      <Delay>PT30S</Delay>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>REPLACE\WITH_YOUR_USER</UserId>
+      <!-- Runs in the signed-in desktop session - the only place a toast
+           can appear. No password stored, no network needed. -->
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>false</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT1M</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>wscript.exe</Command>
+      <Arguments>"C:\GammaX\Gamma_X\tools\alert_hidden.vbs"</Arguments>
+    </Exec>
+  </Actions>
+</Task>

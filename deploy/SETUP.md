@@ -160,6 +160,27 @@ while doing nothing at all.
 Windows re-asks for the password on every update of such a task. There is no
 way around it and no way to store it in the repo.
 
+### Failure notifications
+
+A third task, `Gamma_X Alert`, raises a Windows notification with the reason:
+
+- **When a run fails.** The publisher cannot show a toast itself — a
+  `LogonType=Password` task runs in a non-interactive session — so it writes
+  the reason to `<Root>\alert.txt` and starts `Gamma_X Alert`, which runs as
+  `InteractiveToken` on the desktop and shows it with the tail of that run's
+  log. The same reason is not repeated within an hour.
+- **When runs stop.** Every 15 minutes through the weekday session it checks
+  `<Root>\last_ok.txt`; if no run has succeeded for 35 minutes it says so,
+  with Task Scheduler's last result for each task (a changed Windows password
+  shows up here as `0x8007052E`). This covers what the publisher cannot report
+  itself: the PC asleep or off, the task skipped for no network, a run killed
+  at the 3 minute limit. It notifies once per outage, and again when runs
+  resume.
+
+The `InteractiveToken` caveat above does not bite here: this task is meant to
+run only while someone is at the desktop, and never wakes the PC. Nothing
+leaves the machine; state is in `<Root>\alert_state.json`.
+
 ---
 
 ## Checking it works
@@ -167,7 +188,7 @@ way around it and no way to store it in the repo.
 ```powershell
 # every scheduled run across both tasks - should be 50 times, 15 min apart
 # through the session and 5 min apart from 15:00
-Get-ScheduledTask | Where-Object { $_.TaskName -like "Gamma_X*" } |
+Get-ScheduledTask | Where-Object { $_.TaskName -like "Gamma_X Snapshot*" } |
   ForEach-Object { $_.Triggers.StartBoundary } |
   ForEach-Object { ([datetime]$_).ToString("HH:mm") } | Sort-Object
 

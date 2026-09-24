@@ -37,6 +37,9 @@ set "PY=py -3"
 
 for /f "tokens=* usebackq" %%t in (`powershell -NoProfile -Command "Get-Date -Format 'yyyy-MM-dd HH:mm:ss'"`) do set "NOW=%%t"
 echo [%NOW%] --- run start >> "%LOG%"
+rem Read by tools\alert.ps1: a start newer than the last success means runs
+rem are starting and not finishing, as opposed to not starting at all.
+> "%ROOT%\last_start.txt" echo %NOW%
 
 rem Hold the machine awake across the session. This has to ride the publisher
 rem rather than its own scheduled task: WakeToRun wakes the PC for a trigger's
@@ -52,15 +55,26 @@ rem never a working copy. Keeps this machine from diverging if the GitHub
 rem fallback workflow pushed in the meantime.
 cd /d "%PUB%"
 if errorlevel 1 (
-  echo [%NOW%] ERROR: cannot enter %PUB% >> "%LOG%"
+  call :alert ERROR "cannot enter %PUB%"
   exit /b 1
 )
 git fetch origin snapshot >> "%LOG%" 2>&1
+if errorlevel 1 (
+  rem Checked because it is the first thing to touch the network: a failure
+  rem here names the real cause, where carrying on would surface it later as
+  rem a confusing generation or push error.
+  call :alert ERROR "cannot reach GitHub - fetch of the snapshot branch failed"
+  exit /b 1
+)
 git reset --hard origin/snapshot >> "%LOG%" 2>&1
+if errorlevel 1 (
+  call :alert ERROR "could not reset the snapshot clone to origin/snapshot"
+  exit /b 1
+)
 
 cd /d "%REPO%"
 if errorlevel 1 (
-  echo [%NOW%] ERROR: cannot enter %REPO% >> "%LOG%"
+  call :alert ERROR "cannot enter %REPO%"
   exit /b 1
 )
 rem Fast-forward code and config pushed while this machine was away - margin
@@ -70,7 +84,7 @@ rem rather than a skipped run: publishing slightly stale code beats publishing
 rem nothing.
 git fetch origin main >> "%LOG%" 2>&1
 git merge --ff-only origin/main >> "%LOG%" 2>&1
-if errorlevel 1 echo [%NOW%] WARN: could not fast-forward main >> "%LOG%"
+if errorlevel 1 call :alert WARN "could not fast-forward main - publishing with the code already here"
 
 rem --skip-unchanged leaves index.html untouched when the figures match what it
 rem already holds, so the git check below publishes only when the numbers
@@ -79,7 +93,7 @@ rem all; how often the quotes themselves move is what tools/probe_feed.py
 rem measures. Keeping this on bounds the GitHub Pages rebuild rate either way.
 %PY% gex_terminal.py --snapshot "%PUB%\index.html" --skip-unchanged >> "%LOG%" 2>&1
 if errorlevel 1 (
-  echo [%NOW%] ERROR: snapshot generation failed >> "%LOG%"
+  call :alert ERROR "snapshot generation failed"
   exit /b 1
 )
 
@@ -88,6 +102,7 @@ git add index.html data.json >> "%LOG%" 2>&1
 git diff --cached --quiet
 if not errorlevel 1 (
   echo [%NOW%] no change, nothing to publish >> "%LOG%"
+  call :ok
   exit /b 0
 )
 
@@ -96,16 +111,37 @@ if errorlevel 1 (
   rem Without this the failed commit falls through to a push that says
   rem "Everything up-to-date", exits 0, and the run logs "published"
   rem while the page never changed.
-  echo [%NOW%] ERROR: commit failed, nothing published >> "%LOG%"
+  call :alert ERROR "commit failed, nothing published"
   exit /b 1
 )
 git push origin snapshot >> "%LOG%" 2>&1
 if errorlevel 1 (
-  rem Most likely the fallback workflow pushed first. The next run resets to
-  rem the remote and republishes, so leave it rather than forcing.
-  echo [%NOW%] WARN: push rejected, will retry next run >> "%LOG%"
+  rem Either the fallback workflow pushed first - the next run resets to the
+  rem remote and republishes, so leave it rather than forcing - or the stored
+  rem GitHub credential is gone, which never fixes itself. The notification
+  rem carries git's own message, which tells the two apart.
+  call :alert WARN "push failed, will retry next run"
   exit /b 1
 )
 
 echo [%NOW%] published >> "%LOG%"
+call :ok
+exit /b 0
+
+rem ---------------------------------------------------------------------------
+rem A run that got as far as a clean exit. tools\alert.ps1 judges staleness
+rem from this.
+:ok
+> "%ROOT%\last_ok.txt" echo %NOW%
+exit /b 0
+
+rem Log a failure and raise a desktop notification. This task runs in a
+rem non-interactive session where a toast cannot appear, so it leaves the
+rem reason in alert.txt and starts the Gamma_X Alert task, which runs on the
+rem desktop and shows it with the tail of this run's log. %1 = ERROR or WARN,
+rem %2 = the reason, quoted.
+:alert
+echo [%NOW%] %~1: %~2 >> "%LOG%"
+> "%ROOT%\alert.txt" echo %~1: %~2
+schtasks /run /tn "Gamma_X Alert" >nul 2>&1
 exit /b 0

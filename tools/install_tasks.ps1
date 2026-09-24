@@ -37,7 +37,10 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 # wake-from-sleep, which is precisely when it was needed.
 $tasks = @(
     @{ File = "GammaX-Snapshot.xml";       Name = "Gamma_X Snapshot";       NeedsPassword = $true },
-    @{ File = "GammaX-Snapshot-Close.xml"; Name = "Gamma_X Snapshot Close"; NeedsPassword = $true }
+    @{ File = "GammaX-Snapshot-Close.xml"; Name = "Gamma_X Snapshot Close"; NeedsPassword = $true },
+    # Desktop notifications. InteractiveToken, so no password: the snapshot
+    # tasks cannot show a toast from their session and start this one instead.
+    @{ File = "GammaX-Alert.xml";          Name = "Gamma_X Alert";          NeedsPassword = $false }
 )
 
 # Asked once and reused. Windows re-asks on every update of a Password task,
@@ -59,9 +62,15 @@ foreach ($t in $tasks) {
     # can be imported by hand through taskschd.msc, but a second machine may
     # well put the tree somewhere else, and a task pointing at a path that
     # does not exist fails with 0x2 long after anyone is watching.
-    $bat = Join-Path $here "publish_snapshot.bat"
-    if (-not (Test-Path $bat)) { throw "publish_snapshot.bat not found next to this script ($bat)" }
-    $xml = $xml -replace '<Command>[^<]*</Command>', "<Command>$bat</Command>"
+    if ($t.NeedsPassword) {
+        $bat = Join-Path $here "publish_snapshot.bat"
+        if (-not (Test-Path $bat)) { throw "publish_snapshot.bat not found next to this script ($bat)" }
+        $xml = $xml -replace '<Command>[^<]*</Command>', "<Command>$bat</Command>"
+    } else {
+        # The alert task runs wscript.exe; it is the ARGUMENT that points here.
+        $vbs = Join-Path $here "alert_hidden.vbs"
+        $xml = $xml -replace '<Arguments>[^<]*</Arguments>', "<Arguments>&quot;$vbs&quot;</Arguments>"
+    }
 
     try {
         if ($t.NeedsPassword) {
@@ -70,12 +79,14 @@ foreach ($t in $tasks) {
             # edit one of these in place without it.
             # The XML ships a placeholder so the repo is not machine-specific;
             # point it at whoever is actually installing.
-            $xml = $xml -replace '<UserId>REPLACE\WITH_YOUR_USER</UserId>',
+            $xml = $xml -replace '<UserId>REPLACE\\WITH_YOUR_USER</UserId>',
                                  "<UserId>$($cred.UserName)</UserId>"
             Register-ScheduledTask -TaskName $t.Name -Xml $xml -Force `
                 -User $cred.UserName `
                 -Password $cred.GetNetworkCredential().Password | Out-Null
         } else {
+            $xml = $xml -replace '<UserId>REPLACE\\WITH_YOUR_USER</UserId>',
+                                 "<UserId>$env:USERNAME</UserId>"
             Register-ScheduledTask -TaskName $t.Name -Xml $xml -Force | Out-Null
         }
         $info = Get-ScheduledTaskInfo -TaskName $t.Name
@@ -84,7 +95,7 @@ foreach ($t in $tasks) {
         # inside them, and a registration that silently kept only some of them
         # would look exactly like the sleep problem it was meant to fix:
         # snapshots quietly missing for part of the day.
-        $want = ([regex]::Matches((Get-Content $path -Raw), '<CalendarTrigger>')).Count
+        $want = ([regex]::Matches((Get-Content $path -Raw), '<(Calendar|Logon)Trigger>')).Count
         $got  = (Get-ScheduledTask -TaskName $t.Name).Triggers.Count
         "{0,-20} registered, {1}/{2} triggers, next run {3}" -f $t.Name, $got, $want, $info.NextRunTime
         if ($got -ne $want) {
@@ -108,7 +119,7 @@ Get-ScheduledTask | Where-Object { $_.TaskName -like "Gamma_X*" } | ForEach-Obje
     "  {0,-24} state={1,-8} triggers={2,-3} next={3}" -f $_.TaskName, $_.State, $n, $i.NextRunTime
 }
 
-$total = (Get-ScheduledTask | Where-Object { $_.TaskName -like "Gamma_X*" } |
+$total = (Get-ScheduledTask | Where-Object { $_.TaskName -like "Gamma_X Snapshot*" } |
           ForEach-Object { $_.Triggers.Count } | Measure-Object -Sum).Sum
 ""
 if ($failed.Count) {
@@ -116,7 +127,7 @@ if ($failed.Count) {
     $failed | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
     exit 1
 }
-Write-Host "All tasks registered. $total triggers across all Gamma_X tasks." -ForegroundColor Green
+Write-Host "All tasks registered. $total triggers across the Gamma_X Snapshot tasks." -ForegroundColor Green
 if ($total -lt 50) {
     Write-Warning "Expected 50. Fewer means a task is missing or partly registered."
 }

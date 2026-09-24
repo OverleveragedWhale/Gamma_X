@@ -59,24 +59,39 @@ Step 1 "Checking prerequisites"
 # The launcher takes "-3" to select Python 3; python.exe does not and would
 # choke on it, so the version selector travels with the executable rather than
 # being hardcoded at each call site.
-$py = Get-Command py -ErrorAction SilentlyContinue
-if ($py) {
-    $pyExe = $py.Source
-    $pyArgs = @("-3")
-} else {
-    $py = Get-Command python -ErrorAction SilentlyContinue
-    if ($py) {
-        $pyExe = $py.Source
-        $pyArgs = @()
+#
+# Each candidate is actually run, not just located: a fresh Windows install
+# puts a Microsoft Store stub python.exe in WindowsApps on PATH, which only
+# prints "Python was not found" and exits 9009, and "py" can exist with no
+# Python 3 behind it.
+$pyExe = $null
+$pyVer = $null
+$candidates = @(
+    @{ Name = "py";      Args = @("-3") },
+    @{ Name = "python";  Args = @() },
+    @{ Name = "python3"; Args = @() }
+)
+foreach ($c in $candidates) {
+    $cmd = Get-Command $c.Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $cmd) { continue }
+    try {
+        $v = & $cmd.Source @($c.Args) -c "import sys; print('.'.join(map(str, sys.version_info[:3])))" 2>$null
+    } catch {
+        continue
+    }
+    if ($LASTEXITCODE -eq 0 -and $v) {
+        $pyExe  = $cmd.Source
+        $pyArgs = $c.Args
+        $pyVer  = "$v".Trim()
+        break
     }
 }
-if (-not $py) {
+if (-not $pyExe) {
     Fail "Python 3 not found. Install from https://www.python.org/downloads/"
-    Fail "and tick 'Add python.exe to PATH', then run this again."
+    Fail "and tick 'Add python.exe to PATH', then open a NEW PowerShell window"
+    Fail "and run this again. (The Microsoft Store 'python' shortcut does not count.)"
     exit 1
 }
-$pyVer = & $pyExe @pyArgs -c "import sys; print('.'.join(map(str, sys.version_info[:3])))"
-if ($LASTEXITCODE -ne 0 -or -not $pyVer) { Fail "Could not run $pyExe"; exit 1 }
 if ([version]$pyVer -lt [version]"3.9") {
     # zoneinfo landed in 3.9; the dashboard has no fallback for older.
     Fail "Python $pyVer is too old - 3.9 or newer is required."
@@ -91,6 +106,21 @@ if (-not $git) {
     exit 1
 }
 Ok "$((git --version)) at $($git.Source)"
+
+# A fresh Git install has no identity, and without one every snapshot commit
+# fails - the page is generated, then silently never published. The scheduled
+# task runs as this same Windows user, so the global setting covers it.
+$gitName  = git config --global user.name
+$gitEmail = git config --global user.email
+if (-not $gitName -or -not $gitEmail) {
+    Warn "Git has no commit identity yet - snapshots cannot be committed without one."
+    if (-not $gitName)  { $gitName  = Read-Host "      Name for commits (e.g. your GitHub display name)" }
+    if (-not $gitEmail) { $gitEmail = Read-Host "      Email for commits (your GitHub email)" }
+    if (-not $gitName -or -not $gitEmail) { Fail "A name and email are both required."; exit 1 }
+    git config --global user.name  $gitName
+    git config --global user.email $gitEmail
+}
+Ok "commits as  $gitName <$gitEmail>"
 
 # The schedule is written in wall-clock time, so the machine has to agree with
 # the exchange about what 09:15 means. This is the single most likely thing to
@@ -126,7 +156,13 @@ if (-not (Test-Path $Root)) { New-Item -ItemType Directory -Path $Root -Force | 
 if (Test-Path (Join-Path $repoDir ".git")) {
     Ok "repo already at $repoDir - fetching"
     git -C $repoDir fetch origin main --quiet
+    if ($LASTEXITCODE -ne 0) { Fail "git fetch failed in $repoDir"; exit 1 }
     git -C $repoDir merge --ff-only origin/main --quiet
+    if ($LASTEXITCODE -ne 0) {
+        Fail "Could not fast-forward $repoDir to origin/main - it has local"
+        Fail "commits or changes. Sort that out (git status) and run this again."
+        exit 1
+    }
 } else {
     git clone --quiet $RepoUrl $repoDir
     if ($LASTEXITCODE -ne 0) { Fail "clone failed"; exit 1 }
@@ -151,6 +187,14 @@ if ($SkipFirstRun) {
     Step 4 "First run - a browser may open for GitHub sign-in"
     Warn "Sign in if prompted. The credential goes to Windows Credential Manager;"
     Warn "nothing is written to disk here, and the scheduled task reuses it."
+    # Sign in up front rather than relying on the publisher's push to trigger
+    # it: when the figures are unchanged the publisher never pushes, so no
+    # prompt appears and the scheduled task later fails with no credential.
+    $hasCred = git credential-manager github list
+    if (-not $hasCred) {
+        git credential-manager github login --browser
+        if ($LASTEXITCODE -ne 0) { Fail "GitHub sign-in failed - the task will not be able to push."; exit 1 }
+    }
     & (Join-Path $repoDir "tools\publish_snapshot.bat")
     if ($LASTEXITCODE -eq 0) {
         Ok "published successfully - the pipeline works on this machine"
@@ -169,6 +213,7 @@ if ($SkipTask) {
     Warn "task must run with LogonType=Password: an S4U task has no network, so"
     Warn "it could neither fetch quotes nor push to GitHub."
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoDir "tools\install_tasks.ps1")
+    if ($LASTEXITCODE -ne 0) { Fail "install_tasks.ps1 exited $LASTEXITCODE - read its output above." }
 }
 
 # -------------------------------------------------------------- 6. summary
@@ -182,8 +227,8 @@ $tasks = Get-ScheduledTask | Where-Object { $_.TaskName -like "Gamma_X*" }
 if ($tasks) {
     $total = 0
     foreach ($t in $tasks) {
-        $i = Get-ScheduledTaskInfo -TaskName $t.TaskName
-        $total += $t.Triggers.Count
+        $i = $t | Get-ScheduledTaskInfo
+        if ($t.TaskName -like "Gamma_X Snapshot*") { $total += $t.Triggers.Count }
         Ok "task         $($t.TaskName) state=$($t.State) triggers=$($t.Triggers.Count) next=$($i.NextRunTime)"
     }
     if ($total -lt 50) {
