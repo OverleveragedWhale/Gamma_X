@@ -1,9 +1,12 @@
 @echo off
 setlocal enabledelayedexpansion
 
-rem Keep the machine awake across the session. Argument is minutes of idle
-rem sleep, or "auto" to pick from the clock: 0 (never sleep) on a weekday
-rem between 09:00 and 17:15, else 10.
+rem Keep the machine awake. Argument is minutes of idle sleep, or "auto",
+rem which is 0 (never sleep) at all hours. It used to be 0 only on weekdays
+rem 09:00-17:15 and 10 otherwise, but this machine is meant to stay on around
+rem the clock with the lid closed - lid action "Do nothing", locked on lid
+rem close instead - and the off-hours 10 kept re-enabling sleep behind that
+rem setting after every run.
 rem
 rem Why this exists: Task Scheduler's WakeToRun wakes the machine for a
 rem trigger's START BOUNDARY only. Repetition instances inside a trigger's
@@ -55,9 +58,7 @@ if "%ARG%"=="" (
 )
 
 if /i "%ARG%"=="auto" (
-  for /f "tokens=* usebackq" %%w in (`powershell -NoProfile -Command ^
-    "$n=Get-Date; $d=[int]$n.DayOfWeek; $t=$n.TimeOfDay;" ^
-    "if ($d -ge 1 -and $d -le 5 -and $t -ge [timespan]'09:00:00' -and $t -lt [timespan]'17:15:00') { 0 } else { 10 }"`) do set "MINS=%%w"
+  set "MINS=0"
 ) else (
   set "MINS=%ARG%"
 )
