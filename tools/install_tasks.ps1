@@ -40,6 +40,14 @@ foreach ($t in $tasks) {
 
     $xml = (Get-Content $path -Raw) -replace 'encoding="UTF-8"', 'encoding="UTF-16"'
 
+    # Point the action at THIS checkout. The XML ships an absolute path so it
+    # can be imported by hand through taskschd.msc, but a second machine may
+    # well put the tree somewhere else, and a task pointing at a path that
+    # does not exist fails with 0x2 long after anyone is watching.
+    $bat = Join-Path $here "publish_snapshot.bat"
+    if (-not (Test-Path $bat)) { throw "publish_snapshot.bat not found next to this script ($bat)" }
+    $xml = $xml -replace '<Command>[^<]*</Command>', "<Command>$bat</Command>"
+
     try {
         if ($t.NeedsPassword) {
             # Needs the Windows account password to mint a network-capable token.

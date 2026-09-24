@@ -25,10 +25,15 @@ rem      and did nothing on a wake-from-sleep. See market_sleep.bat.
 rem
 rem Adjust these four paths if you cloned somewhere else.
 
-set "REPO=C:\GammaX\Gamma_X"
-set "PUB=C:\GammaX\Gamma_X-snapshot"
+rem Every path is derived from this script's own location, so the tree can
+rem live anywhere: tools\ -> repo root -> the parent that holds both clones.
+rem Nothing here is machine-specific, which is what lets a second PC run the
+rem same checkout without edits.
+for %%I in ("%~dp0..") do set "REPO=%%~fI"
+for %%I in ("%REPO%\..") do set "ROOT=%%~fI"
+set "PUB=%ROOT%\Gamma_X-snapshot"
+set "LOG=%ROOT%\publish.log"
 set "PY=py -3"
-set "LOG=C:\GammaX\publish.log"
 
 for /f "tokens=* usebackq" %%t in (`powershell -NoProfile -Command "Get-Date -Format 'yyyy-MM-dd HH:mm:ss'"`) do set "NOW=%%t"
 echo [%NOW%] --- run start >> "%LOG%"

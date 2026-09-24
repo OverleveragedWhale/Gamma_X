@@ -37,8 +37,15 @@ rem snapshot task runs as LogonType=Password, which does wake and run.
 rem
 rem powercfg needs no elevation: it edits the calling user's own active scheme.
 
-set "LOG=C:\GammaX\publish.log"
+rem Same derivation as publish_snapshot.bat, so this works standalone too.
+for %%I in ("%~dp0..\..") do set "ROOT=%%~fI"
+set "LOG=%ROOT%\publish.log"
 set "ARG=%~1"
+
+rem Setting GUIDs under SUB_SLEEP. Needed because the read-back goes to the
+rem registry rather than to powercfg /query - see :read_val.
+set "G_IDLE=29f6c1db-86da-48c5-9fdb-f2b67b1f44da"
+set "G_UNATT=7bc4a2f9-d8fc-4469-b07b-33eb785aaca0"
 
 for /f "tokens=* usebackq" %%t in (`powershell -NoProfile -Command "Get-Date -Format 'yyyy-MM-dd HH:mm:ss'"`) do set "NOW=%%t"
 
@@ -64,8 +71,8 @@ if "!MINS!"=="0" (set "WANT_UNATT=0") else (set "WANT_UNATT=120")
 
 rem Read both before touching anything, so an unchanged scheme is a no-op
 rem rather than a line in the log on every one of the day's 50 runs.
-call :read_val STANDBYIDLE AC CUR_IDLE
-call :read_val UNATTENDSLEEP AC CUR_UNATT
+call :read_val !G_IDLE! AC CUR_IDLE
+call :read_val !G_UNATT! AC CUR_UNATT
 if "!CUR_IDLE!"=="!WANT!" if "!CUR_UNATT!"=="!WANT_UNATT!" exit /b 0
 
 rem Attended idle, both power sources. A portable machine that drops to
@@ -92,8 +99,8 @@ rem Read back rather than trust the exit codes. A silently ignored change here
 rem is the whole failure mode this is meant to prevent, and it would otherwise
 rem only show up as missing snapshots hours later. Some OEM images lock the
 rem unattended timer; if that is happening, this line is where it says so.
-call :read_val STANDBYIDLE AC GOT_IDLE
-call :read_val UNATTENDSLEEP AC GOT_UNATT
+call :read_val !G_IDLE! AC GOT_IDLE
+call :read_val !G_UNATT! AC GOT_UNATT
 if "!GOT_IDLE!"=="!WANT!" if "!GOT_UNATT!"=="!WANT_UNATT!" (
   echo [%NOW%] idle sleep -^> !MINS! min, unattended -^> !WANT_UNATT!s >> "%LOG%"
   exit /b 0
@@ -102,10 +109,18 @@ if "!GOT_IDLE!"=="!WANT!" if "!GOT_UNATT!"=="!WANT_UNATT!" (
 echo [%NOW%] ERROR: asked idle=!WANT!s unattended=!WANT_UNATT!s, scheme reports idle=!GOT_IDLE!s unattended=!GOT_UNATT!s >> "%LOG%"
 exit /b 1
 
-rem %1 setting alias under SUB_SLEEP, %2 AC or DC, %3 variable to set.
+rem %1 setting GUID under SUB_SLEEP, %2 AC or DC, %3 variable to set.
+rem
+rem The registry, not powercfg /query. UNATTENDSLEEP ships hidden
+rem (Attributes=1), and powercfg omits a hidden setting from its output
+rem entirely rather than printing it - so the query-based read returned
+rem "unreadable" on every run and this script logged an ERROR and exited 1
+rem having actually done its job correctly. The per-scheme override is a
+rem plain DWORD of seconds and needs no elevation to read.
 :read_val
 for /f "tokens=* usebackq" %%v in (`powershell -NoProfile -Command ^
   "$g=(powercfg /getactivescheme) -replace '.*GUID: ([a-f0-9-]+).*','$1';" ^
-  "$v=(powercfg /query $g SUB_SLEEP %~1 ^| Select-String 'Current %~2 Power Setting Index');" ^
-  "if ($v) { [Convert]::ToInt32(($v.ToString() -split ':')[1].Trim(),16) } else { 'unreadable' }"`) do set "%~3=%%v"
+  "$p='HKLM:\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes\'+$g+'\238C9FA8-0AAD-41ED-83F4-97BE242C8F20\%~1';" ^
+  "$v=(Get-ItemProperty $p -ErrorAction SilentlyContinue).'%~2SettingIndex';" ^
+  "if ($null -ne $v) { [int]$v } else { 'unreadable' }"`) do set "%~3=%%v"
 goto :eof
