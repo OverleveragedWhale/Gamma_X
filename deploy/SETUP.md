@@ -86,22 +86,48 @@ generated page.
 
 ---
 
-## The scheduled task
+## The scheduled tasks
 
-50 triggers a weekday:
+50 runs a weekday, across **two** tasks:
 
-| Window | Cadence | Runs |
-|---|---|---|
-| 09:15 – 14:45 weekdays | every 15 min | 23 |
-| 15:00 – 16:45 weekdays | every 5 min | 22 |
-| 18:20 weekdays | once | 1 |
-| 00:00, 04:00, 08:00, 20:00 daily | — | 4 |
+| Task | Window | Cadence | Triggers |
+|---|---|---|---|
+| `Gamma_X Snapshot` | 09:15 – 14:45 weekdays | every 15 min | 23 |
+| | 18:20 weekdays | once | 1 |
+| | 00:00, 04:00, 08:00, 20:00 daily | — | 4 |
+| `Gamma_X Snapshot Close` | 15:00 – 16:45 weekdays | every 5 min | 22 |
 
 **Each occurrence is its own trigger, not a `<Repetition>`, and that is the
 whole point.** `WakeToRun` wakes a sleeping PC for a trigger's *start
 boundary* and never for a repetition inside a trigger's duration. Measured on
 this repo 09-21 to 09-23: every start boundary fired unattended, and **zero**
 repetitions did — the task landed 3 or 4 runs a day instead of 50.
+
+### Why two tasks and not one
+
+Task Scheduler accepts at most **48 triggers** in one task and rejects the
+whole document past that, with an error that never names the limit:
+
+```
+The task XML contains too many nodes of the same type.
+(680,7):CalendarTrigger:
+```
+
+Measured on Windows 11 26200 by registering the real file truncated to each
+length: 46, 47 and 48 register, 49 and 50 are rejected. The full day is 50, so
+it is split. Both tasks run the same publisher and their windows do not
+overlap — the narrowest gap is 15 minutes (14:45 → 15:00) against runs that
+take about ten seconds.
+
+**A rejected registration leaves the previous task in place**, still running
+its old schedule. That looks identical to working, which is how a 50-trigger
+file that had never once registered went unnoticed for two days.
+`install_tasks.ps1` now counts the triggers back off the registered task,
+prints failures in red, and exits non-zero. Regenerate with:
+
+```powershell
+py -3 tools\make_schedule.py     # refuses to write a file over 48 triggers
+```
 
 `publish_snapshot.bat` also calls `market_sleep.bat auto` on every run, which
 holds the machine awake 09:00–17:15 on weekdays. That needs **two** timers:
@@ -139,9 +165,11 @@ way around it and no way to store it in the repo.
 ## Checking it works
 
 ```powershell
-# next 15 scheduled runs - should be 15 minutes apart during the session
-(Get-ScheduledTask -TaskName "Gamma_X Snapshot").Triggers.StartBoundary |
-  ForEach-Object { ([datetime]$_).ToString("HH:mm") } | Sort-Object | Select-Object -First 15
+# every scheduled run across both tasks - should be 50 times, 15 min apart
+# through the session and 5 min apart from 15:00
+Get-ScheduledTask | Where-Object { $_.TaskName -like "Gamma_X*" } |
+  ForEach-Object { $_.Triggers.StartBoundary } |
+  ForEach-Object { ([datetime]$_).ToString("HH:mm") } | Sort-Object
 
 # what actually ran today
 Select-String "run start" C:\GammaX\publish.log | Select-Object -Last 20
@@ -159,7 +187,8 @@ The run count per day is the real test:
 
 On a full weekday that should approach 50. If you see 3 or 4, the registered
 task still has the old `<Repetition>` triggers — re-run
-`tools\install_tasks.ps1`.
+`tools\install_tasks.ps1` **and read its output**, since a rejected
+registration leaves the old task running.
 
 ---
 

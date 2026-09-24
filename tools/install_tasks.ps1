@@ -26,14 +26,29 @@ Two things about this that are not obvious:
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# One task. Idle sleep is handled inside publish_snapshot.bat rather than by
-# separate 09:00/17:15 tasks: those ran as InteractiveToken, and a task with
-# that logon type reports success without running its action when it fires on
-# a wake-from-sleep, which is precisely when it was needed.
+# Two tasks, because Task Scheduler rejects a document holding more than 48
+# triggers and the day is 50 runs. Measured on Windows 11 26200: 48 registers,
+# 49 does not, and the error never names the limit - it says "The task XML
+# contains too many nodes of the same type". Both run the same publisher.
+#
+# Idle sleep is handled inside publish_snapshot.bat rather than by separate
+# 09:00/17:15 tasks: those ran as InteractiveToken, and a task with that logon
+# type reports success without running its action when it fires on a
+# wake-from-sleep, which is precisely when it was needed.
 $tasks = @(
-    @{ File = "GammaX-Snapshot.xml";  Name = "Gamma_X Snapshot";   NeedsPassword = $true  }
+    @{ File = "GammaX-Snapshot.xml";       Name = "Gamma_X Snapshot";       NeedsPassword = $true },
+    @{ File = "GammaX-Snapshot-Close.xml"; Name = "Gamma_X Snapshot Close"; NeedsPassword = $true }
 )
 
+# Asked once and reused. Windows re-asks on every update of a Password task,
+# and there is no reason to make that two prompts for the same account.
+$cred = $null
+if ($tasks | Where-Object { $_.NeedsPassword }) {
+    $cred = Get-Credential -UserName "$env:USERNAME" `
+        -Message "Windows password for the Gamma_X tasks (needed to push to GitHub)"
+}
+
+$failed = @()
 foreach ($t in $tasks) {
     $path = Join-Path $here $t.File
     if (-not (Test-Path $path)) { Write-Warning "missing $($t.File), skipped"; continue }
@@ -50,11 +65,9 @@ foreach ($t in $tasks) {
 
     try {
         if ($t.NeedsPassword) {
-            # Needs the Windows account password to mint a network-capable token.
-            # Updating a LogonType=Password task always re-asks for it; there is
-            # no way to edit one of these in place without the credential.
-            $cred = Get-Credential -UserName "$env:USERNAME" `
-                -Message "Windows password for $($t.Name) (needed to push to GitHub)"
+            # The credential mints a network-capable token. Updating a
+            # LogonType=Password task always re-asks for it; there is no way to
+            # edit one of these in place without it.
             # The XML ships a placeholder so the repo is not machine-specific;
             # point it at whoever is actually installing.
             $xml = $xml -replace '<UserId>REPLACE\WITH_YOUR_USER</UserId>',
@@ -75,10 +88,15 @@ foreach ($t in $tasks) {
         $got  = (Get-ScheduledTask -TaskName $t.Name).Triggers.Count
         "{0,-20} registered, {1}/{2} triggers, next run {3}" -f $t.Name, $got, $want, $info.NextRunTime
         if ($got -ne $want) {
+            $failed += "$($t.Name): registered $got of $want triggers"
             Write-Warning "$($t.Name): registered $got of $want triggers - the schedule is incomplete"
         }
     } catch {
-        "{0,-20} FAILED: {1}" -f $t.Name, $_.Exception.Message
+        # Loud, and reflected in the exit code. A failure here used to scroll
+        # past among the success lines while the OLD task stayed registered and
+        # kept running its old schedule - which looks identical to working.
+        $failed += "$($t.Name): $($_.Exception.Message)"
+        Write-Host ("{0,-24} FAILED: {1}" -f $t.Name, $_.Exception.Message) -ForegroundColor Red
     }
 }
 
@@ -86,5 +104,19 @@ foreach ($t in $tasks) {
 "Installed:"
 Get-ScheduledTask | Where-Object { $_.TaskName -like "Gamma_X*" } | ForEach-Object {
     $i = Get-ScheduledTaskInfo -TaskName $_.TaskName
-    "  {0,-20} state={1,-8} next={2}" -f $_.TaskName, $_.State, $i.NextRunTime
+    $n = $_.Triggers.Count
+    "  {0,-24} state={1,-8} triggers={2,-3} next={3}" -f $_.TaskName, $_.State, $n, $i.NextRunTime
+}
+
+$total = (Get-ScheduledTask | Where-Object { $_.TaskName -like "Gamma_X*" } |
+          ForEach-Object { $_.Triggers.Count } | Measure-Object -Sum).Sum
+""
+if ($failed.Count) {
+    Write-Host "NOT INSTALLED CLEANLY:" -ForegroundColor Red
+    $failed | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+    exit 1
+}
+Write-Host "All tasks registered. $total triggers across all Gamma_X tasks." -ForegroundColor Green
+if ($total -lt 50) {
+    Write-Warning "Expected 50. Fewer means a task is missing or partly registered."
 }

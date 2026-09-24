@@ -176,13 +176,21 @@ Step 6 "Result"
 Ok "repo         $repoDir"
 Ok "snapshot     $pubDir"
 Ok "log          $(Join-Path $Root 'publish.log')"
-$t = Get-ScheduledTask -TaskName "Gamma_X Snapshot" -ErrorAction SilentlyContinue
-if ($t) {
-    $i = Get-ScheduledTaskInfo -TaskName "Gamma_X Snapshot"
-    Ok "task         state=$($t.State) triggers=$($t.Triggers.Count) next=$($i.NextRunTime)"
-    if ($t.Triggers.Count -lt 50) {
-        Warn "Expected 50 triggers. Fewer means an older XML is registered -"
-        Warn "re-run tools\install_tasks.ps1 from $repoDir."
+# Two tasks, 50 triggers between them - Task Scheduler refuses a document with
+# more than 48 in it, so the day is split. Count across both.
+$tasks = Get-ScheduledTask | Where-Object { $_.TaskName -like "Gamma_X*" }
+if ($tasks) {
+    $total = 0
+    foreach ($t in $tasks) {
+        $i = Get-ScheduledTaskInfo -TaskName $t.TaskName
+        $total += $t.Triggers.Count
+        Ok "task         $($t.TaskName) state=$($t.State) triggers=$($t.Triggers.Count) next=$($i.NextRunTime)"
+    }
+    if ($total -lt 50) {
+        Warn "$total triggers total, expected 50. An older XML is registered, or one"
+        Warn "task failed - re-run tools\install_tasks.ps1 from $repoDir and read"
+        Warn "its output: a rejected registration leaves the PREVIOUS task in place,"
+        Warn "which looks identical to working."
     }
 } else {
     Warn "task         not registered"
