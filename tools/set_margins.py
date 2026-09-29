@@ -23,7 +23,7 @@ import sys
 # Kept in step with INSTRUMENTS in gex_terminal.py by hand rather than by
 # import, so this stays a standalone script with no network-capable module
 # pulled in just to read a list of four strings.
-SYMBOLS = ("ES", "NQ", "GC", "CL")
+SYMBOLS = ("ES", "NQ", "GC")
 CONFIG = pathlib.Path(__file__).resolve().parent.parent / "config.ini"
 SECTION = "[margins]"
 NL = chr(10)

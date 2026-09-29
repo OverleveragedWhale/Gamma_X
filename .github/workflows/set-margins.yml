@@ -36,14 +36,6 @@ on:
         description: "GC margin per contract, down leg (USD)"
         required: false
         default: ""
-      cl_up:
-        description: "CL margin per contract, up leg (USD)"
-        required: false
-        default: ""
-      cl_down:
-        description: "CL margin per contract, down leg (USD)"
-        required: false
-        default: ""
 
 permissions:
   contents: write
@@ -72,12 +64,10 @@ jobs:
           NQ_DOWN: ${{ inputs.nq_down }}
           GC_UP: ${{ inputs.gc_up }}
           GC_DOWN: ${{ inputs.gc_down }}
-          CL_UP: ${{ inputs.cl_up }}
-          CL_DOWN: ${{ inputs.cl_down }}
         run: |
           set -euo pipefail
           args=()
-          for sym in ES NQ GC CL; do
+          for sym in ES NQ GC; do
             for side in UP DOWN; do
               var="${sym}_${side}"
               val="${!var:-}"

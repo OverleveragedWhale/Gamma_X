@@ -116,8 +116,6 @@ INSTRUMENTS = [
     # proxy is looser: see the ratio-noise note in compute_symbol.
     {"future": "GC",  "chain": "GLD",  "hist": "GLD",   "index": "GC=F",
      "fut": "GC=F",  "multiplier": 100,  "cycle": "gc",        "exch": ".CMX"},
-    {"future": "CL",  "chain": "USO",  "hist": "USO",   "index": "CL=F",
-     "fut": "CL=F",  "multiplier": 1000, "cycle": "cl",        "exch": ".NYM"},
 ]
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -290,6 +288,14 @@ def gc_expiry(year, month):
 
 def cl_expiry(year, month):
     """CL: 3 business days before the 25th of the month preceding delivery.
+
+    Nothing calls this today - CL was dropped from INSTRUMENTS because USO is
+    a poor proxy for it: USO's options open interest runs about 6.3x its
+    shares outstanding, so its walls carry far less information than the
+    equity or gold books. The rule is kept because it is non-obvious, was
+    verified against a published CME calendar, and would be needed again the
+    moment a usable CL chain appears.
+
 
     When the 25th is not a business day the rule counts back from the business
     day preceding it instead, which is what the step-back loop below gives.
@@ -1703,7 +1709,7 @@ def recompute():
 
     # One line covering every product, so the TradingView overlay is a single
     # copy and a single paste rather than one per chart:
-    #   ES=anchor,99%,99.9%;NQ=...;GC=...;CL=...
+    #   ES=anchor,99%,99.9%;NQ=...;GC=...
     # Products whose margins are unset simply do not appear, and the overlay
     # draws nothing for those rather than guessing.
     chips = []
