@@ -46,6 +46,9 @@ MAX_PAIN_DAILY_DAYS = 5      # max pain: every expiry inside this many days,
                              # and nothing but monthly opex beyond it
 SHARES_PER_CONTRACT = 100
 WALL_COUNT = 6               # ranked walls reported per side
+SHORT_DATED_DAYS = 2         # "about to expire" for the gamma-concentration
+                             # share: 0-2 DTE was 51% of NQ's near-bucket
+                             # gamma on 2026-09-28 against 33% of its OI
 MIN_WALL_SEP = 0.004         # min gap between reported walls (0.4% of spot)
 WALL_CONFLUENCE_TOL = 0.0015  # wall within 0.15% of prior H/L/C = confluence
 PRIOR_SESSION_ROWS = 5        # daily bars kept for prior close + chain-scale ratio
@@ -403,12 +406,19 @@ def contract_gex(gamma, oi, spot):
     return gamma * oi * SHARES_PER_CONTRACT * spot * spot * 0.01
 
 
-def gex_by_strike(contracts, spot):
+def gex_by_strike(contracts, spot, today=None):
+    """Call and put GEX per strike, plus how much of the strike's gamma is
+    about to expire when `today` is given (used to tag short-dated walls)."""
     per = {}
     for c in contracts:
         g = contract_gex(c["gamma"], c["oi"], spot)
-        d = per.setdefault(c["strike"], {"call": 0.0, "put": 0.0})
+        d = per.setdefault(c["strike"], {"call": 0.0, "put": 0.0,
+                                         "mag": 0.0, "short": 0.0})
         d["call" if c["cp"] == "C" else "put"] += g
+        if today is not None:
+            d["mag"] += abs(g)
+            if (c["exp"] - today).days <= SHORT_DATED_DAYS:
+                d["short"] += abs(g)
     return per
 
 
@@ -428,17 +438,26 @@ def top_walls(per, side, spot, n=None, min_sep=None, ref=None, half=None):
     n = n if n is not None else WALL_COUNT
     min_sep = min_sep if min_sep is not None else MIN_WALL_SEP
     ref = ref if ref is not None else spot
-    ranked = sorted(per.items(), key=lambda kv: kv[1][side], reverse=True)
+    # Ranked on NET gamma at the strike, not one side's gross. A strike with
+    # huge call open interest ranked first even when put OI at the same strike
+    # all but cancelled it: ES 8,071 showed as a 35.63B call wall carrying
+    # 29.45B of put gamma - 6.18B net - while 7,834 ranked second on gross and
+    # was net SHORT 5.48B. The NET column already said so; the ordering now
+    # agrees with it rather than contradicting it.
+    other = "put" if side == "call" else "call"
+    def net_at(v):
+        return v[side] - v[other]
+    ranked = sorted(per.items(), key=lambda kv: net_at(kv[1]), reverse=True)
     kept = []
     for k, v in ranked:
-        if v[side] <= 0:
+        if net_at(v) <= 0:
             break
         if half == "above" and k <= ref:
             continue
         if half == "below" and k > ref:
             continue
         if all(abs(k - kk) / spot >= min_sep for kk, _ in kept):
-            kept.append((k, v[side]))
+            kept.append((k, net_at(v)))
         if len(kept) >= n:
             break
     return kept
@@ -515,6 +534,94 @@ def bs_gamma(S, K, T, sigma):
     return pdf / (S * sigma * math.sqrt(T))
 
 
+def bs_d2(S, K, T, sigma):
+    """d2 for the vanna/charm identities below, or None where BS is undefined."""
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return None
+    vt = sigma * math.sqrt(T)
+    return (math.log(S / K) + 0.5 * sigma * sigma * T) / vt - vt
+
+
+# Cboe publishes delta, gamma, theta, vega and rho - not vanna or charm. Both
+# are derived here from the vendor's OWN gamma rather than from a from-scratch
+# Black-Scholes vega, so they inherit whatever rate and dividend assumptions
+# Cboe used. Substituting phi(d1) = gamma*S*sigma*sqrt(T) into the textbook
+# forms makes the sigma cancel out of vanna entirely:
+#
+#     vanna = -phi(d1)*d2/sigma      = -gamma * S * sqrt(T) * d2
+#     charm =  phi(d1)*d2/(2T)       =  gamma * S * sigma * sqrt(T) * d2 / (2T)
+#
+# Both verified against finite differences of vega and delta to ~1e-9 across
+# ATM/OTM/ITM and 1-day to 60-day expiries.
+def contract_vanna(gamma, iv, spot, T, d2):
+    """d(delta)/d(sigma) per share: how dealer delta moves when IV moves."""
+    return -gamma * spot * math.sqrt(T) * d2
+
+
+def contract_charm(gamma, iv, spot, T, d2):
+    """d(delta)/dt per share per DAY: how dealer delta drifts as time passes.
+
+    Charm carries a 1/T, so the 0.5/365 floor that find_flip uses to keep
+    expiring contracts finite scales their charm directly - halve the floor and
+    their contribution doubles. That is not a rounding detail: on 2026-09-28,
+    contracts expiring that day were 18% of NQ's near-bucket charm and 3% of
+    ES's. The floor is kept because it is the same one the flip uses and a
+    single convention is easier to reason about than two, but a charm figure on
+    a heavy 0DTE day is a soft number and should be read as one.
+    """
+    return gamma * spot * iv * math.sqrt(T) * d2 / (2.0 * T) / 365.0
+
+
+def vanna_exposure(vanna, oi, spot):
+    """Dollar delta per 1 vol point (one percentage point of IV)."""
+    return vanna * oi * SHARES_PER_CONTRACT * spot * 0.01
+
+
+def charm_exposure(charm, oi, spot):
+    """Dollar delta per day of time passing."""
+    return charm * oi * SHARES_PER_CONTRACT * spot
+
+
+def flow_exposures(contracts, spot, today):
+    """Net vanna and charm for a bucket, and how concentrated its gamma is in
+    contracts about to expire.
+
+    Same dealer convention as GEX - long calls, short puts - so the three
+    numbers are read the same way and can be compared directly.
+
+    short_share answers a question the page could not previously ask: whether a
+    flip or a wall rests on gamma that survives the week. Measured 2026-09-28,
+    contracts with two days or less to run were 33% of NQ's near-bucket open
+    interest but 51% of its gamma. A level built on that is gone by Thursday;
+    one built on 30-day gamma is not, and until now both rendered identically.
+    """
+    vex = cex = 0.0
+    gex_all = gex_short = 0.0
+    for c in contracts:
+        gamma, iv = c["gamma"], c["iv"]
+        dte = (c["exp"] - today).days
+        mag = abs(contract_gex(gamma, c["oi"], spot))
+        gex_all += mag
+        if dte <= SHORT_DATED_DAYS:
+            gex_short += mag
+        if gamma <= 0 or iv <= 0:
+            continue
+        T = max(dte / 365.0, 0.5 / 365.0)
+        d2 = bs_d2(spot, c["strike"], T, iv)
+        if d2 is None:
+            continue
+        sign = 1.0 if c["cp"] == "C" else -1.0
+        vex += sign * vanna_exposure(
+            contract_vanna(gamma, iv, spot, T, d2), c["oi"], spot)
+        cex += sign * charm_exposure(
+            contract_charm(gamma, iv, spot, T, d2), c["oi"], spot)
+    return {
+        "vanna": vex,
+        "charm": cex,
+        "short_share": round(100.0 * gex_short / gex_all, 1) if gex_all else None,
+    }
+
+
 def build_regime(contracts, spot, today, prior, disp, ref_spot=None):
     """GEX/flip/walls for one bucket of contracts (chain terms in, disp() maps
     strikes/flip to display terms). Isolated so it can run once per expiration
@@ -534,8 +641,9 @@ def build_regime(contracts, spot, today, prior, disp, ref_spot=None):
                 "flip": None, "flip_dist": None,
                 "walls": {"call": [], "put": []}, "dispersed": []}
 
-    per = gex_by_strike(contracts, spot)
+    per = gex_by_strike(contracts, spot, today)
     net = sum(d["call"] - d["put"] for d in per.values())
+    flow = flow_exposures(contracts, spot, today)
     flip = find_flip(spot, contracts, today)
     out = {
         "net_gex": net,
@@ -546,6 +654,16 @@ def build_regime(contracts, spot, today, prior, disp, ref_spot=None):
         "flip_dist": round(100 * (ref_spot - flip) / flip, 2) if flip else None,
         "walls": {"call": [], "put": []},
         "dispersed": [],
+        # Second-order dealer flow. Gamma is hedging against SPOT moving;
+        # vanna is hedging against IV moving and charm against time simply
+        # passing, which is why a book can drift into the close with spot
+        # going nowhere.
+        "vanna": flow["vanna"],
+        "vanna_str": fmt_dollars(flow["vanna"]),
+        "charm": flow["charm"],
+        "charm_str": fmt_dollars(flow["charm"]),
+        "short_share": flow["short_share"],
+        "short_days": SHORT_DATED_DAYS,
     }
 
     # Calls are ranked only above spot and puts only below it, so the ladder
@@ -577,12 +695,12 @@ def build_regime(contracts, spot, today, prior, disp, ref_spot=None):
             # while being net SHORT 5.48B. Both components are reported so the
             # headline figure can be checked against them.
             call_gex, put_gex = per[kk]["call"], per[kk]["put"]
-            net = call_gex - put_gex
+            wall_net = call_gex - put_gex
             w = {"strike": disp(kk), "strike_pre": round(kk, 2),
                  "gex": v, "gex_str": fmt_dollars(v),
                  "call_gex": call_gex, "call_str": fmt_dollars(call_gex),
                  "put_gex": put_gex, "put_str": fmt_dollars(put_gex),
-                 "net_gex": net, "net_str": fmt_dollars(net),
+                 "net_gex": wall_net, "net_str": fmt_dollars(wall_net),
                  # How much of the ranked side survives netting, signed so
                  # that it reads the same for both sides: 1.0 is uncontested,
                  # near 0 is a wall the other side has almost entirely
@@ -590,13 +708,24 @@ def build_regime(contracts, spot, today, prior, disp, ref_spot=None):
                  # strike outright. A put wall's net is negative by nature, so
                  # it is negated here - without that every put wall would
                  # score below zero and the flag would say nothing.
-                 "net_frac": round((net if side == "call" else -net) / v, 2)
+                 "net_frac": round((wall_net if side == "call" else -wall_net) / v, 2)
                              if v else None,
+                 # What share of THIS strike's gamma expires within
+                 # SHORT_DATED_DAYS. A wall that is mostly 0-2 DTE stops
+                 # existing when those contracts do.
+                 "short_frac": (round(per[kk]["short"] / per[kk]["mag"], 2)
+                                if per[kk]["mag"] else None),
                  "dist": round(100 * off / ref_spot, 2),
                  "lead": round(ratio, 1) if (i == 0 and ratio) else None,
                  "conf": conf}
             out["walls"][side].append(w)
 
+    # `net` here is the BUCKET's net gamma - the same figure that sets
+    # out["regime"]. It used to be whatever the wall loop above left behind,
+    # which was the last put wall's net and so negative by construction: the
+    # page showed the negative-gamma playbook even on a positive-gamma book.
+    # Caught on 2026-09-28 with ES full at +11.53B still reading "Put wall =
+    # break trigger".
     out["role"] = ("Fade: sell call wall, buy put wall" if net >= 0
                    else "Put wall = break trigger; call wall caps rallies")
     return out
@@ -1572,6 +1701,8 @@ button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
 .stat{margin-bottom:0}
 .stat .k{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted)}
 .stat .v{font-size:17px;font-weight:600}
+/* vanna and charm sit beside net gamma but are secondary to it */
+.stat .v.sm{font-size:14px;font-weight:500}
 .v.pos{color:var(--jade)}.v.neg{color:var(--verm)}
 .flash{animation:flash 1s ease-out}
 @keyframes flash{from{background:rgba(217,164,65,.25)}to{background:transparent}}
@@ -1595,6 +1726,9 @@ tr.spotrow td{color:var(--ink);font-weight:700;letter-spacing:.06em;
 .chip{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
   padding:1px 6px;border-radius:4px;border:1px solid var(--line);color:var(--muted)}
 .chip.conf{color:var(--ink);border-color:rgba(255,255,255,.25)}
+/* short-dated: informational at any level, warned about past half */
+.chip.decay{color:var(--muted)}
+.chip.decay.hot{color:var(--brass);border-color:rgba(217,164,65,.45)}
 .max-pain{margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
 .active-con{font-size:10px;letter-spacing:.1em;padding:2px 7px;margin-left:10px;
   border:1px solid var(--jade);border-radius:3px;color:var(--jade);vertical-align:middle}
@@ -1622,6 +1756,7 @@ code.pine{background:var(--raised);border:1px solid var(--line);border-radius:4p
   padding-top:12px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
 .err{color:var(--stress);font-size:12.5px}
 .foot{margin-top:26px;font-size:11px;color:var(--muted);line-height:1.7}
+.foot .assume{color:var(--brass);opacity:.9}
 @media(prefers-reduced-motion:reduce){.dot.pulse{animation:none}.flash{animation:none}}
 </style></head>
 <body><div class="wrap">
@@ -1663,6 +1798,10 @@ function wallRow(w){
   // zero the opposite side owns the strike outright despite it being listed
   // here, which is worth saying rather than leaving to the reader's
   // arithmetic across two columns.
+  // A wall built out of contracts that expire this week is not a level you
+  // can lean on next week, however large it looks today.
+  if(w.short_frac!==null&&w.short_frac!==undefined&&w.short_frac>=0.5)
+    chips+=` <span class="chip decay hot">${Math.round(w.short_frac*100)}% exp</span>`;
   if(w.net_frac!==null&&w.net_frac!==undefined&&w.net_frac<0.35)
     chips+=` <span class="chip ${w.net_frac<=0?"flip":"cut"}">`
         +`${w.net_frac<=0?"net "+((w.net_gex||0)>0?"call":"put"):"offset"}</span>`;
@@ -1716,12 +1855,17 @@ function regimeBlock(s,key,r){
     <div class="rhead">
       <span class="rlabel">${r.label||key}</span>
       <span class="regime ${r.regime}">${r.regime} gamma</span>
+      ${r.short_share!==null&&r.short_share!==undefined
+        ? `<span class="chip decay${r.short_share>=50?" hot":""}" title="Share of this bucket's gamma in contracts expiring within ${r.short_days} days. High means the levels below do not survive the week.">${r.short_share}% &le;${r.short_days}d</span>`
+        : ""}
       <span class="role">${r.role||""}</span>
     </div>
     <div class="rbody">
       <div class="stats">
         <div class="stat"><div class="k">Net GEX</div><div class="v ${gexClass}" data-k="${s.symbol}-${key}-gex">${r.net_gex_str}</div></div>
         <div class="stat"><div class="k">Flip</div><div class="v">${r.flip!==null&&r.flip!==undefined?r.flip.toFixed(2):"—"}${r.flip_dist!==null&&r.flip_dist!==undefined?` <span style="font-size:12px;color:var(--muted)">(${r.flip_dist>0?"+":""}${r.flip_dist}%)</span>`:""}${r.flip_pre!==null&&r.flip_pre!==undefined?` <span class="pre" style="font-size:12px">${(+r.flip_pre).toFixed(2)}</span>`:""}</div></div>
+        <div class="stat"><div class="k" title="Dollar dealer delta per 1 point of implied vol. Gamma hedges spot moving; vanna hedges IV moving.">Vanna /vol</div><div class="v sm ${(r.vanna||0)>=0?"pos":"neg"}">${r.vanna_str||"—"}</div></div>
+        <div class="stat"><div class="k" title="Dollar dealer delta per day from time passing alone - the drift that happens with spot going nowhere.">Charm /day</div><div class="v sm ${(r.charm||0)>=0?"pos":"neg"}">${r.charm_str||"—"}</div></div>
       </div>
       <div>
         <div class="walls"><table><thead><tr><th>Side</th><th class="num">Strike</th><th class="num">Net GEX</th><th class="num">Call / Put</th><th class="num">Dist</th><th class="num">${chainName(s)}</th><th>Tags</th></tr></thead>
@@ -1900,7 +2044,17 @@ async function load(){
       +(IS_SNAPSHOT
         ? ` Page re-checks for a new snapshot every ${Math.round(POLL_MS/1000)}s.`
         : ` Server recomputes every ${Math.round(REFRESH_SECONDS/60)}&nbsp;min.`)
-      +` Margin numbers come from your config.ini and need manual upkeep.`;
+      +` Margin numbers come from your config.ini and need manual upkeep.`
+      // Every regime sign on this page rests on this one assumption, and
+      // inverting it inverts all of them - measured 2026-09-28, all four
+      // symbols flip. It cannot be resolved on a free feed: only the LAST
+      // trade per contract is classifiable (47% nearer ask, 38% nearer bid,
+      // 11% mid on QQQ), volume is not open interest CHANGE, and the
+      // open/close data that would settle it is a paid Cboe product. Saying
+      // so is the honest fix; pretending otherwise is not.
+      +` <span class="assume">Dealers are assumed long every call and short`
+      +` every put. Inverting that assumption inverts every regime sign here;`
+      +` it is a convention, not a measurement.</span>`;
   }catch(e){ document.getElementById("mkt").textContent="server unreachable"; }
 }
 function tick(){
