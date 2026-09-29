@@ -809,8 +809,16 @@ def build_ladder(per_by_book, books, spot, ref_spot, prior, disp,
             signs = set()
             for b in books:
                 v = net_at(b, k)
+                d_b = per_by_book[b].get(k)
+                # The call/put split belongs to the same book as the net beside
+                # it. Carrying only the first book's split put "+8.6M / +1.2M"
+                # next to a near-book net of -27.2M, whose real split was
+                # +44.7M / +73.1M - the one row where the split matters most
+                # was describing a different book with no way to tell.
                 cells[b] = {"net": v,
-                            "str": fmt_dollars(v) if v is not None else None}
+                            "str": fmt_dollars(v) if v is not None else None,
+                            "call_str": fmt_dollars(d_b["call"]) if d_b else None,
+                            "put_str": fmt_dollars(d_b["put"]) if d_b else None}
                 if v:
                     signs.add(v > 0)
             # The same strike can be call-dominated in one book and
@@ -2085,14 +2093,21 @@ function ladderRow(w,books){
   const cells = books.map(b=>{
     const c=(w.books||{})[b];
     if(!c||c.net===null||c.net===undefined) return `<td class="num pre">—</td>`;
-    return `<td class="num ${c.net>=0?"pos":"neg"}">${c.str}</td>`;
+    // The split for THIS book, on hover - the net alone hides how contested
+    // the strike is, and each book has its own answer.
+    const tip = (c.call_str&&c.put_str) ? ` title="${b}: calls ${c.call_str} / puts ${c.put_str}"` : "";
+    return `<td class="num ${c.net>=0?"pos":"neg"}"${tip}>${c.str}</td>`;
   }).join("");
   return `<tr${w.sign_flip?' class="flipped"':''}>`
     +`<td class="side-${w.side[0]}">${w.side.toUpperCase()}</td>`
     +`<td class="num">${(+w.strike).toFixed(0)}</td>`
     +cells
-    +`<td class="num split"><span class="side-c">${w.call_str}</span>`
-    +` <span class="sep">/</span> <span class="side-p">${w.put_str}</span></td>`
+    +(function(){
+       const c=(w.books||{})[books[0]]||{};
+       const cs=c.call_str||w.call_str, ps=c.put_str||w.put_str;
+       return `<td class="num split"><span class="side-c">${cs}</span>`
+         +` <span class="sep">/</span> <span class="side-p">${ps}</span></td>`;
+     })()
     +`<td class="num">${w.dist>0?"+":""}${w.dist}%</td>`
     +`<td class="num pre">${w.strike_pre!==undefined&&w.strike_pre!==null?(+w.strike_pre).toFixed(2):"—"}</td>`
     +`<td>${chips}</td></tr>`;
@@ -2110,7 +2125,7 @@ function combinedLadder(s,rows,books,spot,spotPre){
     +`<td></td></tr>`;
   const head = `<tr><th>Side</th><th class="num">Strike</th>`
     + books.map(b=>`<th class="num">${b}</th>`).join("")
-    + `<th class="num">Call / Put</th><th class="num">Dist</th>`
+    + `<th class="num" title="Calls and puts behind the ${books[0]} net. Hover any book's cell for its own split.">Call / Put &middot; ${books[0]}</th><th class="num">Dist</th>`
     + `<th class="num">${chainName(s)}</th><th>Tags</th></tr>`;
   return `<div class="walls"><table><thead>${head}</thead><tbody>`
     + above.map(w=>ladderRow(w,books)).join("")
