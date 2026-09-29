@@ -406,18 +406,22 @@ def contract_gex(gamma, oi, spot):
     return gamma * oi * SHARES_PER_CONTRACT * spot * spot * 0.01
 
 
-def gex_by_strike(contracts, spot, today=None):
+def gex_by_strike(contracts, spot, book_date=None):
     """Call and put GEX per strike, plus how much of the strike's gamma is
-    about to expire when `today` is given (used to tag short-dated walls)."""
+    about to expire when `book_date` is given (used to tag short-dated walls).
+
+    Expiry closeness is measured against the session being traded, which rolls
+    at the 18:00 Globex open - not the calendar date. See flow_exposures.
+    """
     per = {}
     for c in contracts:
         g = contract_gex(c["gamma"], c["oi"], spot)
         d = per.setdefault(c["strike"], {"call": 0.0, "put": 0.0,
                                          "mag": 0.0, "short": 0.0})
         d["call" if c["cp"] == "C" else "put"] += g
-        if today is not None:
+        if book_date is not None:
             d["mag"] += abs(g)
-            if (c["exp"] - today).days <= SHORT_DATED_DAYS:
+            if (c["exp"] - book_date).days <= SHORT_DATED_DAYS:
                 d["short"] += abs(g)
     return per
 
@@ -582,7 +586,7 @@ def charm_exposure(charm, oi, spot):
     return charm * oi * SHARES_PER_CONTRACT * spot
 
 
-def flow_exposures(contracts, spot, today):
+def flow_exposures(contracts, spot, today, book_date=None):
     """Net vanna and charm for a bucket, and how concentrated its gamma is in
     contracts about to expire.
 
@@ -594,15 +598,36 @@ def flow_exposures(contracts, spot, today):
     contracts with two days or less to run were 33% of NQ's near-bucket open
     interest but 51% of its gamma. A level built on that is gone by Thursday;
     one built on 30-day gamma is not, and until now both rendered identically.
+
+    TWO DATES, deliberately, because they answer different questions:
+
+      today      prices the greeks. T has to follow whatever convention Cboe
+                 solved its IV against, and measured over the near book the
+                 calendar-day convention fits its published gamma best - a
+                 clock-accurate T made the NQ median error 3.46% -> 4.60%,
+                 because the feed is delayed and its greeks are struck at the
+                 vendor's snapshot rather than at this instant.
+      book_date  labels how close expiry is. That is a question about the
+                 SESSION being traded, which rolls at the 18:00 Globex open
+                 like the book itself. After that open the contracts expiring
+                 on the old calendar day are already gone from the book, and
+                 the new front expiry is this session's 0DTE - it read as 1DTE
+                 while this used the calendar date, understating NQ's
+                 short-dated gamma share at 37.2% against a true 40.5%.
+
+    Inside cash hours the two are the same date and none of this applies.
     """
+    if book_date is None:
+        book_date = today
     vex = cex = 0.0
     gex_all = gex_short = 0.0
     for c in contracts:
         gamma, iv = c["gamma"], c["iv"]
-        dte = (c["exp"] - today).days
+        dte = (c["exp"] - today).days            # pricing
+        session_dte = (c["exp"] - book_date).days  # labelling
         mag = abs(contract_gex(gamma, c["oi"], spot))
         gex_all += mag
-        if dte <= SHORT_DATED_DAYS:
+        if session_dte <= SHORT_DATED_DAYS:
             gex_short += mag
         if gamma <= 0 or iv <= 0:
             continue
@@ -622,7 +647,8 @@ def flow_exposures(contracts, spot, today):
     }
 
 
-def build_regime(contracts, spot, today, prior, disp, ref_spot=None):
+def build_regime(contracts, spot, today, prior, disp, ref_spot=None,
+                 book_date=None):
     """GEX/flip/walls for one bucket of contracts (chain terms in, disp() maps
     strikes/flip to display terms). Isolated so it can run once per expiration
     bucket (near-term vs full book) instead of once per symbol.
@@ -635,15 +661,19 @@ def build_regime(contracts, spot, today, prior, disp, ref_spot=None):
     """
     if ref_spot is None:
         ref_spot = spot
+    # The session being traded, which rolls at 18:00 while the calendar date
+    # does not. Used for "how close is expiry", never for pricing.
+    if book_date is None:
+        book_date = today
     if not contracts:
         return {"net_gex_str": "n/a", "regime": "unknown",
                 "role": "no contracts in this expiration bucket",
                 "flip": None, "flip_dist": None,
                 "walls": {"call": [], "put": []}, "dispersed": []}
 
-    per = gex_by_strike(contracts, spot, today)
+    per = gex_by_strike(contracts, spot, book_date)
     net = sum(d["call"] - d["put"] for d in per.values())
-    flow = flow_exposures(contracts, spot, today)
+    flow = flow_exposures(contracts, spot, today, book_date)
     flip = find_flip(spot, contracts, today)
     out = {
         "net_gex": net,
@@ -1443,14 +1473,14 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
         near_cutoff = min(fut_exp, book_date + timedelta(days=NEAR_MAX_DTE))
         near_contracts = [c for c in contracts if c["exp"] <= near_cutoff]
         out["regimes"]["near"] = build_regime(near_contracts, spot, today, prior,
-                                             disp, ref_spot)
+                                             disp, ref_spot, book_date=book_date)
         label_contract = (active["chosen"] or {}).get("label") or "fut"
         out["regimes"]["near"]["label"] = (
             f"Near-term (thru {near_cutoff.strftime('%m/%d')} {label_contract})"
             if near_cutoff == fut_exp else
             f"Near-term (thru {near_cutoff.strftime('%m/%d')}, {NEAR_MAX_DTE}d cap)")
         out["regimes"]["full"] = build_regime(contracts, spot, today, prior,
-                                             disp, ref_spot)
+                                             disp, ref_spot, book_date=book_date)
         out["regimes"]["full"]["label"] = f"Full book (thru {MAX_DTE}d)"
         out["max_pain"] = [
             {"expiry": expiry.isoformat(), "strike": disp(item["strike"]),
