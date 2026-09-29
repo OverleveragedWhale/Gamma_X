@@ -45,11 +45,17 @@ NEAR_MAX_DTE = 32            # near-term bucket: never look further than this
 MAX_PAIN_DAILY_DAYS = 5      # max pain: every expiry inside this many days,
                              # and nothing but monthly opex beyond it
 SHARES_PER_CONTRACT = 100
-WALL_COUNT = 6               # ranked walls reported per side
+WALL_COUNT = 10              # ranked walls reported per side
 SHORT_DATED_DAYS = 2         # "about to expire" for the gamma-concentration
                              # share: 0-2 DTE was 51% of NQ's near-bucket
                              # gamma on 2026-09-28 against 33% of its OI
-MIN_WALL_SEP = 0.004         # min gap between reported walls (0.4% of spot)
+MIN_WALL_SEP = 0.004         # fallback gap between walls, as a fraction of
+                             # spot. Instruments override it with wall_sep in
+                             # chain points - see INSTRUMENTS. A single
+                             # percentage cannot serve both books: 0.4% is 30.7
+                             # SPX points and 2.95 QQQ points, so it collapsed
+                             # six 5-wide SPX strikes and three 1-wide QQQ
+                             # strikes into one reported wall each.
 WALL_CONFLUENCE_TOL = 0.0015  # wall within 0.15% of prior H/L/C = confluence
 PRIOR_SESSION_ROWS = 5        # daily bars kept for prior close + chain-scale ratio
 VOL_LOOKBACK = 20             # daily bars behind the realized-vol estimate
@@ -108,14 +114,21 @@ YAHOO_QUOTE_URL = ("https://query1.finance.yahoo.com/v7/finance/quote"
 # carry sanity gate in compute_symbol vacuous (carry is 0 by construction), so
 # a back-adjusted continuous series would not be caught for those two.
 INSTRUMENTS = [
+    # wall_sep is the finest spacing worth telling apart, in CHAIN points -
+    # the listed strike increment near the money. Two walls that close are
+    # reported separately rather than collapsed, which is what makes the
+    # ladder line up with the increments actually drawn on a chart.
     {"future": "ES",  "chain": "_SPX", "hist": "^GSPC", "index": "^GSPC",
-     "fut": "ES=F",  "multiplier": 50,   "cycle": "quarterly", "exch": ".CME"},
+     "fut": "ES=F",  "multiplier": 50,   "cycle": "quarterly", "exch": ".CME",
+     "wall_sep": 5.0},
     {"future": "NQ",  "chain": "QQQ",  "hist": "QQQ",   "index": "^NDX",
-     "fut": "NQ=F",  "multiplier": 20,   "cycle": "quarterly", "exch": ".CME"},
+     "fut": "NQ=F",  "multiplier": 20,   "cycle": "quarterly", "exch": ".CME",
+     "wall_sep": 1.0},
     # Commodity books ride an ETF chain the same way NQ rides QQQ, but the
     # proxy is looser: see the ratio-noise note in compute_symbol.
     {"future": "GC",  "chain": "GLD",  "hist": "GLD",   "index": "GC=F",
-     "fut": "GC=F",  "multiplier": 100,  "cycle": "gc",        "exch": ".CMX"},
+     "fut": "GC=F",  "multiplier": 100,  "cycle": "gc",        "exch": ".CMX",
+     "wall_sep": 1.0},
 ]
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -789,10 +802,20 @@ def build_ladder(per_by_book, books, spot, ref_spot, prior, disp,
                         conf = name
                         break
             cells = {}
+            signs = set()
             for b in books:
                 v = net_at(b, k)
                 cells[b] = {"net": v,
                             "str": fmt_dollars(v) if v is not None else None}
+                if v:
+                    signs.add(v > 0)
+            # The same strike can be call-dominated in one book and
+            # put-dominated in another - widening the window adds opposing
+            # open interest, it does not just add more of the same. GC 4394
+            # on 2026-09-28 was +7.5M this week against -27.4M in the near
+            # book. Worth flagging: the level means opposite things depending
+            # on which book you are trading.
+            flips = len(signs) > 1
             d = per_by_book[books[0]].get(k) or {"call": 0.0, "put": 0.0,
                                                  "mag": 0.0, "short": 0.0}
             rows.append({
@@ -803,6 +826,7 @@ def build_ladder(per_by_book, books, spot, ref_spot, prior, disp,
                 "put_gex": d["put"], "put_str": fmt_dollars(d["put"]),
                 "short_frac": (round(d["short"] / d["mag"], 2)
                                if d["mag"] else None),
+                "sign_flip": flips,
                 "dist": round(100 * (k - ref_spot) / ref_spot, 2),
                 "conf": conf,
             })
@@ -1661,9 +1685,12 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
 
         # One ladder across all three books, so the same strike is one row.
         out["books"] = list(buckets)
+        # wall_sep is quoted in chain points; the ladder wants a fraction.
+        sep = inst.get("wall_sep")
         out["ladder"] = build_ladder(
             {k: gex_by_strike(v, spot, book_date) for k, v in buckets.items()},
-            list(buckets), spot, ref_spot, prior, disp)
+            list(buckets), spot, ref_spot, prior, disp,
+            min_sep=(sep / spot) if (sep and spot) else None)
         out["max_pain"] = [
             {"expiry": expiry.isoformat(), "strike": disp(item["strike"]),
              "strike_pre": round(item["strike"], 2),
@@ -1937,6 +1964,9 @@ td.num{text-align:right}
 .split .sep{color:var(--muted);opacity:.6}
 .chip.cut{color:var(--brass);border-color:rgba(217,164,65,.4)}
 .chip.flip{color:var(--stress);border-color:rgba(255,93,99,.45)}
+/* a level that is call-dominated in one book and put-dominated in another */
+tr.flipped td{background:rgba(255,93,99,.07)}
+tr.flipped td:first-child{box-shadow:inset 2px 0 0 var(--stress)}
 tr.spotrow td{color:var(--ink);font-weight:700;letter-spacing:.06em;
   background:rgba(255,255,255,.05);
   border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
@@ -2041,6 +2071,10 @@ function bookSummary(s,regimes,books){
 function ladderRow(w,books){
   let chips="";
   if(w.conf) chips+=`<span class="chip conf">~${w.conf}</span>`;
+  // Call-dominated in one book, put-dominated in another. The cell colours
+  // already say it, but only if you are looking at that row - the chip and
+  // the row tint make it findable while scanning.
+  if(w.sign_flip) chips+=` <span class="chip flip">sign flip</span>`;
   if(w.short_frac!==null&&w.short_frac!==undefined&&w.short_frac>=0.5)
     chips+=` <span class="chip decay hot">${Math.round(w.short_frac*100)}% exp</span>`;
   const cells = books.map(b=>{
@@ -2048,7 +2082,8 @@ function ladderRow(w,books){
     if(!c||c.net===null||c.net===undefined) return `<td class="num pre">—</td>`;
     return `<td class="num ${c.net>=0?"pos":"neg"}">${c.str}</td>`;
   }).join("");
-  return `<tr><td class="side-${w.side[0]}">${w.side.toUpperCase()}</td>`
+  return `<tr${w.sign_flip?' class="flipped"':''}>`
+    +`<td class="side-${w.side[0]}">${w.side.toUpperCase()}</td>`
     +`<td class="num">${(+w.strike).toFixed(0)}</td>`
     +cells
     +`<td class="num split"><span class="side-c">${w.call_str}</span>`
