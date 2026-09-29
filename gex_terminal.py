@@ -147,12 +147,93 @@ _stderr_handler.setLevel(logging.WARNING)
 _stderr_handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
 logging.getLogger().addHandler(_stderr_handler)
 
-MARKET_HOLIDAYS = {   # US equity holidays 2026 - verify yearly, no half-days
-    date(2026, 1, 1), date(2026, 1, 19), date(2026, 2, 16),
-    date(2026, 4, 3), date(2026, 5, 25), date(2026, 6, 19),
-    date(2026, 7, 3), date(2026, 9, 7), date(2026, 11, 26),
-    date(2026, 12, 25),
+# US equity market holidays, computed rather than listed, so no year needs to
+# be added by hand. Every NYSE/Nasdaq closure follows a rule:
+#
+#   fixed date      New Year's, Juneteenth, Independence Day, Christmas
+#   nth weekday     MLK, Presidents, Memorial, Labor, Thanksgiving
+#   lunar           Good Friday, two days before Gregorian Easter
+#
+# Weekend observation follows the NYSE rule - Saturday moves to the preceding
+# Friday, Sunday to the following Monday - with one exception written into the
+# rule itself: a Saturday holiday is NOT observed when the preceding Friday is
+# the last trading day of the year, which is exactly the Jan 1 case. Miss that
+# and every year where Jan 1 lands on a Saturday wrongly closes Dec 31.
+#
+# Half-days are deliberately absent. An early close is still a trading day, and
+# the only thing downstream that cares about the closing time - session_close -
+# takes the last print before the maintenance halt, which on a 13:00 close is
+# the 13:00 print. Nothing here needs to know it was short.
+#
+# What cannot be computed is an unscheduled closure: a national day of mourning,
+# a hurricane, 9/11. Those go in EXTRA_MARKET_CLOSURES as they are announced.
+EXTRA_MARKET_CLOSURES = {
+    date(2025, 1, 9),    # national day of mourning, President Carter
 }
+
+JUNETEENTH_FROM = 2022   # first year it was a market holiday
+
+_HOLIDAY_CACHE = {}
+
+
+def easter(year):
+    """Gregorian Easter Sunday (anonymous Gregorian algorithm)."""
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month, day = divmod(h + l - 7 * m + 114, 31)
+    return date(year, month, day + 1)
+
+
+def last_weekday(year, month, weekday):
+    """Date of the last `weekday` (0=Mon..6=Sun) in the month."""
+    d = date(year, month, calendar.monthrange(year, month)[1])
+    return d - timedelta(days=(d.weekday() - weekday) % 7)
+
+
+def observed(d):
+    """NYSE weekend rule, including the last-trading-day-of-year exception."""
+    if d.weekday() == 5:                       # Saturday
+        # The Exchange closes the preceding Friday, unless that Friday is the
+        # year's last trading day - so a Saturday Jan 1 closes nothing.
+        return None if (d.month, d.day) == (1, 1) else d - timedelta(days=1)
+    if d.weekday() == 6:                       # Sunday
+        return d + timedelta(days=1)
+    return d
+
+
+def market_holidays(year):
+    """Every full market closure in `year`, computed from the rules above."""
+    cached = _HOLIDAY_CACHE.get(year)
+    if cached is not None:
+        return cached
+
+    fixed = [date(year, 1, 1), date(year, 7, 4), date(year, 12, 25)]
+    if year >= JUNETEENTH_FROM:
+        fixed.append(date(year, 6, 19))
+
+    days = {d for d in (observed(f) for f in fixed) if d is not None}
+    days.update({
+        nth_weekday(year, 1, 0, 3),            # MLK, 3rd Monday January
+        nth_weekday(year, 2, 0, 3),            # Presidents, 3rd Monday February
+        easter(year) - timedelta(days=2),      # Good Friday
+        last_weekday(year, 5, 0),              # Memorial, last Monday May
+        nth_weekday(year, 9, 0, 1),            # Labor, 1st Monday September
+        nth_weekday(year, 11, 3, 4),           # Thanksgiving, 4th Thursday
+    })
+    # A Sunday Jan 1 is observed on Jan 2 of the SAME year, but a Sunday
+    # Dec 31 would spill into the next - neither can happen, since Jan 1 is
+    # the only fixed holiday within a day of a year boundary.
+    days.update(d for d in EXTRA_MARKET_CLOSURES if d.year == year)
+
+    _HOLIDAY_CACHE[year] = days
+    return days
 
 
 def now_et():
@@ -160,7 +241,7 @@ def now_et():
 
 
 def is_trading_day(d):
-    return d.weekday() < 5 and d not in MARKET_HOLIDAYS
+    return d.weekday() < 5 and d not in market_holidays(d.year)
 
 
 def next_friday(d):
