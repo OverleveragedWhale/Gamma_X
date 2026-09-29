@@ -734,6 +734,82 @@ def flow_exposures(contracts, spot, today, book_date=None):
     }
 
 
+def build_ladder(per_by_book, books, spot, ref_spot, prior, disp,
+                 n=None, min_sep=None):
+    """One price ladder carrying every book's net gamma at the same strike.
+
+    Three separate tables could not be read against each other - the same
+    strike sat on a different row in each, so "is this wall this week's or
+    the monthly book's" took arithmetic across two panels. Here each strike
+    appears once with a column per book.
+
+    Rows are ranked on the largest magnitude across the SHORT books only
+    (everything except the last, which is the full book). The full book
+    supplies a column and never a row: ranked on it, GC filled with +11% to
+    +28% call strikes out of the 95-day chain that price cannot reach in a
+    session, crowding out the levels that matter today.
+    """
+    n = n if n is not None else WALL_COUNT
+    min_sep = min_sep if min_sep is not None else MIN_WALL_SEP
+    short_books = books[:-1] or books
+
+    def net_at(book, k):
+        d = per_by_book[book].get(k)
+        return (d["call"] - d["put"]) if d else None
+
+    rows = []
+    for side in ("call", "put"):
+        scored = []
+        for k in {k for b in short_books for k in per_by_book[b]}:
+            if side == "call" and k <= ref_spot:
+                continue
+            if side == "put" and k > ref_spot:
+                continue
+            vals = [net_at(b, k) or 0.0 for b in short_books]
+            # A call row needs net CALL gamma somewhere, a put row net put.
+            best = max(vals) if side == "call" else min(vals)
+            if (best <= 0) if side == "call" else (best >= 0):
+                continue
+            scored.append((abs(best), k))
+        scored.sort(reverse=True)
+
+        kept = []
+        for _, k in scored:
+            if all(abs(k - x) / spot >= min_sep for x in kept):
+                kept.append(k)
+            if len(kept) >= n:
+                break
+
+        for k in kept:
+            conf = None
+            if prior:
+                for ref, name in ((prior["h"], "PDH"), (prior["l"], "PDL"),
+                                  (prior["c"], "PDC")):
+                    if ref > 0 and abs(k - ref) / spot <= WALL_CONFLUENCE_TOL:
+                        conf = name
+                        break
+            cells = {}
+            for b in books:
+                v = net_at(b, k)
+                cells[b] = {"net": v,
+                            "str": fmt_dollars(v) if v is not None else None}
+            d = per_by_book[books[0]].get(k) or {"call": 0.0, "put": 0.0,
+                                                 "mag": 0.0, "short": 0.0}
+            rows.append({
+                "side": side,
+                "strike": disp(k), "strike_pre": round(k, 2),
+                "books": cells,
+                "call_gex": d["call"], "call_str": fmt_dollars(d["call"]),
+                "put_gex": d["put"], "put_str": fmt_dollars(d["put"]),
+                "short_frac": (round(d["short"] / d["mag"], 2)
+                               if d["mag"] else None),
+                "dist": round(100 * (k - ref_spot) / ref_spot, 2),
+                "conf": conf,
+            })
+    rows.sort(key=lambda r: (-r["strike_pre"], 0 if r["side"] == "call" else 1))
+    return rows
+
+
 def build_regime(contracts, spot, today, prior, disp, ref_spot=None,
                  book_date=None):
     """GEX/flip/walls for one bucket of contracts (chain terms in, disp() maps
@@ -1558,17 +1634,36 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     if contracts:
         fut_exp = active["expiry"]
         near_cutoff = min(fut_exp, book_date + timedelta(days=NEAR_MAX_DTE))
-        near_contracts = [c for c in contracts if c["exp"] <= near_cutoff]
-        out["regimes"]["near"] = build_regime(near_contracts, spot, today, prior,
-                                             disp, ref_spot, book_date=book_date)
+        # This week's expiries, for trading the session rather than the month.
+        # Through the coming Friday, which is how the weekly book is thought
+        # about - it narrows as the week runs, and measured 2026-09-28 it
+        # still fills every wall slot at 1 DTE on all three products, so the
+        # narrowing costs nothing.
+        week_cutoff = min(next_friday(book_date), near_cutoff)
+        buckets = {
+            "week": [c for c in contracts if c["exp"] <= week_cutoff],
+            "near": [c for c in contracts if c["exp"] <= near_cutoff],
+            "full": contracts,
+        }
         label_contract = (active["chosen"] or {}).get("label") or "fut"
-        out["regimes"]["near"]["label"] = (
-            f"Near-term (thru {near_cutoff.strftime('%m/%d')} {label_contract})"
-            if near_cutoff == fut_exp else
-            f"Near-term (thru {near_cutoff.strftime('%m/%d')}, {NEAR_MAX_DTE}d cap)")
-        out["regimes"]["full"] = build_regime(contracts, spot, today, prior,
-                                             disp, ref_spot, book_date=book_date)
-        out["regimes"]["full"]["label"] = f"Full book (thru {MAX_DTE}d)"
+        labels = {
+            "week": f"This week (thru {week_cutoff.strftime('%m/%d')})",
+            "near": (f"Near-term (thru {near_cutoff.strftime('%m/%d')} "
+                     f"{label_contract})" if near_cutoff == fut_exp else
+                     f"Near-term (thru {near_cutoff.strftime('%m/%d')}, "
+                     f"{NEAR_MAX_DTE}d cap)"),
+            "full": f"Full book (thru {MAX_DTE}d)",
+        }
+        for key, sub in buckets.items():
+            out["regimes"][key] = build_regime(sub, spot, today, prior, disp,
+                                               ref_spot, book_date=book_date)
+            out["regimes"][key]["label"] = labels[key]
+
+        # One ladder across all three books, so the same strike is one row.
+        out["books"] = list(buckets)
+        out["ladder"] = build_ladder(
+            {k: gex_by_strike(v, spot, book_date) for k, v in buckets.items()},
+            list(buckets), spot, ref_spot, prior, disp)
         out["max_pain"] = [
             {"expiry": expiry.isoformat(), "strike": disp(item["strike"]),
              "strike_pre": round(item["strike"], 2),
@@ -1799,13 +1894,11 @@ button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
 .role{font-size:12px;color:var(--muted);margin-left:auto}
 .scale{font-size:10.5px;color:var(--brass);letter-spacing:.05em;
   margin:-6px 0 12px;opacity:.85}
-/* minmax(0,1fr), not 1fr: a grid track is min-width:auto, so a track
-   holding a table wider than its share grows instead of shrinking and the
-   wall ladder paints outside the panel. The breakpoint is 1200 because the
-   ladder needs ~502px of min-content and two of them alongside each other
-   only clear that above ~1168px of viewport. */
-.regimes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
-@media(max-width:1200px){.regimes{grid-template-columns:1fr}}
+/* The two-column .regimes grid is gone: the three books share one ladder in a
+   single full-width block, which is both what makes them comparable row for
+   row and what gives the table room - 593px of min-content against 912px even
+   at a 1024px viewport, where two half-width tables had 518px and a third
+   would never have fitted at all. */
 .regime-block{background:var(--raised);border:1px solid var(--line);
   border-radius:10px;padding:14px 16px}
 .rhead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:12px}
@@ -1826,7 +1919,14 @@ button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
 /* walls */
 /* overflow-x is the backstop: tag text is data-driven, so a long enough
    chip run scrolls inside the block rather than over it. */
-.walls{margin-top:16px;min-width:0;overflow-x:auto}
+.walls{margin-top:14px;min-width:0;overflow-x:auto}
+/* per-book summary above the ladder */
+.books{min-width:0;overflow-x:auto}
+.books table{width:auto;min-width:420px}
+.books td,.books th{padding:3px 12px 3px 0}
+.books .bk{text-transform:uppercase;letter-spacing:.1em;font-size:10px;
+  color:var(--muted)}
+.books tbody tr:last-child td{border-bottom:none}
 table{width:100%;border-collapse:collapse;font-size:12.5px}
 th{text-align:left;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;
   color:var(--muted);font-weight:500;padding:4px 8px;border-bottom:1px solid var(--line)}
@@ -1907,90 +2007,76 @@ function fmtCd(s){const m=Math.floor(s/60),x=s%60;return m+":"+String(x).padStar
 // Strips the leading underscore Cboe uses on index chains (_SPX).
 function chainName(s){ return String((s&&s.chain)||"").replace(/^_/,""); }
 
-function wallRow(w){
+// One summary row per book: the figures that describe the whole book rather
+// than any single strike. Stacked so the three are read against each other -
+// a flip that moves between books is the point.
+function bookSummary(s,regimes,books){
+  const rows = books.filter(k=>regimes[k]).map(k=>{
+    const r = regimes[k];
+    const cls = r.regime==="positive"?"pos":r.regime==="negative"?"neg":"";
+    const flip = (r.flip!==null&&r.flip!==undefined)?(+r.flip).toFixed(2):"—";
+    const fd = (r.flip_dist!==null&&r.flip_dist!==undefined)
+      ? ` <span class="pre">(${r.flip_dist>0?"+":""}${r.flip_dist}%)</span>` : "";
+    return `<tr>`
+      +`<td class="bk" title="${r.label||k}">${k}</td>`
+      +`<td class="num ${cls}"><b data-k="${s.symbol}-${k}-gex">${r.net_gex_str}</b></td>`
+      +`<td class="num">${flip}${fd}</td>`
+      +`<td class="num ${(r.vanna||0)>=0?"pos":"neg"}">${r.vanna_str||"—"}</td>`
+      +`<td class="num ${(r.charm||0)>=0?"pos":"neg"}">${r.charm_str||"—"}</td>`
+      +`<td class="num">${r.short_share!==null&&r.short_share!==undefined
+          ? `<span class="chip decay${r.short_share>=50?" hot":""}">${r.short_share}%</span>`:"—"}</td>`
+      +`</tr>`;
+  }).join("");
+  return `<div class="books"><table><thead><tr><th>Book</th>`
+    +`<th class="num">Net GEX</th><th class="num">Flip</th>`
+    +`<th class="num" title="Dealer delta per 1 point of implied vol">Vanna /vol</th>`
+    +`<th class="num" title="Dealer delta per day from time passing">Charm /day</th>`
+    +`<th class="num" title="Share of the book's gamma expiring within 2 sessions">&le;2d</th>`
+    +`</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+// The combined ladder: one row per strike, one column per book, so "is this
+// wall this week's or the monthly book's" is read across rather than by
+// flipping between two tables that ordered their strikes differently.
+function ladderRow(w,books){
   let chips="";
-  if(w.lead) chips+=`<span class="chip">${w.lead>=2?"dominant":"lead"} x${w.lead}</span>`;
-  if(w.conf) chips+=` <span class="chip conf">~${w.conf}</span>`;
-  // net_frac is how much of the ranked side survives netting. At or below
-  // zero the opposite side owns the strike outright despite it being listed
-  // here, which is worth saying rather than leaving to the reader's
-  // arithmetic across two columns.
-  // A wall built out of contracts that expire this week is not a level you
-  // can lean on next week, however large it looks today.
+  if(w.conf) chips+=`<span class="chip conf">~${w.conf}</span>`;
   if(w.short_frac!==null&&w.short_frac!==undefined&&w.short_frac>=0.5)
     chips+=` <span class="chip decay hot">${Math.round(w.short_frac*100)}% exp</span>`;
-  if(w.net_frac!==null&&w.net_frac!==undefined&&w.net_frac<0.35)
-    chips+=` <span class="chip ${w.net_frac<=0?"flip":"cut"}">`
-        +`${w.net_frac<=0?"net "+((w.net_gex||0)>0?"call":"put"):"offset"}</span>`;
+  const cells = books.map(b=>{
+    const c=(w.books||{})[b];
+    if(!c||c.net===null||c.net===undefined) return `<td class="num pre">—</td>`;
+    return `<td class="num ${c.net>=0?"pos":"neg"}">${c.str}</td>`;
+  }).join("");
   return `<tr><td class="side-${w.side[0]}">${w.side.toUpperCase()}</td>`
     +`<td class="num">${(+w.strike).toFixed(0)}</td>`
-    +`<td class="num ${(w.net_gex||0)>=0?"pos":"neg"}"><b>${w.net_str}</b></td>`
+    +cells
     +`<td class="num split"><span class="side-c">${w.call_str}</span>`
     +` <span class="sep">/</span> <span class="side-p">${w.put_str}</span></td>`
     +`<td class="num">${w.dist>0?"+":""}${w.dist}%</td>`
-    +`<td class="num pre">${w.strike_pre!==undefined&&w.strike_pre!==null?(+w.strike_pre).toFixed(2):"\u2014"}</td>`
+    +`<td class="num pre">${w.strike_pre!==undefined&&w.strike_pre!==null?(+w.strike_pre).toFixed(2):"—"}</td>`
     +`<td>${chips}</td></tr>`;
 }
 
-// A price ladder: every wall sits where its strike actually falls, so calls and
-// puts interleave and the SPOT row lands in its own place rather than acting as
-// a divider between two books. Strictly descending by strike, which means the
-// distance from spot grows as you read away from the spot row in either
-// direction. Walls are still *chosen* by GEX size in the payload; this only
-// decides the order they appear in, and it sorts a copy because the payload
-// array is re-rendered on every poll.
-function wallLadder(walls, spot, spotPre){
-  const rows=[];
-  for(const side of ["call","put"])
-    ((walls&&walls[side])||[]).forEach(w=>rows.push(Object.assign({},w,{side})));
-  if(!rows.length) return "";
-  // Equal strikes read call-then-put, so a level carrying both is consistent.
-  rows.sort((a,b)=>(+b.strike)-(+a.strike) || (a.side==="call"?-1:1));
-  if(spot==null) return rows.map(wallRow).join("");
-  const above=rows.filter(w=>+w.strike>+spot);
-  const below=rows.filter(w=>+w.strike<=+spot);
-  return above.map(wallRow).join("")+spotRow(spot,spotPre)+below.map(wallRow).join("");
-}
-
-// Divider between the call and put blocks, carrying spot itself so the two
-// sides are read against the level they are measured from.
-function spotRow(spot, spotPre){
-  if(spot==null) return "";
-  return `<tr class="spotrow"><td>SPOT</td>`
-    +`<td class="num">${(+spot).toFixed(2)}</td>`
-    +`<td class="num">—</td><td class="num">&mdash;</td><td class="num">0.00%</td>`
-    +`<td class="num pre">${spotPre!==undefined&&spotPre!==null?(+spotPre).toFixed(2):"\u2014"}</td>`
+function combinedLadder(s,rows,books,spot,spotPre){
+  if(!rows||!rows.length) return "";
+  const span = books.length;
+  const above=rows.filter(w=>+w.strike>+spot), below=rows.filter(w=>+w.strike<=+spot);
+  const spotRowHtml = (spot==null) ? "" :
+    `<tr class="spotrow"><td>SPOT</td><td class="num">${(+spot).toFixed(2)}</td>`
+    +`${"<td class=\"num\">—</td>".repeat(span)}`
+    +`<td class="num">—</td><td class="num">0.00%</td>`
+    +`<td class="num pre">${spotPre!==undefined&&spotPre!==null?(+spotPre).toFixed(2):"—"}</td>`
     +`<td></td></tr>`;
-}
-
-function regimeBlock(s,key,r){
-  const gexClass=r.regime==="positive"?"pos":r.regime==="negative"?"neg":"";
-  let eff = r.dispersed&&r.dispersed.length
-     ? `<div class="eff thin">Dispersed gamma (${r.dispersed.join("/")}) — no single dominant wall. Lean on volume profile / prior levels or stand down.</div>`
-     : "";
-  return `<div class="regime-block">
-    <div class="rhead">
-      <span class="rlabel">${r.label||key}</span>
-      <span class="regime ${r.regime}">${r.regime} gamma</span>
-      ${r.short_share!==null&&r.short_share!==undefined
-        ? `<span class="chip decay${r.short_share>=50?" hot":""}" title="Share of this bucket's gamma in contracts expiring within ${r.short_days} days. High means the levels below do not survive the week.">${r.short_share}% &le;${r.short_days}d</span>`
-        : ""}
-      <span class="role">${r.role||""}</span>
-    </div>
-    <div class="rbody">
-      <div class="stats">
-        <div class="stat"><div class="k">Net GEX</div><div class="v ${gexClass}" data-k="${s.symbol}-${key}-gex">${r.net_gex_str}</div></div>
-        <div class="stat"><div class="k">Flip</div><div class="v">${r.flip!==null&&r.flip!==undefined?r.flip.toFixed(2):"—"}${r.flip_dist!==null&&r.flip_dist!==undefined?` <span style="font-size:12px;color:var(--muted)">(${r.flip_dist>0?"+":""}${r.flip_dist}%)</span>`:""}${r.flip_pre!==null&&r.flip_pre!==undefined?` <span class="pre" style="font-size:12px">${(+r.flip_pre).toFixed(2)}</span>`:""}</div></div>
-        <div class="stat"><div class="k" title="Dollar dealer delta per 1 point of implied vol. Gamma hedges spot moving; vanna hedges IV moving.">Vanna /vol</div><div class="v sm ${(r.vanna||0)>=0?"pos":"neg"}">${r.vanna_str||"—"}</div></div>
-        <div class="stat"><div class="k" title="Dollar dealer delta per day from time passing alone - the drift that happens with spot going nowhere.">Charm /day</div><div class="v sm ${(r.charm||0)>=0?"pos":"neg"}">${r.charm_str||"—"}</div></div>
-      </div>
-      <div>
-        <div class="walls"><table><thead><tr><th>Side</th><th class="num">Strike</th><th class="num">Net GEX</th><th class="num">Call / Put</th><th class="num">Dist</th><th class="num">${chainName(s)}</th><th>Tags</th></tr></thead>
-        <tbody>${wallLadder(r.walls,s.spot,s.spot_pre)}</tbody></table></div>
-        ${eff}
-      </div>
-    </div>
-  </div>`;
+  const head = `<tr><th>Side</th><th class="num">Strike</th>`
+    + books.map(b=>`<th class="num">${b}</th>`).join("")
+    + `<th class="num">Call / Put</th><th class="num">Dist</th>`
+    + `<th class="num">${chainName(s)}</th><th>Tags</th></tr>`;
+  return `<div class="walls"><table><thead>${head}</thead><tbody>`
+    + above.map(w=>ladderRow(w,books)).join("")
+    + spotRowHtml
+    + below.map(w=>ladderRow(w,books)).join("")
+    + `</tbody></table></div>`;
 }
 
 function panel(s){
@@ -2030,11 +2116,19 @@ function panel(s){
       +(s.max_pain||[]).map(p=>`<tr${p.monthly?' class="opex"':''}><td>${p.expiry}${p.monthly?' <span class="tag">OPEX</span>':''}</td><td class="num">${(+p.strike).toFixed(2)}</td><td class="num">${p.dist>0?"+":""}${p.dist}%</td><td class="num pre">${p.strike_pre!==undefined&&p.strike_pre!==null?(+p.strike_pre).toFixed(2):"\u2014"}</td><td class="num">${p.loss_str}</td></tr>`).join("")
       +`</tbody></table></div>`
     : "";
-  const body = (regimes.near||regimes.full)
-    ? `<div class="regimes">`
-      +(regimes.near?regimeBlock(s,"near",regimes.near):"")
-      +(regimes.full?regimeBlock(s,"full",regimes.full):"")
-      +`</div>`
+  // One block per symbol now, not one per book: three books in three columns
+  // of a single ladder. Two half-width tables could not be compared row for
+  // row, and a third would not have fitted - 3 blocks leave 395px against a
+  // table needing 489.
+  const books = s.books||["near","full"];
+  const body = (s.ladder&&s.ladder.length)
+    ? `<div class="regime-block">`
+      + bookSummary(s,regimes,books)
+      + combinedLadder(s,s.ladder,books,s.spot,s.spot_pre)
+      + ((regimes[books[0]]&&regimes[books[0]].dispersed&&regimes[books[0]].dispersed.length)
+          ? `<div class="eff thin">Dispersed gamma (${regimes[books[0]].dispersed.join("/")}) &mdash; no single dominant wall. Lean on volume profile / prior levels or stand down.</div>`
+          : "")
+      + `</div>`
     : `<div class="err">${s.error_note||"no usable option contracts returned"}</div>`;
   return `<div class="panel">
     <div class="phead">
