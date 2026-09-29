@@ -45,7 +45,11 @@ NEAR_MAX_DTE = 32            # near-term bucket: never look further than this
 MAX_PAIN_DAILY_DAYS = 5      # max pain: every expiry inside this many days,
                              # and nothing but monthly opex beyond it
 SHARES_PER_CONTRACT = 100
-WALL_COUNT = 10              # ranked walls reported per side
+WALL_COUNT = 10              # default walls per side; instruments override
+                             # it with wall_count. GC runs a shorter list:
+                             # gold call open interest genuinely sits far out
+                             # of the money, so a long list fills with strikes
+                             # price cannot reach in a session.
 SHORT_DATED_DAYS = 2         # "about to expire" for the gamma-concentration
                              # share: 0-2 DTE was 51% of NQ's near-bucket
                              # gamma on 2026-09-28 against 33% of its OI
@@ -120,15 +124,15 @@ INSTRUMENTS = [
     # ladder line up with the increments actually drawn on a chart.
     {"future": "ES",  "chain": "_SPX", "hist": "^GSPC", "index": "^GSPC",
      "fut": "ES=F",  "multiplier": 50,   "cycle": "quarterly", "exch": ".CME",
-     "wall_sep": 5.0},
+     "wall_sep": 5.0,  "wall_count": 10},
     {"future": "NQ",  "chain": "QQQ",  "hist": "QQQ",   "index": "^NDX",
      "fut": "NQ=F",  "multiplier": 20,   "cycle": "quarterly", "exch": ".CME",
-     "wall_sep": 1.0},
+     "wall_sep": 1.0,  "wall_count": 10},
     # Commodity books ride an ETF chain the same way NQ rides QQQ, but the
     # proxy is looser: see the ratio-noise note in compute_symbol.
     {"future": "GC",  "chain": "GLD",  "hist": "GLD",   "index": "GC=F",
      "fut": "GC=F",  "multiplier": 100,  "cycle": "gc",        "exch": ".CMX",
-     "wall_sep": 1.0},
+     "wall_sep": 1.0,  "wall_count": 6},
 ]
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1690,6 +1694,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
         out["ladder"] = build_ladder(
             {k: gex_by_strike(v, spot, book_date) for k, v in buckets.items()},
             list(buckets), spot, ref_spot, prior, disp,
+            n=inst.get("wall_count"),
             min_sep=(sep / spot) if (sep and spot) else None)
         out["max_pain"] = [
             {"expiry": expiry.isoformat(), "strike": disp(item["strike"]),
