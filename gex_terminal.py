@@ -882,6 +882,13 @@ def build_ladder(per_by_book, books, spot, ref_spot, prior, disp,
             flips = len(signs) > 1
             d = per_by_book[books[0]].get(k) or {"call": 0.0, "put": 0.0,
                                                  "mag": 0.0, "short": 0.0}
+            # How much of the strike expires within SHORT_DATED_DAYS is read
+            # off the widest short book. books[0] is the week book, and from
+            # Wednesday every contract in it is that close by construction:
+            # every wall read "100% exp" on 2026-10-01, when the near book put
+            # ES's at 1-24%.
+            d_short = per_by_book[short_books[-1]].get(k) or {"mag": 0.0,
+                                                              "short": 0.0}
             # A put wall above spot, or a call wall below it. Conventionally
             # calls cap rallies from above and puts support from below; when a
             # level is the other way round the usual reading is inverted.
@@ -894,8 +901,8 @@ def build_ladder(per_by_book, books, spot, ref_spot, prior, disp,
                 "books": cells,
                 "call_gex": d["call"], "call_str": fmt_dollars(d["call"]),
                 "put_gex": d["put"], "put_str": fmt_dollars(d["put"]),
-                "short_frac": (round(d["short"] / d["mag"], 2)
-                               if d["mag"] else None),
+                "short_frac": (round(d_short["short"] / d_short["mag"], 2)
+                               if d_short["mag"] else None),
                 "sign_flip": flips,
                 "dist": round(100 * (k - ref_spot) / ref_spot, 2),
                 "conf": conf,
@@ -2032,7 +2039,26 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
         "candidates": active["candidates"],
     }
 
-    if contracts:
+    # Cboe sometimes serves a chain with open interest but every greek zeroed -
+    # seen 2026-09-25 09:45 ET on all four chains at once, gone by the next
+    # run. Built from that, every strike's GEX is 0: no walls, no flip, and a
+    # "+0 positive gamma" headline that looks like a reading rather than a
+    # gap. Max pain needs only open interest, so it is still computed.
+    has_gamma = any(c["gamma"] for c in contracts)
+    if contracts and not has_gamma:
+        logging.warning("%s: %s chain has open interest but no gamma - "
+                        "greeks not published", future, inst["chain"])
+        out["greeks_missing"] = True
+        out["error_note"] = ("Cboe returned open interest but no greeks "
+                             "(every gamma is 0), so GEX and walls cannot be "
+                             "computed this run. Usually clears within one "
+                             "refresh.")
+        # Open interest is still good, and the session's fingerprint is
+        # written once by whichever run comes first - skipping it here would
+        # leave this symbol out of the day's OI history entirely.
+        _OI_PENDING[future] = oi_fingerprint(contracts)
+        _OI_PENDING["_book"] = book_date
+    if contracts and has_gamma:
         fut_exp = active["expiry"]
         near_cutoff = min(fut_exp, book_date + timedelta(days=NEAR_MAX_DTE))
         # This week's expiries, for trading the session rather than the month.
@@ -2059,6 +2085,11 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
             out["regimes"][key] = build_regime(sub, spot, today, prior, disp,
                                                ref_spot, book_date=book_date)
             out["regimes"][key]["label"] = labels[key]
+        # Once the week's last expiry is within SHORT_DATED_DAYS, all of the
+        # week book's gamma is short-dated by definition and the share reads
+        # 100% whatever the book holds - blank it rather than print a non-reading.
+        if (week_cutoff - book_date).days <= SHORT_DATED_DAYS:
+            out["regimes"]["week"]["short_share"] = None
 
         # One ladder across all three books, so the same strike is one row.
         out["books"] = list(buckets)
@@ -2135,6 +2166,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
             if best:
                 r["vp"] = best[1]
 
+    if contracts:
         out["max_pain"] = [
             {"expiry": expiry.isoformat(), "strike": disp(item["strike"]),
              "strike_pre": round(item["strike"], 2),
@@ -2272,7 +2304,43 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
     return out
 
 
-def recompute():
+# Everything built from the chain's greeks, carried as a unit by hold_regimes.
+HELD_KEYS = ("regimes", "books", "ladder", "flow", "vp", "oi_prev_date")
+
+
+def hold_regimes(syms, previous, previous_generated):
+    """Carry the last good GEX/walls into symbols whose greeks came back empty.
+
+    A zero-greek chain is a feed gap, not a reading, and it clears within a
+    run or two. Blanking the walls for that window - and publishing the blank
+    over a good page - is worse than showing the previous figures clearly
+    marked with when they are from. Levels are held as they were, distances
+    included; spot, max pain and the margin rows stay live.
+    """
+    prev = {p.get("symbol"): p for p in (previous or []) if p}
+    for sym in syms:
+        if not (sym and sym.get("greeks_missing")):
+            continue
+        old = prev.get(sym["symbol"]) or {}
+        # Only hold figures that have walls in them: a page published before
+        # this guard existed carries the zeroed books themselves.
+        if not old.get("ladder"):
+            continue
+        for key in HELD_KEYS:
+            if key in old:
+                sym[key] = old[key]
+        # A hold of a hold keeps the time of the figures, not of the last run.
+        sym["regimes_from"] = old.get("regimes_from") or previous_generated
+
+
+def recompute(previous=None, previous_generated=None):
+    """previous/previous_generated: the last published symbols and their
+    timestamp, used by hold_regimes. Defaults to this process's own cache,
+    which is what the live server has; a snapshot run passes the sidecar."""
+    if previous is None:
+        with _lock:
+            previous = list(_cache.get("symbols") or [])
+            previous_generated = _cache.get("generated")
     now = now_et()
     status = market_status(now)
     margins_cfg = load_margins()
@@ -2297,6 +2365,7 @@ def recompute():
         t.start()
     for t in threads:
         t.join()
+    hold_regimes(syms, previous, previous_generated)
 
     # One line covering every product, so the overlay is a single copy and a
     # single paste rather than one per chart:
@@ -2754,8 +2823,11 @@ function panel(s){
       +`</div>`
     : "";
   const books = s.books||["near","full"];
+  const held = s.regimes_from
+    ? `<div class="err">Cboe greeks missing this run - GEX and walls held from ${s.regimes_from}.</div>`
+    : "";
   const body = (s.ladder&&s.ladder.length)
-    ? `<div class="regime-block">`
+    ? held+`<div class="regime-block">`
       + `<div class="topline">` + bookSummary(s,regimes,books)
         + volumeProfile(s.vp) + `</div>`
       + combinedLadder(s,s.ladder,books,s.spot,s.spot_pre)
@@ -2967,11 +3039,18 @@ def render_snapshot(path, skip_unchanged=False):
     # History lives beside the published page, so it versions with it and
     # both machines read the same files.
     set_oi_dir(Path(path).parent)
-    recompute()
-    data = snapshot_json()
-    digest = payload_digest(json.loads(data))
     target = Path(path)
     sidecar = target.with_name("data.json")
+    previous, previous_generated = [], None
+    try:
+        published = json.loads(sidecar.read_text(encoding="utf-8"))
+        previous = published.get("symbols") or []
+        previous_generated = published.get("generated")
+    except (OSError, ValueError):
+        pass              # first run, or an unreadable sidecar: nothing to hold
+    recompute(previous, previous_generated)
+    data = snapshot_json()
+    digest = payload_digest(json.loads(data))
 
     # Require the sidecar too, or the first run after it was introduced would
     # match on digest and never create it.
