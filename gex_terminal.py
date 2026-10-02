@@ -1711,6 +1711,25 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
 
         # One ladder across all three books, so the same strike is one row.
         out["books"] = list(buckets)
+        # Chart export. The paste used to carry only the anchor and the two
+        # band distances - 71 characters - so none of the GEX levels ever
+        # reached TradingView and they were placed by hand off the table.
+        # Each book gets its own section because their flips genuinely differ:
+        # NQ sat at 30870 weekly against 30766 near on 2026-10-01, about 104
+        # index points apart, and a chart drawing one of them should say which.
+        #
+        # Markers ride the strike itself so the chart can style what the table
+        # highlights: * for an inverted level (a put above spot or a call
+        # below), ! for one the books disagree about. Pine has no regex, so
+        # they are single leading characters rather than anything structured.
+        def pine_book(rows, flip_at):
+            calls, puts = [], []
+            for r in rows:
+                tag = ("*" if r.get("inverted") else "") +                       ("!" if r["strike_pre"] in flip_at else "")
+                (calls if r["side"] == "call" else puts).append(
+                    f"{tag}{r['strike']:.0f}")
+            return ",".join(calls), ",".join(puts)
+
         # wall_sep is quoted in chain points; the ladder wants a fraction.
         sep = inst.get("wall_sep")
         out["ladder"] = build_ladder(
@@ -1718,6 +1737,21 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
             list(buckets), spot, ref_spot, prior, disp,
             n=inst.get("wall_count"),
             min_sep=(sep / spot) if (sep and spot) else None)
+
+        per_book = {k: gex_by_strike(v, spot, book_date)
+                    for k, v in buckets.items()}
+        flip_at = {r["strike_pre"] for r in out["ladder"] if r.get("sign_flip")}
+        chart = []
+        for key, tag in (("week", "W"), ("near", "N")):
+            rows = build_ladder({key: per_book[key]}, [key], spot, ref_spot,
+                                prior, disp, n=inst.get("wall_count"),
+                                min_sep=(sep / spot) if (sep and spot) else None)
+            c, pz = pine_book(rows, flip_at)
+            fl = out["regimes"][key].get("flip")
+            chart.append(f"F{tag}:{fl:.2f}" if fl else f"F{tag}:")
+            chart.append(f"C{tag}:{c}")
+            chart.append(f"P{tag}:{pz}")
+        out["pine_levels"] = "|".join(chart)
         out["max_pain"] = [
             {"expiry": expiry.isoformat(), "strike": disp(item["strike"]),
              "strike_pre": round(item["strike"], 2),
@@ -1867,7 +1901,9 @@ def recompute():
             continue
         chip = (sym.get("margin") or {}).get("pine")
         if chip:
-            chips.append(f"{sym['symbol']}={chip}")
+            levels = sym.get("pine_levels")
+            chips.append(f"{sym['symbol']}={chip}"
+                         + (f"|{levels}" if levels else ""))
 
     with _lock:
         _cache["generated"] = now.strftime("%Y-%m-%d %H:%M:%S ET")

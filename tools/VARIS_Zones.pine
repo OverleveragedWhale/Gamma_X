@@ -1,5 +1,5 @@
 //@version=6
-indicator("VARIS Zones", overlay=true, max_labels_count=50)
+indicator("VARIS Zones", overlay=true, max_labels_count=50, max_lines_count=500)
 
 // ===== Visibility Inputs =====
 showVWAP    = input.bool(true, "Show VWAP", group="VWAP")
@@ -65,6 +65,20 @@ showLiq   = input.bool(true, "Show Liquidation Bands", group="Liquidation")
 liqProd   = input.string("Auto (by symbol)", "Product",
      options=["Auto (by symbol)", "ES", "NQ", "GC", "CL"], group="Liquidation")
 liqPaste  = input.string("", "Paste (all products)", group="Liquidation")
+
+// ===== GEX levels, from the same paste =====
+// The paste carries two books. They disagree, and that is the information:
+// NQ's flip sat at 30899 weekly against 30844 near on 2026-10-01. Draw the one
+// you trade, or both and watch where they part.
+showLv    = input.bool(true,  "Show GEX levels",            group="GEX levels")
+showWk    = input.bool(true,  "  This week",                group="GEX levels")
+showNr    = input.bool(false, "  Near-term (32d)",          group="GEX levels")
+showFlip  = input.bool(true,  "  Gamma flip",               group="GEX levels")
+lvLabels  = input.bool(true,  "  Label each level",         group="GEX levels")
+callColor = input.color(color.new(#4bbf8a, 35), "Call-dominated", group="GEX levels")
+putColor  = input.color(color.new(#e0603f, 35), "Put-dominated",  group="GEX levels")
+invColor  = input.color(color.new(#d9a441, 15), "Inverted (put above / call below)", group="GEX levels")
+flipColor = input.color(color.new(#ff5d63, 20), "Flip",           group="GEX levels")
 
 // The default is the hybrid, because the other two each fail
 // one of the two things asked of this script: a pure chart anchor draws history
@@ -164,6 +178,20 @@ var float liq99Pts  = na
 var float liq999Pts = na
 var bool  liqFound  = false
 
+// GEX levels, one set per book. Parallel arrays rather than a UDT so the
+// parse stays a plain loop: Lv price, Mk marker bits (1 inverted, 2 sign
+// flip), Sd 1 for a call-dominated level and 0 for a put-dominated one.
+// Side is carried because the ladder names a level by the SIGN of its net,
+// not by where it sits - that is the whole point of the inverted marker.
+var array<float> wkLv = array.new_float(0)
+var array<int>   wkMk = array.new_int(0)
+var array<int>   wkSd = array.new_int(0)
+var array<float> nrLv = array.new_float(0)
+var array<int>   nrMk = array.new_int(0)
+var array<int>   nrSd = array.new_int(0)
+var float wkFlip = na
+var float nrFlip = na
+
 if barstate.isfirst and liqPaste != ""
     chunks = str.split(str.replace_all(liqPaste, " ", ""), ";")
     nChunks = array.size(chunks)
@@ -176,11 +204,45 @@ if barstate.isfirst and liqPaste != ""
             // truncated entry reports itself as unreadable rather than as
             // absent - two different things to go and fix.
             liqFound := true
-            vals = str.split(array.get(kv, 1), ",")
+            // The value now carries "|" separated sections: the bands first,
+            // then F/C/P per book. A paste from before this change has no "|"
+            // at all, so section 0 is the whole string and it still reads.
+            secs = str.split(array.get(kv, 1), "|")
+            vals = str.split(array.get(secs, 0), ",")
             if array.size(vals) > 2
                 liqAnchor := str.tonumber(array.get(vals, 0))
                 liq99Pts  := str.tonumber(array.get(vals, 1))
                 liq999Pts := str.tonumber(array.get(vals, 2))
+            nSec = array.size(secs)
+            for j = 1 to (nSec > 1 ? nSec - 1 : 0)
+                sec = nSec > 1 ? array.get(secs, j) : ""
+                head = str.substring(sec, 0, 3)          // "FW:", "CN:", ...
+                body = str.length(sec) > 3 ? str.substring(sec, 3) : ""
+                if head == "FW:"
+                    wkFlip := str.tonumber(body)
+                else if head == "FN:"
+                    nrFlip := str.tonumber(body)
+                else if body != ""
+                    tgtL = head == "CW:" or head == "PW:" ? wkLv : nrLv
+                    tgtM = head == "CW:" or head == "PW:" ? wkMk : nrMk
+                    tgtS = head == "CW:" or head == "PW:" ? wkSd : nrSd
+                    isCall = head == "CW:" or head == "CN:"
+                    parts = str.split(body, ",")
+                    for q = 0 to array.size(parts) - 1
+                        raw = array.get(parts, q)
+                        // Markers ride the front of the strike: * inverted
+                        // (a put above spot or a call below), ! the books
+                        // disagree on who owns it. Stripped one at a time
+                        // because a level can carry both.
+                        mk = 0
+                        while str.startswith(raw, "*") or str.startswith(raw, "!")
+                            mk := mk + (str.startswith(raw, "*") ? 1 : 2)
+                            raw := str.substring(raw, 1)
+                        v = str.tonumber(raw)
+                        if not na(v)
+                            array.push(tgtL, v)
+                            array.push(tgtM, mk)
+                            array.push(tgtS, isCall ? 1 : 0)
 
 // Which bars belong to the session in progress, so the paste can anchor today
 // while the chart anchors history.
@@ -347,3 +409,80 @@ if barstate.islast and showLiq and liqPaste != "" and not liqOK
     lWarn := label.new(bar_index, close, msg,
          style=label.style_label_left, color=color.new(color.red, 20),
          textcolor=color.white, size=size.small)
+
+
+// ============================================================================
+// GEX levels
+// ----------------------------------------------------------------------------
+// Drawn once on the last bar and extended right, because the paste does not
+// change mid-run - redrawing per bar would cost 500 lines for no gain.
+//
+// A level is coloured by what it IS, not by where it sits. The terminal names
+// each level from the sign of its net gamma, so a put-dominated strike ABOVE
+// spot is a put level with a positive distance - it gets the inverted colour
+// because the usual "calls cap from above, puts support from below" reading
+// does not apply to it. A level the two books disagree about is dotted.
+var array<line>  lvLines = array.new_line(0)
+var array<label> lvLabs  = array.new_label(0)
+
+// Pine infers parameter types; annotating them in the signature is a syntax
+// error, so the shapes are documented here instead: lv float[], mk int[],
+// sd int[], on bool, tag string, style a line.style_* constant.
+drawBook(lv, mk, sd, on, tag, style) =>
+    if on and array.size(lv) > 0
+        for i = 0 to array.size(lv) - 1
+            px  = array.get(lv, i)
+            m   = array.get(mk, i)
+            isC = array.get(sd, i) == 1
+            inv = m % 2 == 1          // bit 0: inverted
+            flp = m >= 2              // bit 1: books disagree
+            col = inv ? invColor : (isC ? callColor : putColor)
+            ln = line.new(bar_index - 1, px, bar_index, px,
+                 extend=extend.right, color=col, width=1,
+                 style=flp ? line.style_dotted : style)
+            array.push(lvLines, ln)
+            if lvLabels
+                txt = tag + (isC ? " C " : " P ") + str.tostring(px, format.mintick)
+                     + (inv ? "  inverted" : "") + (flp ? "  sign flip" : "")
+                lb = label.new(bar_index, px, txt, style=label.style_label_left,
+                     color=color.new(color.black, 100), textcolor=col,
+                     size=size.tiny)
+                array.push(lvLabs, lb)
+
+if barstate.islast and showLv
+    // Clear the previous draw: Pine keeps every object made on earlier
+    // executions, and an input change re-runs the whole script.
+    if array.size(lvLines) > 0
+        for i = 0 to array.size(lvLines) - 1
+            line.delete(array.get(lvLines, i))
+        array.clear(lvLines)
+    if array.size(lvLabs) > 0
+        for i = 0 to array.size(lvLabs) - 1
+            label.delete(array.get(lvLabs, i))
+        array.clear(lvLabs)
+
+    drawBook(wkLv, wkMk, wkSd, showWk, "W", line.style_solid)
+    drawBook(nrLv, nrMk, nrSd, showNr, "N", line.style_dashed)
+
+    if showFlip
+        if showWk and not na(wkFlip)
+            ln = line.new(bar_index - 1, wkFlip, bar_index, wkFlip,
+                 extend=extend.right, color=flipColor, width=2)
+            array.push(lvLines, ln)
+            if lvLabels
+                array.push(lvLabs, label.new(bar_index, wkFlip,
+                     "W flip " + str.tostring(wkFlip, format.mintick),
+                     style=label.style_label_left,
+                     color=color.new(color.black, 100), textcolor=flipColor,
+                     size=size.small))
+        if showNr and not na(nrFlip)
+            ln = line.new(bar_index - 1, nrFlip, bar_index, nrFlip,
+                 extend=extend.right, color=flipColor, width=1,
+                 style=line.style_dashed)
+            array.push(lvLines, ln)
+            if lvLabels
+                array.push(lvLabs, label.new(bar_index, nrFlip,
+                     "N flip " + str.tostring(nrFlip, format.mintick),
+                     style=label.style_label_left,
+                     color=color.new(color.black, 100), textcolor=flipColor,
+                     size=size.small))
