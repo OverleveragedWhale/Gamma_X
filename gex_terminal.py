@@ -496,13 +496,17 @@ def load_contracts(options, today):
             oi = int(o.get("open_interest") or 0)
             iv = float(o.get("iv") or 0.0)
             gamma = float(o.get("gamma") or 0.0)
+            # Today's contracts traded, against open_interest which is T-1.
+            # On 2026-10-01 QQQ traded 84% of its standing book in a session,
+            # so a model reading only open interest is reading yesterday.
+            vol = int(o.get("volume") or 0)
         except (KeyError, ValueError, TypeError):
             continue
         dte = (exp - today).days
         if oi <= 0 or dte < 0 or dte > MAX_DTE:
             continue
         out.append({"exp": exp, "cp": cp, "strike": strike,
-                    "oi": oi, "iv": iv, "gamma": gamma})
+                    "oi": oi, "iv": iv, "gamma": gamma, "vol": vol})
     return out
 
 
@@ -528,6 +532,46 @@ def gex_by_strike(contracts, spot, book_date=None):
             if (c["exp"] - book_date).days <= SHORT_DATED_DAYS:
                 d["short"] += abs(g)
     return per
+
+
+def flow_by_strike(contracts, spot):
+    """Gamma-weighted TODAY'S VOLUME per strike, the flow twin of gex_by_strike.
+
+    Not an exposure, and must not be read as one: volume says a contract
+    changed hands, not whether it opened or closed a position, nor who
+    initiated it. What it is is a concentration map - where today's gamma is
+    being traded, against where the standing book has it parked. The two
+    diverging is the signal, and a single snapshot of open interest cannot
+    show it at all.
+
+    Weighted by gamma rather than counted raw so it is on the same footing as
+    the GEX beside it: a thousand far-OTM lottery tickets and a thousand ATM
+    contracts are not the same amount of dealer hedging.
+    """
+    per = {}
+    for c in contracts:
+        if not c.get("vol"):
+            continue
+        g = contract_gex(c["gamma"], c["vol"], spot)
+        d = per.setdefault(c["strike"], {"call": 0.0, "put": 0.0})
+        d["call" if c["cp"] == "C" else "put"] += g
+    return per
+
+
+def flow_summary(contracts):
+    """Today's tape against the standing book, in put/call terms."""
+    cv = sum(c["vol"] for c in contracts if c["cp"] == "C")
+    pv = sum(c["vol"] for c in contracts if c["cp"] == "P")
+    co = sum(c["oi"] for c in contracts if c["cp"] == "C")
+    po = sum(c["oi"] for c in contracts if c["cp"] == "P")
+    return {
+        "call_vol": cv, "put_vol": pv, "call_oi": co, "put_oi": po,
+        "pc_vol": round(pv / cv, 2) if cv else None,
+        "pc_oi": round(po / co, 2) if co else None,
+        # How much of the standing book changed hands today. Near or above 1
+        # means the book on the page is a poor description of the day.
+        "turnover": round((cv + pv) / (co + po), 3) if (co + po) else None,
+    }
 
 
 def top_walls(per, side, spot, n=None, min_sep=None, ref=None, half=None):
@@ -1152,6 +1196,17 @@ def _session_close_once(sym, session_date):
     return last
 
 
+OI_DIR_NAME = "oi"           # per-session open-interest history, beside the
+                             # published page so it is versioned and shared
+                             # between machines rather than living on one
+OI_KEEP_DAYS = 45            # sessions retained; older files are pruned
+OI_MIN = 50                  # strikes below this open interest are not stored
+
+ATM_STRIKES = 6              # strikes nearest spot averaged for ATM IV
+TRADING_DAYS = 252           # annualisation basis for implied daily move
+VOL_INDEXES = (("9D", "^VIX9D"), ("30D", "^VIX"), ("3M", "^VIX3M"),
+               ("VVIX", "^VVIX"))
+
 VP_LOOKBACK = 10             # sessions of intraday history kept for profiles
 VP_PREV_SESSIONS = 1         # "previous session": the last COMPLETED one
 VP_WEEK_SESSIONS = 5         # "weekly": a trading week behind it
@@ -1266,6 +1321,123 @@ def _newest_cash_close_once(sym, today):
     if not usable:
         return None
     return max(usable, key=lambda d: d["date"])
+
+
+_OI_DIR = None
+_OI_PENDING = {}
+
+
+def set_oi_dir(path):
+    """Where the per-session open-interest history lives, or None to disable.
+
+    Set from the snapshot target's folder, so the files publish alongside the
+    page. The server mode leaves it None and simply reports no change figures.
+    """
+    global _OI_DIR
+    _OI_DIR = Path(path) if path else None
+
+
+def oi_fingerprint(contracts):
+    """{strike: [call_oi, put_oi]} for one symbol, trimmed to what matters.
+
+    Strikes under OI_MIN are dropped: they are most of the book by count and
+    none of it by weight, and keeping them would quadruple a file written
+    every session forever.
+    """
+    per = {}
+    for c in contracts:
+        if c["oi"] <= 0:
+            continue
+        d = per.setdefault(round(c["strike"], 2), [0, 0])
+        d[0 if c["cp"] == "C" else 1] += c["oi"]
+    return {str(k): v for k, v in per.items() if sum(v) >= OI_MIN}
+
+
+def oi_history_path(book_date):
+    return _OI_DIR / OI_DIR_NAME / f"{book_date.isoformat()}.json" if _OI_DIR else None
+
+
+def prior_oi(book_date):
+    """The newest stored session strictly before `book_date`, or None.
+
+    Strictly before, so a second run on the same session compares against the
+    previous one rather than against itself and reporting no change.
+    """
+    if not _OI_DIR:
+        return None
+    folder = _OI_DIR / OI_DIR_NAME
+    if not folder.is_dir():
+        return None
+    stamp = book_date.isoformat()
+    older = sorted(f for f in folder.glob("*.json") if f.stem < stamp)
+    if not older:
+        return None
+    try:
+        return json.loads(older[-1].read_text(encoding="utf-8")), older[-1].stem
+    except (OSError, ValueError):
+        logging.info("open-interest history unreadable: %s", older[-1])
+        return None
+
+
+def write_oi(book_date, per_symbol):
+    """Store this session's fingerprint once, and prune the tail."""
+    path = oi_history_path(book_date)
+    if not path or path.exists() or not per_symbol:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(per_symbol, separators=(",", ":")),
+                        encoding="utf-8")
+        files = sorted(path.parent.glob("*.json"))
+        for old in files[:-OI_KEEP_DAYS]:
+            old.unlink()
+    except OSError:
+        logging.info("could not write open-interest history for %s", book_date)
+
+
+def atm_iv(contracts, spot, today):
+    """Average implied vol of the strikes nearest spot, nearest expiry.
+
+    Averaged over several strikes rather than taken from the single closest:
+    one contract can carry a stale or crossed quote, and the IV the chain
+    publishes for it is whatever that quote implies. Calls and puts at a
+    strike are both included - they should agree, and where they do not the
+    mean is the honest answer.
+    """
+    live = [c for c in contracts if c["iv"] > 0 and c["exp"] >= today]
+    if not live:
+        return None
+    nearest = min(c["exp"] for c in live)
+    at = sorted((c for c in live if c["exp"] == nearest),
+                key=lambda c: abs(c["strike"] - spot))[:ATM_STRIKES]
+    if not at:
+        return None
+    return sum(c["iv"] for c in at) / len(at), nearest
+
+
+def vol_term_structure():
+    """The free VIX complex: 9-day, 30-day, 3-month, and vol-of-vol.
+
+    Relevant here because VANNA is exposure to implied vol MOVING, and the
+    page reported it with no way to judge whether vol was likely to. Contango
+    is the regime where vanna flows stay quiet; inversion is when they lead.
+    One daily bar each, so this costs four cheap requests per recompute.
+    """
+    out = {}
+    for label, sym in VOL_INDEXES:
+        try:
+            rows = fetch_rows(sym, max_rows=2)
+            out[label] = round(rows[-1]["c"], 2)
+        except Exception:
+            logging.info("vol term structure: %s unavailable", sym)
+    if "30D" in out and "9D" in out and "3M" in out:
+        near, mid, far = out["9D"], out["30D"], out["3M"]
+        out["ratio_9d_30d"] = round(near / mid, 3) if mid else None
+        out["ratio_30d_3m"] = round(mid / far, 3) if far else None
+        # Inverted at either joint is the thing worth naming; the whole curve
+        # rarely inverts at once and waiting for that misses the signal.
+        out["inverted"] = (near > mid) or (mid > far)
+    return out or None
 
 
 def vp_bars(sym):
@@ -1883,6 +2055,46 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
         # hole. Compared in FUTURES terms - the profile is built on the
         # contract and the ladder's strikes are already converted, so both
         # sides of the test are the prices a chart draws.
+        # Open-interest change since the previous stored session. A wall
+        # being BUILT and one decaying into expiry look identical in a single
+        # snapshot, and that is the difference between a level dealers are
+        # defending and one they are walking away from.
+        # Today's tape beside the standing book. The ladder carries a FLOW
+        # column rather than a fourth "book" because it is not one: a book is
+        # a subset of contracts by expiry, this is the same contracts weighted
+        # by what traded today instead of by what is open.
+        out["flow"] = flow_summary(contracts)
+        flow_per = flow_by_strike(contracts, spot)
+        for r in out["ladder"]:
+            d = flow_per.get(r["strike_pre"])
+            if d:
+                r["flow"] = d["call"] - d["put"]
+                r["flow_str"] = fmt_dollars(r["flow"])
+
+        # Stashed module-side, never put in the payload: ~500 strikes a
+        # symbol would add tens of KB to a page published 50 times a day for
+        # data no reader needs.
+        _OI_PENDING[future] = oi_fingerprint(contracts)
+        _OI_PENDING["_book"] = book_date
+        hist = prior_oi(book_date)
+        if hist:
+            before, before_date = hist
+            prev = (before or {}).get(future) or {}
+            out["oi_prev_date"] = before_date
+            for r in out["ladder"]:
+                key = str(round(r["strike_pre"], 2))
+                was = prev.get(key)
+                now_oi = _OI_PENDING[future].get(key)
+                if not was or not now_oi:
+                    continue
+                dc = now_oi[0] - was[0]
+                dp = now_oi[1] - was[1]
+                base = was[0] + was[1]
+                r["d_call_oi"] = dc
+                r["d_put_oi"] = dp
+                r["d_oi_pct"] = (round(100.0 * (dc + dp) / base, 1)
+                                 if base else None)
+
         out["vp"] = profiles_for(inst["fut"], future, now)
         # Confluence against BOTH profiles, nearest mark wins. A level that
         # the previous session and the week behind it both single out is a
@@ -1943,11 +2155,36 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
         pine_src = "16:59" if pine_anchor is not None else "daily bar"
         if pine_anchor is None:
             pine_anchor = prior_fut["c"]
+    # What the option market is charging for a day, against what the future
+    # has actually delivered. Both halves were already here - the chain's IV
+    # and realized_sigma - without ever being put side by side. On
+    # 2026-10-01 ES implied 1.16% a day against 0.75% realized, so the bands
+    # drawn off realized vol were materially narrower than what was priced.
+    iv_pair = None
+    if contracts:
+        try:
+            iv_pair = atm_iv(contracts, spot, book_date)
+        except Exception:
+            logging.info("%s: ATM IV unavailable", future)
+    implied_daily = (iv_pair[0] / math.sqrt(TRADING_DAYS)) if iv_pair else None
+
     if sigma and prior_fut:
         anchor = prior_fut["c"]
         out["risk"] = {
             "anchor": round(anchor, 2), "anchor_date": prior_fut["date"],
             "sigma_pct": round(100 * sigma, 3), "bars": len(completed),
+            "iv_atm_pct": round(100 * iv_pair[0], 2) if iv_pair else None,
+            "iv_expiry": iv_pair[1].isoformat() if iv_pair else None,
+            "implied_pct": round(100 * implied_daily, 3) if implied_daily else None,
+            # Positive means options are charging more than the tape has been
+            # delivering - the usual state, and worth seeing when it is not.
+            "iv_rv_pct": (round(100 * (implied_daily - sigma), 3)
+                          if implied_daily else None),
+            "implied_band": ({
+                "points": round(anchor * implied_daily, 2),
+                "lo": round(anchor * (1 - implied_daily), 2),
+                "hi": round(anchor * (1 + implied_daily), 2),
+            } if implied_daily else None),
             "bands": [
                 {"label": label, "z": z,
                  "points": round(anchor * z * sigma / BAND_DIVISOR, 2),
@@ -2048,6 +2285,12 @@ def recompute():
     # parses it - is kept out of this repo.
     # Products whose margins are unset simply do not appear, and the overlay
     # draws nothing for those rather than guessing.
+    try:
+        vol_now = vol_term_structure()
+    except Exception:
+        logging.info("vol term structure failed")
+        vol_now = None
+
     chips = []
     for sym in syms:
         if not (sym and sym.get("ok")):
@@ -2061,6 +2304,7 @@ def recompute():
         _cache["market"] = status
         _cache["symbols"] = syms
         _cache["pine"] = ";".join(chips)
+        _cache["vol"] = vol_now
         _cache["build"] = PAGE_BUILD
         _cache["epoch"] = time.time()
 
@@ -2241,6 +2485,12 @@ code.pine{background:var(--raised);border:1px solid var(--line);border-radius:4p
 .err{color:var(--stress);font-size:12.5px}
 .foot{margin-top:26px;font-size:11px;color:var(--muted);line-height:1.7}
 .foot .assume{color:var(--brass);opacity:.9}
+.foot .vix{color:var(--ink);opacity:.8}
+.flowrow{display:flex;gap:18px;flex-wrap:wrap;margin-top:11px;padding-top:9px;
+  border-top:1px solid var(--line);font-size:11.5px;color:var(--muted)}
+.flowrow b{color:var(--ink)}
+.chip.oi.up{color:var(--jade);border-color:rgba(75,191,138,.4)}
+.chip.oi.down{color:var(--verm);border-color:rgba(224,96,63,.4)}
 @media(prefers-reduced-motion:reduce){.dot.pulse{animation:none}.flash{animation:none}}
 </style></head>
 <body><div class="wrap">
@@ -2356,6 +2606,11 @@ function ladderRow(w,books){
   if(w.inverted) chips+=` <span class="chip inv">${w.side==="put"?"put above":"call below"}</span>`;
   if(w.short_frac!==null&&w.short_frac!==undefined&&w.short_frac>=0.5)
     chips+=` <span class="chip decay hot">${Math.round(w.short_frac*100)}% exp</span>`;
+  // Open interest change since the previous stored session, on the strike
+  // itself: a wall being BUILT reads differently from one decaying out.
+  if(w.d_oi_pct!==null&&w.d_oi_pct!==undefined&&Math.abs(w.d_oi_pct)>=10)
+    chips+=` <span class="chip oi ${w.d_oi_pct>0?"up":"down"}">`
+      +`${w.d_oi_pct>0?"+":""}${Math.round(w.d_oi_pct)}% OI</span>`;
   const cells = books.map(b=>{
     const c=(w.books||{})[b];
     if(!c||c.net===null||c.net===undefined) return `<td class="num pre">—</td>`;
@@ -2368,6 +2623,7 @@ function ladderRow(w,books){
     +`<td class="side-${w.side[0]}">${w.side.toUpperCase()}</td>`
     +`<td class="num">${(+w.strike).toFixed(0)}</td>`
     +cells
+    +`<td class="num ${(w.flow||0)>=0?"pos":"neg"}">${w.flow_str||"\u2014"}</td>`
     +(function(){
        const c=(w.books||{})[books[0]]||{};
        const cs=c.call_str||w.call_str, ps=c.put_str||w.put_str;
@@ -2386,11 +2642,13 @@ function combinedLadder(s,rows,books,spot,spotPre){
   const spotRowHtml = (spot==null) ? "" :
     `<tr class="spotrow"><td>SPOT</td><td class="num">${(+spot).toFixed(2)}</td>`
     +`${"<td class=\"num\">—</td>".repeat(span)}`
+    +`<td class="num">\u2014</td>`   // Flow, blank on the spot row
     +`<td class="num">—</td><td class="num">0.00%</td>`
     +`<td class="num pre">${spotPre!==undefined&&spotPre!==null?(+spotPre).toFixed(2):"—"}</td>`
     +`<td></td></tr>`;
   const head = `<tr><th>Side</th><th class="num">Strike</th>`
     + books.map(b=>`<th class="num">${b}</th>`).join("")
+    + `<th class="num" title="Gamma-weighted volume traded TODAY at this strike, netted. Open interest is T-1; this is the session. Not an exposure - volume says a contract traded, not whether it opened or closed.">Flow</th>`
     + `<th class="num" title="Calls and puts behind the ${books[0]} net. Hover any book's cell for its own split.">Call / Put &middot; ${books[0]}</th><th class="num">Dist</th>`
     + `<th class="num">${chainName(s)}</th><th>Tags</th></tr>`;
   return `<div class="walls"><table><thead>${head}</thead><tbody>`
@@ -2441,6 +2699,21 @@ function panel(s){
   // of a single ladder. Two half-width tables could not be compared row for
   // row, and a third would not have fitted - 3 blocks leave 395px against a
   // table needing 489.
+  const fl = s.flow||{};
+  const rk = s.risk||{};
+  // Today against the standing book. Turnover near 1 means the page is
+  // describing a book most of which has already changed hands.
+  const flowNote = (fl.pc_vol!==null&&fl.pc_vol!==undefined)
+    ? `<div class="flowrow">`
+      +`<span>put/call <b>${fl.pc_vol}</b> today <span class="pre">vs ${fl.pc_oi} open</span></span>`
+      +`<span>turnover <b>${(fl.turnover!==null&&fl.turnover!==undefined)?(fl.turnover*100).toFixed(0)+"%":"\u2014"}</b> of open interest</span>`
+      +(rk.implied_pct
+         ? `<span>implied <b>${rk.implied_pct}%</b>/day <span class="pre">vs ${rk.sigma_pct}% realized`
+           +`${(rk.iv_rv_pct!==null&&rk.iv_rv_pct!==undefined)?` (${rk.iv_rv_pct>0?"+":""}${rk.iv_rv_pct})`:""}</span></span>`
+         : "")
+      +(s.oi_prev_date?`<span class="pre">OI change vs ${s.oi_prev_date}</span>`:"")
+      +`</div>`
+    : "";
   const books = s.books||["near","full"];
   const body = (s.ladder&&s.ladder.length)
     ? `<div class="regime-block">`
@@ -2450,6 +2723,7 @@ function panel(s){
       + ((regimes[books[0]]&&regimes[books[0]].dispersed&&regimes[books[0]].dispersed.length)
           ? `<div class="eff thin">Dispersed gamma (${regimes[books[0]].dispersed.join("/")}) &mdash; no single dominant wall. Lean on volume profile / prior levels or stand down.</div>`
           : "")
+      + flowNote
       + `</div>`
     : `<div class="err">${s.error_note||"no usable option contracts returned"}</div>`;
   return `<div class="panel">
@@ -2585,6 +2859,12 @@ async function load(){
       // 11% mid on QQQ), volume is not open interest CHANGE, and the
       // open/close data that would settle it is a paid Cboe product. Saying
       // so is the honest fix; pretending otherwise is not.
+      +(d.vol&&d.vol["30D"]
+        ? ` <span class="vix">VIX9D ${d.vol["9D"]} \u00b7 VIX ${d.vol["30D"]}`
+          +` \u00b7 VIX3M ${d.vol["3M"]} &mdash; `
+          +`${d.vol.inverted?"<b>inverted</b>, the regime where vanna leads"
+                            :"contango, so vanna flows stay quiet"}.</span>`
+        : "")
       +` <span class="assume">Dealers are assumed long every call and short`
       +` every put. Inverting that assumption inverts every regime sign here;`
       +` it is a convention, not a measurement.</span>`;
@@ -2645,6 +2925,9 @@ def render_snapshot(path, skip_unchanged=False):
     what the published page polls to pick up later snapshots without a reload.
     Returns True if the files were written.
     """
+    # History lives beside the published page, so it versions with it and
+    # both machines read the same files.
+    set_oi_dir(Path(path).parent)
     recompute()
     data = snapshot_json()
     digest = payload_digest(json.loads(data))
@@ -2667,6 +2950,14 @@ def render_snapshot(path, skip_unchanged=False):
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(page, encoding="utf-8")
     sidecar.write_text(data, encoding="utf-8")
+
+    # Stored after the page, and only once per session: the fingerprint is
+    # the day's starting book, so a later run must not overwrite it with a
+    # book that has already moved.
+    book = _OI_PENDING.get("_book")
+    if book:
+        write_oi(book, {k: v for k, v in _OI_PENDING.items()
+                        if k != "_book" and v})
     return True
 
 

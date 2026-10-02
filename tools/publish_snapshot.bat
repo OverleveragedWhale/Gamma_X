@@ -98,7 +98,12 @@ if errorlevel 1 (
 )
 
 cd /d "%PUB%"
-git add index.html data.json >> "%LOG%" 2>&1
+rem oi\ carries one open-interest fingerprint per session, which is what
+rem lets the page say whether a wall is being built or decaying. It is
+rem written once a day and pruned at 45 sessions, about 24 KB each, so it
+rem costs roughly a megabyte steady state. Without it here the history
+rem never leaves the machine that generated it and the other PC sees none.
+git add index.html data.json oi >> "%LOG%" 2>&1
 git diff --cached --quiet
 if not errorlevel 1 (
   echo [%NOW%] no change, nothing to publish >> "%LOG%"
