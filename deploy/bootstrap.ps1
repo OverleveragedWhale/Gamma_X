@@ -149,19 +149,29 @@ if ($LASTEXITCODE -eq 0) {
     Ok "tzdata installed"
 }
 
-# quickjs is a DEVELOPMENT dependency - the dashboard itself stays pure
+# A JS engine is a DEVELOPMENT dependency - the dashboard itself stays pure
 # stdlib. The publisher runs the page's own render functions in it before
 # committing, because a page can be perfectly well-formed and still fail to
 # run: a duplicate `const` shipped a blank page on 2026-10-01 past every
-# structural check there was. Without quickjs the publisher still works, it
-# just publishes unguarded, so a failure here is a warning and not fatal.
+# structural check there was. Without one the publisher still works, it just
+# publishes unguarded, so a failure here is a warning and not fatal.
+#
+# mini-racer (V8), not quickjs: quickjs ships Windows wheels only up to Python
+# 3.12 and its source builds with MinGW, not MSVC, so on any current Python the
+# pip install fails. mini-racer is one py3 wheel per platform. check_page.py
+# still prefers quickjs where it happens to be installed.
 & $pyExe @pyArgs -c "import quickjs" 2>$null
-if ($LASTEXITCODE -eq 0) {
-    Ok "quickjs present - pages will be render-checked before publishing"
+$haveEngine = ($LASTEXITCODE -eq 0)
+if (-not $haveEngine) {
+    & $pyExe @pyArgs -c "import py_mini_racer" 2>$null
+    $haveEngine = ($LASTEXITCODE -eq 0)
+}
+if ($haveEngine) {
+    Ok "JS engine present - pages will be render-checked before publishing"
 } else {
-    & $pyExe @pyArgs -m pip install --quiet --disable-pip-version-check quickjs
-    if ($LASTEXITCODE -eq 0) { Ok "quickjs installed" }
-    else { Warn "quickjs unavailable - pages will publish WITHOUT a render check" }
+    & $pyExe @pyArgs -m pip install --quiet --disable-pip-version-check mini-racer
+    if ($LASTEXITCODE -eq 0) { Ok "mini-racer installed" }
+    else { Warn "no JS engine - pages will publish WITHOUT a render check" }
 }
 
 # --------------------------------------------------------------- 3. clones

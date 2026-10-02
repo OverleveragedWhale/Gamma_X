@@ -105,8 +105,9 @@ rem delimiter checks, cell-count checks and even a real JS PARSER all passed
 rem it, because redeclaration is semantic rather than syntactic. Only
 rem executing the thing catches that class.
 rem
-rem Exits 0 with a warning when quickjs is absent, so a machine that has not
-rem been provisioned still publishes - unguarded, but not stuck.
+rem Exits 0 with a warning when no JS engine (quickjs or mini-racer) is
+rem installed, so a machine that has not been provisioned still publishes -
+rem unguarded, but not stuck.
 %PY% "%REPO%\tools\check_page.py" "%PUB%\index.html" >> "%LOG%" 2>&1
 if errorlevel 1 (
   call :alert ERROR "page failed its render check, nothing published"

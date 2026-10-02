@@ -25,12 +25,16 @@ The only thing that catches this class is running the code. panel() and
 everything it calls build strings and never touch the DOM, so they execute in
 a bare engine with a handful of globals stubbed, against the real payload.
 
-quickjs is a DEVELOPMENT dependency, not a runtime one - the dashboard itself
-is still pure stdlib plus tzdata. When it is missing this exits 0 with a
-warning rather than blocking: a machine that has not been provisioned should
-still be able to publish, it just publishes unguarded.
+The engine is a DEVELOPMENT dependency, not a runtime one - the dashboard
+itself is still pure stdlib plus tzdata. quickjs is used when present;
+otherwise mini-racer (V8). quickjs only ships Windows wheels up to Python 3.12
+and does not build with MSVC, so on a current Python mini-racer is the one
+that installs - it has a single py3 wheel per platform. When neither is
+present this exits 0 with a warning rather than blocking: a machine that has
+not been provisioned should still be able to publish, it just publishes
+unguarded.
 
-    pip install quickjs
+    pip install mini-racer        (or quickjs, on Python 3.12 and older)
 """
 import io
 import json
@@ -65,6 +69,24 @@ var localStorage = { getItem:function(){ return null; }, setItem:function(){} };
 # checks. Every definition above them is kept.
 BOOTSTRAP = ("load();", "setInterval(", "document.addEventListener",
              "window.addEventListener")
+
+
+def js_context():
+    """A JS context exposing eval(str), and the engine's name - or (None, None).
+
+    Both engines take the same calls here: eval() returns JS strings as str
+    and raises on a compile or runtime error with the line in the message.
+    """
+    try:
+        import quickjs
+        return quickjs.Context(), "quickjs"
+    except ImportError:
+        pass
+    try:
+        from py_mini_racer import MiniRacer
+        return MiniRacer(), "V8 (mini-racer)"
+    except ImportError:
+        return None, None
 
 
 def fail(msg):
@@ -139,11 +161,10 @@ def main():
         return fail(f"no such page: {target}")
     html = io.open(target, encoding="utf-8").read()
 
-    try:
-        import quickjs
-    except ImportError:
-        print("WARN  quickjs not installed - the page is NOT being checked.")
-        print("WARN  pip install quickjs    (development only; the dashboard")
+    ctx, engine = js_context()
+    if ctx is None:
+        print("WARN  no JS engine installed - the page is NOT being checked.")
+        print("WARN  pip install mini-racer    (development only; the dashboard")
         print("WARN  itself stays pure stdlib)")
         return 0
 
@@ -153,7 +174,6 @@ def main():
 
     # 1. Does the script COMPILE? This is the check that would have caught the
     #    duplicate const, and the only one that catches an early error.
-    ctx = quickjs.Context()
     try:
         ctx.eval(STUB + "\n" + js)
     except Exception as exc:
@@ -168,7 +188,7 @@ def main():
         else:
             bad += fail(f"script does not compile: {str(exc)[:200]}")
         return 1
-    ok("script compiles in a real engine")
+    ok(f"script compiles in a real engine ({engine})")
 
     data = payload_of(html)
 
