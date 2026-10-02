@@ -1152,6 +1152,13 @@ def _session_close_once(sym, session_date):
     return last
 
 
+VP_SESSIONS = 2              # volume profile lookback: the completed prior
+                             # session plus the one in progress, so the frame
+                             # is fixed for the day and still develops
+VP_BINS = 48                 # price rows in the profile
+VP_VALUE_AREA = 0.70         # share of volume inside the value area
+VP_CONFLUENCE = 0.0015       # a level within this of POC/VAH/VAL is confluent
+
 CASH_SESSION_END = "16:00"          # regular cash close
 _CASH_CLOSE = {}
 
@@ -1240,6 +1247,102 @@ def _newest_cash_close_once(sym, today):
     if not usable:
         return None
     return max(usable, key=lambda d: d["date"])
+
+
+def volume_profile(sym, now, sessions=VP_SESSIONS, bins=VP_BINS):
+    """Volume by price for a futures symbol, with POC and value area.
+
+    Built on the futures contract itself, so unlike everything off the option
+    chain it needs no ratio - the prices are already the ones drawn on a chart.
+
+    Each 5-minute bar spreads its volume evenly across the rows its high-low
+    range touches, rather than dropping it all on the close. A bar that spans
+    eight rows contributed nothing to seven of them under a close-only rule,
+    which on a fast bar is most of where the trade actually happened.
+
+    Sessions are cut at the 18:00 Globex open, the same boundary the option
+    book rolls on, so "this session" means the same thing everywhere.
+
+    The value area grows out from the POC, taking whichever neighbouring row
+    holds more volume, until VP_VALUE_AREA of the total is inside it - the
+    standard construction, and the reason VAH and VAL are rarely symmetric
+    about the POC.
+    """
+    try:
+        result = json.loads(http_get(YAHOO_INTRADAY_URL.format(sym=quote(sym))))
+        result = result["chart"]["result"][0]
+    except Exception:
+        logging.info("volume profile: intraday fetch failed for %s", sym)
+        return None
+    off = result.get("meta", {}).get("gmtoffset") or 0
+    q = result["indicators"]["quote"][0]
+    stamps = result.get("timestamp") or []
+    vols, highs, lows = q.get("volume") or [], q.get("high") or [], q.get("low") or []
+
+    rows = []
+    for n, ts in enumerate(stamps):
+        v = vols[n] if n < len(vols) else None
+        hi = highs[n] if n < len(highs) else None
+        lo = lows[n] if n < len(lows) else None
+        if not v or hi is None or lo is None:
+            continue
+        stamp = datetime.utcfromtimestamp(ts + off)
+        # Trade date, by the same 18:00 rule futures_trade_date uses.
+        key = stamp.date().toordinal() + (1 if stamp.hour >= FUT_SESSION_OPEN_HOUR else 0)
+        rows.append((key, float(lo), float(hi), float(v)))
+    if not rows:
+        return None
+
+    keep = set(sorted({k for k, _, _, _ in rows})[-sessions:])
+    rows = [r for r in rows if r[0] in keep]
+    lo_px = min(r[1] for r in rows)
+    hi_px = max(r[2] for r in rows)
+    if hi_px <= lo_px:
+        return None
+
+    width = (hi_px - lo_px) / bins
+    hist = [0.0] * bins
+    for _, lo_b, hi_b, v in rows:
+        a = max(0, min(bins - 1, int((lo_b - lo_px) / width)))
+        b = max(0, min(bins - 1, int((hi_b - lo_px) / width)))
+        share = v / (b - a + 1)
+        for i in range(a, b + 1):
+            hist[i] += share
+
+    total = sum(hist)
+    if total <= 0:
+        return None
+    poc = hist.index(max(hist))
+    inside = {poc}
+    acc = hist[poc]
+    while acc < VP_VALUE_AREA * total:
+        down, up = min(inside) - 1, max(inside) + 1
+        dv = hist[down] if down >= 0 else -1.0
+        uv = hist[up] if up < bins else -1.0
+        if dv < 0 and uv < 0:
+            break
+        if uv >= dv:
+            inside.add(up)
+            acc += uv
+        else:
+            inside.add(down)
+            acc += dv
+
+    def price(i):
+        return lo_px + (i + 0.5) * width
+
+    peak = max(hist)
+    return {
+        "poc": round(price(poc), 2),
+        "val": round(price(min(inside)), 2),
+        "vah": round(price(max(inside)), 2),
+        "lo": round(lo_px, 2), "hi": round(hi_px, 2),
+        "sessions": len(keep),
+        "bins": [{"p": round(price(i), 2),
+                  "v": round(hist[i] / peak, 4),          # 0..1 for drawing
+                  "in": i in inside}
+                 for i in range(bins)],
+    }
 
 
 def prior_cash_session(sym, today, rows=None):
@@ -1718,6 +1821,28 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
             list(buckets), spot, ref_spot, prior, disp,
             n=inst.get("wall_count"),
             min_sep=(sep / spot) if (sep and spot) else None)
+
+        # Volume profile, and which GEX levels coincide with it. The page
+        # already told you to "lean on volume profile / prior levels" when
+        # gamma is dispersed, without being able to show either; a wall
+        # sitting on the POC is a different proposition from one in a volume
+        # hole. Compared in FUTURES terms - the profile is built on the
+        # contract and the ladder's strikes are already converted, so both
+        # sides of the test are the prices a chart draws.
+        try:
+            out["vp"] = volume_profile(inst["fut"], now)
+        except Exception:
+            logging.info("%s: volume profile failed", future)
+            out["vp"] = None
+        if out["vp"]:
+            vp = out["vp"]
+            for r in out["ladder"]:
+                for name, px in (("POC", vp["poc"]), ("VAH", vp["vah"]),
+                                 ("VAL", vp["val"])):
+                    if px and abs(r["strike"] - px) / px <= VP_CONFLUENCE:
+                        r["vp"] = name
+                        break
+
         out["max_pain"] = [
             {"expiry": expiry.isoformat(), "strike": disp(item["strike"]),
              "strike_pre": round(item["strike"], 2),
@@ -1985,6 +2110,22 @@ button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
 .books .bk{text-transform:uppercase;letter-spacing:.1em;font-size:10px;
   color:var(--muted)}
 .books tbody tr:last-child td{border-bottom:none}
+/* summary and profile share the row; the profile takes what is left */
+.topline{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap}
+.vp{min-width:210px;flex:0 1 300px}
+.vp .k{font-size:10px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--muted);margin-bottom:5px}
+.vp .k .sub{letter-spacing:.04em;text-transform:none;opacity:.7}
+.vpwrap{border-left:1px solid var(--line);padding-left:3px}
+.vprow{height:3px;margin-bottom:1px}
+.vpbar{display:block;height:100%;background:var(--line)}
+.vprow.inva .vpbar{background:rgba(217,164,65,.55)}
+.vprow.poc .vpbar{background:var(--brass)}
+.vprow.edge .vpbar{background:rgba(217,164,65,.8)}
+.vplegend{display:flex;gap:12px;flex-wrap:wrap;margin-top:7px;font-size:11px;
+  color:var(--muted)}
+.vplegend b{color:var(--brass)}
+.chip.vp{color:var(--brass);border-color:rgba(217,164,65,.45)}
 table{width:100%;border-collapse:collapse;font-size:12.5px}
 th{text-align:left;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;
   color:var(--muted);font-weight:500;padding:4px 8px;border-bottom:1px solid var(--line)}
@@ -2077,6 +2218,26 @@ function chainName(s){ return String((s&&s.chain)||"").replace(/^_/,""); }
 // One summary row per book: the figures that describe the whole book rather
 // than any single strike. Stacked so the three are read against each other -
 // a flip that moves between books is the point.
+// A horizontal histogram, widest row at the POC. Rows inside the value area
+// are solid, the rest faded, so the 70% band reads without a second legend.
+function volumeProfile(vp){
+  if(!vp||!vp.bins||!vp.bins.length) return "";
+  const rows=vp.bins.slice().reverse().map(b=>{
+    const hit = b.p===vp.poc ? " poc" : (b.p===vp.vah||b.p===vp.val ? " edge" : "");
+    return `<div class="vprow${b.in?" inva":""}${hit}" title="${b.p}">`
+      +`<span class="vpbar" style="width:${Math.max(1,b.v*100).toFixed(1)}%"></span></div>`;
+  }).join("");
+  return `<div class="vp">`
+    +`<div class="k">Volume profile <span class="sub">${vp.sessions} session${vp.sessions===1?"":"s"}</span></div>`
+    +`<div class="vpwrap">${rows}</div>`
+    +`<div class="vplegend">`
+      +`<span><b>POC</b> ${vp.poc}</span>`
+      +`<span>VAH ${vp.vah}</span>`
+      +`<span>VAL ${vp.val}</span>`
+      +`<span class="pre">${vp.lo} &ndash; ${vp.hi}</span>`
+    +`</div></div>`;
+}
+
 function bookSummary(s,regimes,books){
   const rows = books.filter(k=>regimes[k]).map(k=>{
     const r = regimes[k];
@@ -2108,6 +2269,9 @@ function bookSummary(s,regimes,books){
 function ladderRow(w,books){
   let chips="";
   if(w.conf) chips+=`<span class="chip conf">~${w.conf}</span>`;
+  // Sitting on the volume profile: a wall at the POC has traded size behind
+  // it as well as gamma, a wall in a volume hole has only the gamma.
+  if(w.vp) chips+=` <span class="chip vp">${w.vp}</span>`;
   // Call-dominated in one book, put-dominated in another. The cell colours
   // already say it, but only if you are looking at that row - the chip and
   // the row tint make it findable while scanning.
@@ -2206,7 +2370,8 @@ function panel(s){
   const books = s.books||["near","full"];
   const body = (s.ladder&&s.ladder.length)
     ? `<div class="regime-block">`
-      + bookSummary(s,regimes,books)
+      + `<div class="topline">` + bookSummary(s,regimes,books)
+        + volumeProfile(s.vp) + `</div>`
       + combinedLadder(s,s.ladder,books,s.spot,s.spot_pre)
       + ((regimes[books[0]]&&regimes[books[0]].dispersed&&regimes[books[0]].dispersed.length)
           ? `<div class="eff thin">Dispersed gamma (${regimes[books[0]].dispersed.join("/")}) &mdash; no single dominant wall. Lean on volume profile / prior levels or stand down.</div>`
