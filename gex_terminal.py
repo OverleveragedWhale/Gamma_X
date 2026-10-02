@@ -1473,7 +1473,7 @@ def vp_bars(sym):
     return out
 
 
-def volume_profile(bars, bin_points, label):
+def volume_profile(bars, bin_points, label, axis=None):
     """Volume by price over `bars`, with POC and value area.
 
     Each 5-minute bar spreads its volume evenly across every row its high-low
@@ -1484,18 +1484,27 @@ def volume_profile(bars, bin_points, label):
     The value area grows out from the POC, taking whichever neighbouring row
     holds more volume, until VP_VALUE_AREA of the total is inside - the
     standard construction, and why VAH and VAL are rarely symmetric about it.
+
+    `axis` is a (low, high) the rows are built over instead of this profile's
+    own extent. Two profiles given the same axis get the same bin boundaries
+    and the same row count, so row N is the SAME PRICE in both and they can be
+    read across. Without it each profile spanned only its own range and the
+    rows lined up essentially nowhere - 1 of 48 on ES, 0 of 42 on NQ.
     """
     flat = [b for _, day in bars for b in day]
     if not flat or bin_points <= 0:
         return None
-    lo_px = min(b[0] for b in flat)
-    hi_px = max(b[1] for b in flat)
+    own_lo = min(b[0] for b in flat)
+    own_hi = max(b[1] for b in flat)
+    lo_px, hi_px = axis if axis else (own_lo, own_hi)
     if hi_px <= lo_px:
         return None
 
     bins = max(1, int(math.ceil((hi_px - lo_px) / bin_points)))
     hist = [0.0] * bins
     for lo_b, hi_b, v in flat:
+        # Clamped to the axis. With a shared axis every bar is inside it by
+        # construction, since the axis comes from the widest profile.
         a = max(0, min(bins - 1, int((lo_b - lo_px) / bin_points)))
         b = max(0, min(bins - 1, int((hi_b - lo_px) / bin_points)))
         share = v / (b - a + 1)
@@ -1541,7 +1550,10 @@ def volume_profile(bars, bin_points, label):
         "poc": round(price(poc), 2),
         "val": round(price(min(inside)), 2),
         "vah": round(price(max(inside)), 2),
-        "lo": round(lo_px, 2), "hi": round(hi_px, 2),
+        # The profile's OWN extent, for the legend - not the shared axis,
+        # which would report the week's range on the session's profile.
+        "lo": round(own_lo, 2), "hi": round(own_hi, 2),
+        "axis_lo": round(lo_px, 2), "axis_hi": round(hi_px, 2),
         "sessions": len(bars), "bin": bin_points, "fine_bins": bins,
         "bins": rows,
     }
@@ -1563,9 +1575,19 @@ def profiles_for(sym, future, now):
     if not done:
         return []
     width = VP_BIN_POINTS.get(future, 1.0)
+    spans = [VP_PREV_SESSIONS, VP_WEEK_SESSIONS]
+
+    # One axis for every profile, taken from the widest session set. The
+    # shorter lookback is a subset of the longer one, so its range always sits
+    # inside this and no bar is ever clipped.
+    widest = done[-max(spans):]
+    flat = [b for _, day in widest for b in day]
+    axis = ((min(b[0] for b in flat), max(b[1] for b in flat))
+            if flat else None)
+
     out = []
-    for n, label in ((VP_PREV_SESSIONS, "prev"), (VP_WEEK_SESSIONS, "week")):
-        prof = volume_profile(done[-n:], width, label)
+    for n, label in zip(spans, ("prev", "week")):
+        prof = volume_profile(done[-n:], width, label, axis=axis)
         if prof:
             out.append(prof)
     return out
@@ -2420,6 +2442,9 @@ button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
   color:var(--muted);margin-bottom:5px;white-space:nowrap}
 .vp .k .sub{letter-spacing:.04em;text-transform:none;opacity:.7}
 .vpwrap{border-left:1px solid var(--line);padding-left:3px}
+/* the shared price axis both profiles are drawn over */
+.vpaxis{display:flex;flex-direction:column;justify-content:space-between;
+  font-size:10px;color:var(--muted);padding:18px 0 22px;text-align:right}
 .vprow{height:3px;margin-bottom:1px}
 .vpbar{display:block;height:100%;background:var(--line)}
 .vprow.inva .vpbar{background:rgba(217,164,65,.55)}
@@ -2543,8 +2568,10 @@ function oneProfile(vp){
   const iPoc=near(vp.poc), iVah=near(vp.vah), iVal=near(vp.val);
   const rows=vp.bins.map((b,i)=>{
     const hit = i===iPoc ? " poc" : (i===iVah||i===iVal ? " edge" : "");
-    return `<div class="vprow${b.in?" inva":""}${hit}" title="${b.p}">`
-      +`<span class="vpbar" style="width:${Math.max(1,b.v*100).toFixed(1)}%"></span></div>`;
+    const bar = b.v>0
+      ? `<span class="vpbar" style="width:${Math.max(1,b.v*100).toFixed(1)}%"></span>`
+      : "";
+    return `<div class="vprow${b.in?" inva":""}${hit}" title="${b.p}">${bar}</div>`;
   }).reverse().join("");
   const title = vp.label==="prev" ? "Prev session" : `${vp.sessions}-session`;
   return `<div class="vpcol">`
@@ -2553,13 +2580,21 @@ function oneProfile(vp){
     +`<div class="vplegend">`
       +`<span><b>POC</b> ${vp.poc}</span>`
       +`<span>VAH ${vp.vah}</span><span>VAL ${vp.val}</span>`
+      +`<span class="pre">traded ${vp.lo}&ndash;${vp.hi}</span>`
     +`</div></div>`;
 }
 
 function volumeProfile(vps){
   const list=(vps||[]).filter(Boolean);
   if(!list.length) return "";
-  return `<div class="vp">`+list.map(oneProfile).join("")+`</div>`;
+  // Every profile is drawn over the SAME price axis, so a row at the same
+  // height is the same price in both and they can be read across. A gap in
+  // one column is price that lookback never traded.
+  const ax=list[0];
+  const scale = (ax.axis_hi!==undefined)
+    ? `<div class="vpaxis"><span>${ax.axis_hi}</span><span>${ax.axis_lo}</span></div>`
+    : "";
+  return `<div class="vp">`+scale+list.map(oneProfile).join("")+`</div>`;
 }
 
 function bookSummary(s,regimes,books){
