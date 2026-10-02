@@ -38,6 +38,15 @@ rem 2026-09-22 "Gamma_X Stay Awake" recorded LastTaskResult 0x0 at 09:00:00
 rem having done nothing. Driving it from the publisher avoids that - the
 rem snapshot task runs as LogonType=Password, which does wake and run.
 rem
+rem The POWER BUTTON is held at "Do nothing" too. This machine uses Modern
+rem Standby (S0 Low Power Idle), where the button's "Turn off the display"
+rem action enters connected standby exactly as Sleep does, and Task Scheduler
+rem cannot wake it from there. On 2026-10-02 the button was pressed at 23:53
+rem and 07:54 - "entering connected standby, Reason: Power Button" both times -
+rem and the whole session ran only as catch-ups inside Windows' hourly
+rem maintenance wakes: a few seconds each, often before DNS was back, so most
+rem failed "cannot reach GitHub" or were cut off mid-run. 2 of ~14 published.
+rem
 rem powercfg needs no elevation: it edits the calling user's own active scheme.
 
 rem Same derivation as publish_snapshot.bat, so this works standalone too.
@@ -45,10 +54,12 @@ for %%I in ("%~dp0..\..") do set "ROOT=%%~fI"
 set "LOG=%ROOT%\publish.log"
 set "ARG=%~1"
 
-rem Setting GUIDs under SUB_SLEEP. Needed because the read-back goes to the
-rem registry rather than to powercfg /query - see :read_val.
-set "G_IDLE=29f6c1db-86da-48c5-9fdb-f2b67b1f44da"
-set "G_UNATT=7bc4a2f9-d8fc-4469-b07b-33eb785aaca0"
+rem Settings as subgroup\setting GUID pairs. Needed because the read-back
+rem goes to the registry rather than to powercfg /query - see :read_val.
+set "SUB_SLEEP_G=238C9FA8-0AAD-41ED-83F4-97BE242C8F20"
+set "G_IDLE=%SUB_SLEEP_G%\29f6c1db-86da-48c5-9fdb-f2b67b1f44da"
+set "G_UNATT=%SUB_SLEEP_G%\7bc4a2f9-d8fc-4469-b07b-33eb785aaca0"
+set "G_PBTN=4f971e89-eebd-4455-a8de-9e59040e7347\7648efa3-dd9c-4e3e-b566-50f929386280"
 
 for /f "tokens=* usebackq" %%t in (`powershell -NoProfile -Command "Get-Date -Format 'yyyy-MM-dd HH:mm:ss'"`) do set "NOW=%%t"
 
@@ -70,11 +81,12 @@ rem there is no reason to hold a woken machine up for ten minutes at 03:00.
 set /a WANT=!MINS!*60
 if "!MINS!"=="0" (set "WANT_UNATT=0") else (set "WANT_UNATT=120")
 
-rem Read both before touching anything, so an unchanged scheme is a no-op
-rem rather than a line in the log on every one of the day's 50 runs.
+rem Read everything before touching anything, so an unchanged scheme is a
+rem no-op rather than a line in the log on every one of the day's 50 runs.
 call :read_val !G_IDLE! AC CUR_IDLE
 call :read_val !G_UNATT! AC CUR_UNATT
-if "!CUR_IDLE!"=="!WANT!" if "!CUR_UNATT!"=="!WANT_UNATT!" exit /b 0
+call :read_val !G_PBTN! AC CUR_PBTN
+if "!CUR_IDLE!"=="!WANT!" if "!CUR_UNATT!"=="!WANT_UNATT!" if "!CUR_PBTN!"=="0" exit /b 0
 
 rem Attended idle, both power sources. A portable machine that drops to
 rem battery would otherwise keep the old timeout and sleep through the session.
@@ -90,6 +102,10 @@ rem alias and needs /setactive to take effect - without that last line the
 rem scheme is edited but the running configuration is not.
 powercfg /setacvalueindex SCHEME_CURRENT SUB_SLEEP UNATTENDSLEEP !WANT_UNATT!
 powercfg /setdcvalueindex SCHEME_CURRENT SUB_SLEEP UNATTENDSLEEP !WANT_UNATT!
+rem Power button "Do nothing" (0) - see the note at the top. It is hidden
+rem from powercfg /query like UNATTENDSLEEP, so it goes in the same way.
+powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS PBUTTONACTION 0
+powercfg /setdcvalueindex SCHEME_CURRENT SUB_BUTTONS PBUTTONACTION 0
 powercfg /setactive SCHEME_CURRENT
 if errorlevel 1 (
   echo [%NOW%] ERROR: powercfg failed setting UNATTENDSLEEP to !WANT_UNATT! >> "%LOG%"
@@ -102,15 +118,16 @@ rem only show up as missing snapshots hours later. Some OEM images lock the
 rem unattended timer; if that is happening, this line is where it says so.
 call :read_val !G_IDLE! AC GOT_IDLE
 call :read_val !G_UNATT! AC GOT_UNATT
-if "!GOT_IDLE!"=="!WANT!" if "!GOT_UNATT!"=="!WANT_UNATT!" (
-  echo [%NOW%] idle sleep -^> !MINS! min, unattended -^> !WANT_UNATT!s >> "%LOG%"
+call :read_val !G_PBTN! AC GOT_PBTN
+if "!GOT_IDLE!"=="!WANT!" if "!GOT_UNATT!"=="!WANT_UNATT!" if "!GOT_PBTN!"=="0" (
+  echo [%NOW%] idle sleep -^> !MINS! min, unattended -^> !WANT_UNATT!s, power button -^> do nothing >> "%LOG%"
   exit /b 0
 )
 
-echo [%NOW%] ERROR: asked idle=!WANT!s unattended=!WANT_UNATT!s, scheme reports idle=!GOT_IDLE!s unattended=!GOT_UNATT!s >> "%LOG%"
+echo [%NOW%] ERROR: asked idle=!WANT!s unattended=!WANT_UNATT!s power button=0, scheme reports idle=!GOT_IDLE!s unattended=!GOT_UNATT!s power button=!GOT_PBTN! >> "%LOG%"
 exit /b 1
 
-rem %1 setting GUID under SUB_SLEEP, %2 AC or DC, %3 variable to set.
+rem %1 subgroup\setting GUID pair, %2 AC or DC, %3 variable to set.
 rem
 rem The registry, not powercfg /query. UNATTENDSLEEP ships hidden
 rem (Attributes=1), and powercfg omits a hidden setting from its output
@@ -121,7 +138,7 @@ rem plain DWORD of seconds and needs no elevation to read.
 :read_val
 for /f "tokens=* usebackq" %%v in (`powershell -NoProfile -Command ^
   "$g=(powercfg /getactivescheme) -replace '.*GUID: ([a-f0-9-]+).*','$1';" ^
-  "$p='HKLM:\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes\'+$g+'\238C9FA8-0AAD-41ED-83F4-97BE242C8F20\%~1';" ^
+  "$p='HKLM:\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes\'+$g+'\%~1';" ^
   "$v=(Get-ItemProperty $p -ErrorAction SilentlyContinue).'%~2SettingIndex';" ^
   "if ($null -ne $v) { [int]$v } else { 'unreadable' }"`) do set "%~3=%%v"
 goto :eof
