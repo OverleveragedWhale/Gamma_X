@@ -2700,7 +2700,11 @@ function panel(s){
   // row, and a third would not have fitted - 3 blocks leave 395px against a
   // table needing 489.
   const fl = s.flow||{};
-  const rk = s.risk||{};
+  // rk is already declared at the top of panel() for the margin block - a
+  // second `const rk` here is a lexical REDEFINITION, which is an early
+  // error: the whole script fails to compile and the page renders nothing
+  // at all. Balanced-delimiter checks and esprima both pass it, because it
+  // is a semantic error rather than a syntactic one.
   // Today against the standing book. Turnover near 1 means the page is
   // describing a book most of which has already changed hands.
   const flowNote = (fl.pc_vol!==null&&fl.pc_vol!==undefined)
