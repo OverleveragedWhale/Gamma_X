@@ -1152,12 +1152,31 @@ def _session_close_once(sym, session_date):
     return last
 
 
-VP_SESSIONS = 2              # volume profile lookback: the completed prior
-                             # session plus the one in progress, so the frame
-                             # is fixed for the day and still develops
-VP_BINS = 48                 # price rows in the profile
+VP_LOOKBACK = 10             # sessions of intraday history kept for profiles
+VP_PREV_SESSIONS = 1         # "previous session": the last COMPLETED one
+VP_WEEK_SESSIONS = 5         # "weekly": a trading week behind it
+VP_DISPLAY_ROWS = 56         # histogram rows drawn. The profile is computed at
+                             # the instrument's own bin width, which runs to
+                             # 119 rows on ES and 158 on NQ over a week - more
+                             # than is readable. POC and the value area come
+                             # from the fine bins; only the drawing is grouped
+                             # down to this.
 VP_VALUE_AREA = 0.70         # share of volume inside the value area
 VP_CONFLUENCE = 0.0015       # a level within this of POC/VAH/VAL is confluent
+
+# Bin width in POINTS of the futures contract, not a bin count. A count makes
+# the row size depend on the range, so the same price falls in different rows
+# on a quiet day and a wild one; a fixed width keeps a row meaning one thing.
+# ES 1.0 and NQ 5.0 are about the same relative size - 0.013% and 0.016% of
+# spot - and GC 1.0 matches them. GC at 0.5 would have put 333 rows in a
+# weekly profile, resolution that does not survive the drawing anyway.
+VP_BIN_POINTS = {"ES": 1.0, "NQ": 5.0, "GC": 1.0}
+
+# 5m history for the profiles. The chart endpoint used elsewhere asks for 5d,
+# which is not enough for a ten session lookback.
+YAHOO_VP_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
+                "{sym}?range=1mo&interval=5m&includePrePost=true")
+_VP_BARS = {}
 
 CASH_SESSION_END = "16:00"          # regular cash close
 _CASH_CLOSE = {}
@@ -1249,37 +1268,24 @@ def _newest_cash_close_once(sym, today):
     return max(usable, key=lambda d: d["date"])
 
 
-def volume_profile(sym, now, sessions=VP_SESSIONS, bins=VP_BINS):
-    """Volume by price for a futures symbol, with POC and value area.
+def vp_bars(sym):
+    """5-minute bars grouped by trade date, oldest session first.
 
-    Built on the futures contract itself, so unlike everything off the option
-    chain it needs no ratio - the prices are already the ones drawn on a chart.
-
-    Each 5-minute bar spreads its volume evenly across the rows its high-low
-    range touches, rather than dropping it all on the close. A bar that spans
-    eight rows contributed nothing to seven of them under a close-only rule,
-    which on a fast bar is most of where the trade actually happened.
-
-    Sessions are cut at the 18:00 Globex open, the same boundary the option
-    book rolls on, so "this session" means the same thing everywhere.
-
-    The value area grows out from the POC, taking whichever neighbouring row
-    holds more volume, until VP_VALUE_AREA of the total is inside it - the
-    standard construction, and the reason VAH and VAL are rarely symmetric
-    about the POC.
+    Cut at the 18:00 Globex open, the same boundary the option book rolls on,
+    so a "session" means one thing across the whole terminal.
     """
-    try:
-        result = json.loads(http_get(YAHOO_INTRADAY_URL.format(sym=quote(sym))))
-        result = result["chart"]["result"][0]
-    except Exception:
-        logging.info("volume profile: intraday fetch failed for %s", sym)
-        return None
+    if sym in _VP_BARS:
+        return _VP_BARS[sym]
+    result = json.loads(http_get(YAHOO_VP_URL.format(sym=quote(sym))))
+    result = result["chart"]["result"][0]
     off = result.get("meta", {}).get("gmtoffset") or 0
     q = result["indicators"]["quote"][0]
     stamps = result.get("timestamp") or []
-    vols, highs, lows = q.get("volume") or [], q.get("high") or [], q.get("low") or []
+    vols = q.get("volume") or []
+    highs = q.get("high") or []
+    lows = q.get("low") or []
 
-    rows = []
+    by = {}
     for n, ts in enumerate(stamps):
         v = vols[n] if n < len(vols) else None
         hi = highs[n] if n < len(highs) else None
@@ -1287,24 +1293,39 @@ def volume_profile(sym, now, sessions=VP_SESSIONS, bins=VP_BINS):
         if not v or hi is None or lo is None:
             continue
         stamp = datetime.utcfromtimestamp(ts + off)
-        # Trade date, by the same 18:00 rule futures_trade_date uses.
-        key = stamp.date().toordinal() + (1 if stamp.hour >= FUT_SESSION_OPEN_HOUR else 0)
-        rows.append((key, float(lo), float(hi), float(v)))
-    if not rows:
-        return None
+        key = (stamp.date()
+               + timedelta(days=1 if stamp.hour >= FUT_SESSION_OPEN_HOUR else 0))
+        by.setdefault(key, []).append((float(lo), float(hi), float(v)))
+    out = [(d, by[d]) for d in sorted(by)][-VP_LOOKBACK:]
+    _VP_BARS[sym] = out
+    return out
 
-    keep = set(sorted({k for k, _, _, _ in rows})[-sessions:])
-    rows = [r for r in rows if r[0] in keep]
-    lo_px = min(r[1] for r in rows)
-    hi_px = max(r[2] for r in rows)
+
+def volume_profile(bars, bin_points, label):
+    """Volume by price over `bars`, with POC and value area.
+
+    Each 5-minute bar spreads its volume evenly across every row its high-low
+    range touches rather than dropping it all on the close: a bar spanning
+    eight rows contributed nothing to seven of them under a close-only rule,
+    and on a fast bar that is most of where the trade happened.
+
+    The value area grows out from the POC, taking whichever neighbouring row
+    holds more volume, until VP_VALUE_AREA of the total is inside - the
+    standard construction, and why VAH and VAL are rarely symmetric about it.
+    """
+    flat = [b for _, day in bars for b in day]
+    if not flat or bin_points <= 0:
+        return None
+    lo_px = min(b[0] for b in flat)
+    hi_px = max(b[1] for b in flat)
     if hi_px <= lo_px:
         return None
 
-    width = (hi_px - lo_px) / bins
+    bins = max(1, int(math.ceil((hi_px - lo_px) / bin_points)))
     hist = [0.0] * bins
-    for _, lo_b, hi_b, v in rows:
-        a = max(0, min(bins - 1, int((lo_b - lo_px) / width)))
-        b = max(0, min(bins - 1, int((hi_b - lo_px) / width)))
+    for lo_b, hi_b, v in flat:
+        a = max(0, min(bins - 1, int((lo_b - lo_px) / bin_points)))
+        b = max(0, min(bins - 1, int((hi_b - lo_px) / bin_points)))
         share = v / (b - a + 1)
         for i in range(a, b + 1):
             hist[i] += share
@@ -1329,20 +1350,53 @@ def volume_profile(sym, now, sessions=VP_SESSIONS, bins=VP_BINS):
             acc += dv
 
     def price(i):
-        return lo_px + (i + 0.5) * width
+        return lo_px + (i + 0.5) * bin_points
 
-    peak = max(hist)
+    # Grouped for drawing only; every level above comes from the fine bins.
+    group = max(1, int(math.ceil(bins / VP_DISPLAY_ROWS)))
+    rows = []
+    for first in range(0, bins, group):
+        chunk = list(range(first, min(first + group, bins)))
+        rows.append({"p": round(price(chunk[len(chunk) // 2]), 2),
+                     "v": sum(hist[i] for i in chunk),
+                     "in": any(i in inside for i in chunk)})
+    peak = max(r["v"] for r in rows) or 1.0
+    for r in rows:
+        r["v"] = round(r["v"] / peak, 4)
+
     return {
+        "label": label,
         "poc": round(price(poc), 2),
         "val": round(price(min(inside)), 2),
         "vah": round(price(max(inside)), 2),
         "lo": round(lo_px, 2), "hi": round(hi_px, 2),
-        "sessions": len(keep),
-        "bins": [{"p": round(price(i), 2),
-                  "v": round(hist[i] / peak, 4),          # 0..1 for drawing
-                  "in": i in inside}
-                 for i in range(bins)],
+        "sessions": len(bars), "bin": bin_points, "fine_bins": bins,
+        "bins": rows,
     }
+
+
+def profiles_for(sym, future, now):
+    """The previous completed session, and the trading week behind it."""
+    try:
+        bars = vp_bars(sym)
+    except Exception:
+        logging.info("volume profile: history unavailable for %s", sym)
+        return []
+    if not bars:
+        return []
+    # Drop the session in progress. A half-built profile has a POC that walks
+    # all day, which is the opposite of what a reference level is for.
+    live = futures_trade_date(now)
+    done = [b for b in bars if b[0] < live]
+    if not done:
+        return []
+    width = VP_BIN_POINTS.get(future, 1.0)
+    out = []
+    for n, label in ((VP_PREV_SESSIONS, "prev"), (VP_WEEK_SESSIONS, "week")):
+        prof = volume_profile(done[-n:], width, label)
+        if prof:
+            out.append(prof)
+    return out
 
 
 def prior_cash_session(sym, today, rows=None):
@@ -1829,19 +1883,23 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
         # hole. Compared in FUTURES terms - the profile is built on the
         # contract and the ladder's strikes are already converted, so both
         # sides of the test are the prices a chart draws.
-        try:
-            out["vp"] = volume_profile(inst["fut"], now)
-        except Exception:
-            logging.info("%s: volume profile failed", future)
-            out["vp"] = None
-        if out["vp"]:
-            vp = out["vp"]
-            for r in out["ladder"]:
-                for name, px in (("POC", vp["poc"]), ("VAH", vp["vah"]),
-                                 ("VAL", vp["val"])):
-                    if px and abs(r["strike"] - px) / px <= VP_CONFLUENCE:
-                        r["vp"] = name
-                        break
+        out["vp"] = profiles_for(inst["fut"], future, now)
+        # Confluence against BOTH profiles, nearest mark wins. A level that
+        # the previous session and the week behind it both single out is a
+        # different thing from one only today's tape noticed, so the tag
+        # names which profile it came from rather than just saying "POC".
+        for r in out["ladder"]:
+            best = None
+            for prof in out["vp"]:
+                for name, px in (("POC", prof["poc"]), ("VAH", prof["vah"]),
+                                 ("VAL", prof["val"])):
+                    if not px:
+                        continue
+                    gap = abs(r["strike"] - px) / px
+                    if gap <= VP_CONFLUENCE and (best is None or gap < best[0]):
+                        best = (gap, f"{name}\u00b7{prof['label']}")
+            if best:
+                r["vp"] = best[1]
 
         out["max_pain"] = [
             {"expiry": expiry.isoformat(), "strike": disp(item["strike"]),
@@ -2112,9 +2170,10 @@ button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
 .books tbody tr:last-child td{border-bottom:none}
 /* summary and profile share the row; the profile takes what is left */
 .topline{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap}
-.vp{min-width:210px;flex:0 1 300px}
+.vp{display:flex;gap:18px;flex:0 1 auto}
+.vpcol{min-width:150px}
 .vp .k{font-size:10px;letter-spacing:.13em;text-transform:uppercase;
-  color:var(--muted);margin-bottom:5px}
+  color:var(--muted);margin-bottom:5px;white-space:nowrap}
 .vp .k .sub{letter-spacing:.04em;text-transform:none;opacity:.7}
 .vpwrap{border-left:1px solid var(--line);padding-left:3px}
 .vprow{height:3px;margin-bottom:1px}
@@ -2220,22 +2279,37 @@ function chainName(s){ return String((s&&s.chain)||"").replace(/^_/,""); }
 // a flip that moves between books is the point.
 // A horizontal histogram, widest row at the POC. Rows inside the value area
 // are solid, the rest faded, so the 70% band reads without a second legend.
-function volumeProfile(vp){
+// One profile. Drawn from the GROUPED rows - the levels in the legend come
+// from the full-resolution bins, which run past 150 rows on a weekly NQ.
+function oneProfile(vp){
   if(!vp||!vp.bins||!vp.bins.length) return "";
-  const rows=vp.bins.slice().reverse().map(b=>{
-    const hit = b.p===vp.poc ? " poc" : (b.p===vp.vah||b.p===vp.val ? " edge" : "");
+  // Nearest drawn row to each mark, since grouping means no row sits exactly
+  // on the fine-bin price.
+  const near=(px)=>{
+    let bi=0,bd=Infinity;
+    vp.bins.forEach((b,i)=>{const d=Math.abs(b.p-px); if(d<bd){bd=d;bi=i;}});
+    return bi;
+  };
+  const iPoc=near(vp.poc), iVah=near(vp.vah), iVal=near(vp.val);
+  const rows=vp.bins.map((b,i)=>{
+    const hit = i===iPoc ? " poc" : (i===iVah||i===iVal ? " edge" : "");
     return `<div class="vprow${b.in?" inva":""}${hit}" title="${b.p}">`
       +`<span class="vpbar" style="width:${Math.max(1,b.v*100).toFixed(1)}%"></span></div>`;
-  }).join("");
-  return `<div class="vp">`
-    +`<div class="k">Volume profile <span class="sub">${vp.sessions} session${vp.sessions===1?"":"s"}</span></div>`
+  }).reverse().join("");
+  const title = vp.label==="prev" ? "Prev session" : `${vp.sessions}-session`;
+  return `<div class="vpcol">`
+    +`<div class="k">${title} <span class="sub">${vp.bin}pt</span></div>`
     +`<div class="vpwrap">${rows}</div>`
     +`<div class="vplegend">`
       +`<span><b>POC</b> ${vp.poc}</span>`
-      +`<span>VAH ${vp.vah}</span>`
-      +`<span>VAL ${vp.val}</span>`
-      +`<span class="pre">${vp.lo} &ndash; ${vp.hi}</span>`
+      +`<span>VAH ${vp.vah}</span><span>VAL ${vp.val}</span>`
     +`</div></div>`;
+}
+
+function volumeProfile(vps){
+  const list=(vps||[]).filter(Boolean);
+  if(!list.length) return "";
+  return `<div class="vp">`+list.map(oneProfile).join("")+`</div>`;
 }
 
 function bookSummary(s,regimes,books){
