@@ -97,6 +97,22 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem Run the page's own render functions in a real JS engine before anything is
+rem committed. On 2026-10-01 a duplicate `const` inside panel() shipped a
+rem completely blank page: a lexical redefinition is an EARLY error, so the
+rem whole script failed to compile and nothing rendered at all. Balanced
+rem delimiter checks, cell-count checks and even a real JS PARSER all passed
+rem it, because redeclaration is semantic rather than syntactic. Only
+rem executing the thing catches that class.
+rem
+rem Exits 0 with a warning when quickjs is absent, so a machine that has not
+rem been provisioned still publishes - unguarded, but not stuck.
+%PY% "%REPO%\tools\check_page.py" "%PUB%\index.html" >> "%LOG%" 2>&1
+if errorlevel 1 (
+  call :alert ERROR "page failed its render check, nothing published"
+  exit /b 1
+)
+
 cd /d "%PUB%"
 rem oi\ carries one open-interest fingerprint per session, which is what
 rem lets the page say whether a wall is being built or decaying. It is

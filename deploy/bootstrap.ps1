@@ -149,6 +149,21 @@ if ($LASTEXITCODE -eq 0) {
     Ok "tzdata installed"
 }
 
+# quickjs is a DEVELOPMENT dependency - the dashboard itself stays pure
+# stdlib. The publisher runs the page's own render functions in it before
+# committing, because a page can be perfectly well-formed and still fail to
+# run: a duplicate `const` shipped a blank page on 2026-10-01 past every
+# structural check there was. Without quickjs the publisher still works, it
+# just publishes unguarded, so a failure here is a warning and not fatal.
+& $pyExe @pyArgs -c "import quickjs" 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Ok "quickjs present - pages will be render-checked before publishing"
+} else {
+    & $pyExe @pyArgs -m pip install --quiet --disable-pip-version-check quickjs
+    if ($LASTEXITCODE -eq 0) { Ok "quickjs installed" }
+    else { Warn "quickjs unavailable - pages will publish WITHOUT a render check" }
+}
+
 # --------------------------------------------------------------- 3. clones
 Step 3 "Cloning into $Root"
 if (-not (Test-Path $Root)) { New-Item -ItemType Directory -Path $Root -Force | Out-Null }
