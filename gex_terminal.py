@@ -775,29 +775,37 @@ def build_ladder(per_by_book, books, spot, ref_spot, prior, disp,
         return (d["call"] - d["put"]) if d else None
 
     rows = []
-    for side in ("call", "put"):
+    # Split by POSITION relative to spot, and let the net's sign name the row.
+    # Requiring a call row to be above spot AND net positive dropped every
+    # strike whose net contradicted its position - a net put above spot, a net
+    # call below it - because such a strike qualified as neither. On
+    # 2026-10-01 that hid ES 7680 carrying -1.57B of net put gamma 0.18% above
+    # spot, plus nine more strikes making up 5.3% of ES's near-book net and
+    # 7.7% of GC's. Those are not edge cases; a large put wall just above spot
+    # is a level worth knowing about precisely because it is unusual.
+    for half in ("above", "below"):
         scored = []
         for k in {k for b in short_books for k in per_by_book[b]}:
-            if side == "call" and k <= ref_spot:
+            if half == "above" and k <= ref_spot:
                 continue
-            if side == "put" and k > ref_spot:
+            if half == "below" and k > ref_spot:
                 continue
             vals = [net_at(b, k) or 0.0 for b in short_books]
-            # A call row needs net CALL gamma somewhere, a put row net put.
-            best = max(vals) if side == "call" else min(vals)
-            if (best <= 0) if side == "call" else (best >= 0):
+            if not any(vals):
                 continue
-            scored.append((abs(best), k))
-        scored.sort(reverse=True)
+            # The book that owns this strike most strongly decides its name.
+            best = max(vals, key=abs)
+            scored.append((abs(best), k, "call" if best > 0 else "put"))
+        scored.sort(key=lambda t: -t[0])
 
         kept = []
-        for _, k in scored:
-            if all(abs(k - x) / spot >= min_sep for x in kept):
-                kept.append(k)
+        for _, k, side_of in scored:
+            if all(abs(k - x) / spot >= min_sep for x, _ in kept):
+                kept.append((k, side_of))
             if len(kept) >= n:
                 break
 
-        for k in kept:
+        for k, side in kept:
             conf = None
             if prior:
                 for ref, name in ((prior["h"], "PDH"), (prior["l"], "PDL"),
@@ -830,8 +838,14 @@ def build_ladder(per_by_book, books, spot, ref_spot, prior, disp,
             flips = len(signs) > 1
             d = per_by_book[books[0]].get(k) or {"call": 0.0, "put": 0.0,
                                                  "mag": 0.0, "short": 0.0}
+            # A put wall above spot, or a call wall below it. Conventionally
+            # calls cap rallies from above and puts support from below; when a
+            # level is the other way round the usual reading is inverted.
+            inverted = (half == "above" and side == "put") or                        (half == "below" and side == "call")
             rows.append({
                 "side": side,
+                "half": half,
+                "inverted": inverted,
                 "strike": disp(k), "strike_pre": round(k, 2),
                 "books": cells,
                 "call_gex": d["call"], "call_str": fmt_dollars(d["call"]),
@@ -1980,6 +1994,12 @@ td.num{text-align:right}
 /* a level that is call-dominated in one book and put-dominated in another */
 tr.flipped td{background:rgba(255,93,99,.07)}
 tr.flipped td:first-child{box-shadow:inset 2px 0 0 var(--stress)}
+/* a wall on the "wrong" side of spot - puts above, calls below */
+.chip.inv{color:var(--brass);border-color:rgba(217,164,65,.5)}
+tr.inverted td{background:rgba(217,164,65,.06)}
+tr.inverted td:first-child{box-shadow:inset 2px 0 0 var(--brass)}
+tr.inverted.flipped td:first-child{
+  box-shadow:inset 2px 0 0 var(--brass),inset 4px 0 0 var(--stress)}
 tr.spotrow td{color:var(--ink);font-weight:700;letter-spacing:.06em;
   background:rgba(255,255,255,.05);
   border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
@@ -2088,6 +2108,10 @@ function ladderRow(w,books){
   // already say it, but only if you are looking at that row - the chip and
   // the row tint make it findable while scanning.
   if(w.sign_flip) chips+=` <span class="chip flip">sign flip</span>`;
+  // A put wall above spot caps nothing on the way up - it is a level price
+  // has already traded through, or one dealers are short into. Either way the
+  // usual "calls above cap, puts below support" reading does not apply.
+  if(w.inverted) chips+=` <span class="chip inv">${w.side==="put"?"put above":"call below"}</span>`;
   if(w.short_frac!==null&&w.short_frac!==undefined&&w.short_frac>=0.5)
     chips+=` <span class="chip decay hot">${Math.round(w.short_frac*100)}% exp</span>`;
   const cells = books.map(b=>{
@@ -2098,7 +2122,7 @@ function ladderRow(w,books){
     const tip = (c.call_str&&c.put_str) ? ` title="${b}: calls ${c.call_str} / puts ${c.put_str}"` : "";
     return `<td class="num ${c.net>=0?"pos":"neg"}"${tip}>${c.str}</td>`;
   }).join("");
-  return `<tr${w.sign_flip?' class="flipped"':''}>`
+  return `<tr class="${w.sign_flip?"flipped":""}${w.inverted?" inverted":""}">`
     +`<td class="side-${w.side[0]}">${w.side.toUpperCase()}</td>`
     +`<td class="num">${(+w.strike).toFixed(0)}</td>`
     +cells
