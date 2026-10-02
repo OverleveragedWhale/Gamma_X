@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 *.log
 _site/
+
+# Kept on the machine, not in the repo: the chart script that consumes the
+# liquidation-band paste is local work. The terminal emits the paste; what
+# draws it lives outside version control here.
+tools/VARIS_Zones.pine
