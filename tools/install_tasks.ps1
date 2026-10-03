@@ -91,7 +91,7 @@ foreach ($t in $tasks) {
         }
         $info = Get-ScheduledTaskInfo -TaskName $t.Name
         # Count the triggers back off the registered task, not the file. The
-        # schedule is 50 separate triggers now rather than 4 with repetitions
+        # schedule is ~50 separate triggers now rather than 4 with repetitions
         # inside them, and a registration that silently kept only some of them
         # would look exactly like the sleep problem it was meant to fix:
         # snapshots quietly missing for part of the day.
@@ -127,7 +127,13 @@ if ($failed.Count) {
     $failed | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
     exit 1
 }
+# Expected count comes from the XML, not a constant: this said "Expected 50"
+# for a 48-run schedule after the session moved to 09:50, warning about a
+# registration that was complete.
+$expected = ($tasks | Where-Object { $_.NeedsPassword } | ForEach-Object {
+    ([regex]::Matches((Get-Content (Join-Path $here $_.File) -Raw), '<CalendarTrigger>')).Count
+} | Measure-Object -Sum).Sum
 Write-Host "All tasks registered. $total triggers across the Gamma_X Snapshot tasks." -ForegroundColor Green
-if ($total -lt 50) {
-    Write-Warning "Expected 50. Fewer means a task is missing or partly registered."
+if ($total -lt $expected) {
+    Write-Warning "Expected $expected. Fewer means a task is missing or partly registered."
 }
