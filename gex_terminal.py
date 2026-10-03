@@ -23,11 +23,12 @@ import hashlib
 import logging
 import calendar
 import configparser
+import http.client
 import http.cookiejar
 import urllib.error
 import urllib.request
 from pathlib import Path
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 
 try:
     from zoneinfo import ZoneInfo
@@ -465,11 +466,42 @@ def active_contract(inst, d, stats=None):
 _COOKIE_JAR = http.cookiejar.CookieJar()
 _OPENER = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_COOKIE_JAR))
 
-def http_get(url, timeout=30):
+# One retry for a request that stalls or drops, bounded by the scheduled
+# task's 3 minute ExecutionTimeLimit. Measured 2026-09-24 to 10-03: all 12
+# symbol failures in publish.log were a single request timing out or the
+# network not resolving, and on 10-03 at 00:00 and 04:00 one stalled Cboe
+# download cost the whole publish. A second attempt with a longer timeout
+# clears that; the budget keeps a run that is failing everything from being
+# killed mid-push instead of finishing with what it has.
+HTTP_TIMEOUTS = (30, 45)          # seconds per attempt
+HTTP_RETRY_PAUSE = 3              # seconds between attempts
+HTTP_RETRY_BUDGET = 110           # no retry starts past this many seconds in
+_RUN_T0 = time.monotonic()
+
+
+def _transient(exc):
+    """A failure worth one more try: no response, or a server-side one."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code == 429 or exc.code >= 500
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError,
+                            http.client.HTTPException))
+
+
+def http_get(url, timeout=None):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with _OPENER.open(req, timeout=timeout) as resp:
-        text = resp.read().decode("utf-8")
-    return text
+    timeouts = (timeout,) if timeout else HTTP_TIMEOUTS
+    for n, t in enumerate(timeouts):
+        try:
+            with _OPENER.open(req, timeout=t) as resp:
+                return resp.read().decode("utf-8")
+        except Exception as exc:
+            last = n == len(timeouts) - 1
+            elapsed = time.monotonic() - _RUN_T0
+            if last or not _transient(exc) or                     elapsed + HTTP_RETRY_PAUSE + timeouts[n + 1] > HTTP_RETRY_BUDGET:
+                raise
+            logging.warning("retrying %s after %s",
+                            url.split("?")[0], type(exc).__name__)
+            time.sleep(HTTP_RETRY_PAUSE)
 
 
 # ---------------- Cboe chain + GEX ----------------
@@ -1127,7 +1159,7 @@ def fetch_rows(sym, max_rows=PRIOR_SESSION_ROWS):
         bar = (q["open"][n], q["high"][n], q["low"][n], q["close"][n])
         if any(v is None for v in bar):           # holidays come back as nulls
             continue
-        rows.append({"date": datetime.utcfromtimestamp(ts + off).date().isoformat(),
+        rows.append({"date": datetime.fromtimestamp(ts + off, timezone.utc).replace(tzinfo=None).date().isoformat(),
                      "o": float(bar[0]), "h": float(bar[1]),
                      "l": float(bar[2]), "c": float(bar[3])})
     if len(rows) < 2:
@@ -1193,7 +1225,7 @@ def _session_close_once(sym, session_date):
     for ts, close in zip(result.get("timestamp") or [], closes):
         if close is None:
             continue
-        stamp = datetime.utcfromtimestamp(ts + off)
+        stamp = datetime.fromtimestamp(ts + off, timezone.utc).replace(tzinfo=None)
         if stamp.date().isoformat() != session_date:
             continue
         if stamp.strftime("%H:%M") >= SESSION_END_HHMM:
@@ -1298,7 +1330,7 @@ def _newest_cash_close_once(sym, today):
         close = closes[n] if n < len(closes) else None
         if close is None:
             continue
-        stamp = datetime.utcfromtimestamp(ts + off)
+        stamp = datetime.fromtimestamp(ts + off, timezone.utc).replace(tzinfo=None)
         day = stamp.date().isoformat()
         if day >= iso:                       # never the session in progress
             continue
@@ -1471,7 +1503,7 @@ def vp_bars(sym):
         lo = lows[n] if n < len(lows) else None
         if not v or hi is None or lo is None:
             continue
-        stamp = datetime.utcfromtimestamp(ts + off)
+        stamp = datetime.fromtimestamp(ts + off, timezone.utc).replace(tzinfo=None)
         key = (stamp.date()
                + timedelta(days=1 if stamp.hour >= FUT_SESSION_OPEN_HOUR else 0))
         by.setdefault(key, []).append((float(lo), float(hi), float(v)))
@@ -2318,10 +2350,25 @@ def hold_regimes(syms, previous, previous_generated):
     included; spot, max pain and the margin rows stay live.
     """
     prev = {p.get("symbol"): p for p in (previous or []) if p}
-    for sym in syms:
-        if not (sym and sym.get("greeks_missing")):
+    for i, sym in enumerate(syms):
+        if not sym:
             continue
         old = prev.get(sym["symbol"]) or {}
+        # A symbol that failed outright - its chain or history download died
+        # after the retry in http_get - gets its whole last good panel back,
+        # marked. Without this a single stalled request published an "error"
+        # panel over good figures; on 10-03 at 00:00 and 04:00 it also tripped
+        # the page check and blocked the other symbols with it.
+        if not sym.get("ok"):
+            if old.get("ok") and old.get("ladder"):
+                held = dict(old)
+                held["held_reason"] = f"Data fetch failed this run ({sym.get('error', '')[:80]})"
+                held["held_all"] = True
+                held["regimes_from"] = old.get("regimes_from") or previous_generated
+                syms[i] = held
+            continue
+        if not sym.get("greeks_missing"):
+            continue
         # Only hold figures that have walls in them: a page published before
         # this guard existed carries the zeroed books themselves.
         if not old.get("ladder"):
@@ -2331,6 +2378,7 @@ def hold_regimes(syms, previous, previous_generated):
                 sym[key] = old[key]
         # A hold of a hold keeps the time of the figures, not of the last run.
         sym["regimes_from"] = old.get("regimes_from") or previous_generated
+        sym["held_reason"] = "Cboe greeks missing this run"
 
 
 def recompute(previous=None, previous_generated=None):
@@ -2341,6 +2389,10 @@ def recompute(previous=None, previous_generated=None):
         with _lock:
             previous = list(_cache.get("symbols") or [])
             previous_generated = _cache.get("generated")
+    # The retry budget in http_get counts from here, so the live server (one
+    # long process) gets the same per-cycle allowance as a snapshot run.
+    global _RUN_T0
+    _RUN_T0 = time.monotonic()
     now = now_et()
     status = market_status(now)
     margins_cfg = load_margins()
@@ -2824,7 +2876,7 @@ function panel(s){
     : "";
   const books = s.books||["near","full"];
   const held = s.regimes_from
-    ? `<div class="err">Cboe greeks missing this run - GEX and walls held from ${s.regimes_from}.</div>`
+    ? `<div class="err">${s.held_reason||"Cboe greeks missing this run"} - ${s.held_all?"this panel is":"GEX and walls are"} held from ${s.regimes_from}.</div>`
     : "";
   const body = (s.ladder&&s.ladder.length)
     ? held+`<div class="regime-block">`

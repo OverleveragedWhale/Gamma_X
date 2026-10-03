@@ -201,6 +201,18 @@ def main():
         except Exception as exc:
             bad += fail(f"panel({name}) threw: {str(exc)[:200]}")
             continue
+        # A symbol whose data failed to load is MEANT to render a short error
+        # panel. Treating that as a broken page blocked every symbol's good
+        # figures on 2026-10-03 at 00:00 and 04:00 over one stalled download.
+        # Still executed above, so a throw in the error path is caught; it is
+        # a warning in the log, not a reason to withhold the page.
+        if sym.get("ok") is False:
+            if out and "error" in out:
+                print(f"WARN  panel({name}) shows its data error: "
+                      f"{str(sym.get('error'))[:120]}")
+            else:
+                bad += fail(f"panel({name}) failed to load and rendered no error")
+            continue
         if not out or len(out) < 500:
             bad += fail(f"panel({name}) returned {len(out or '')} chars")
             continue
