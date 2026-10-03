@@ -7,7 +7,7 @@ puts them in a non-interactive session - a toast raised from there goes
 nowhere. So publish_snapshot.bat only writes the reason to <Root>\alert.txt
 and starts this task, which runs as InteractiveToken on the desktop.
 
-It does two jobs on every run:
+It does two jobs on every run, and a third once a day:
 
   1. Pending failure. If alert.txt exists, show it with the tail of that run's
      log section, then delete it. The same reason is not repeated within an
@@ -20,6 +20,17 @@ It does two jobs on every run:
      killed at the 3 minute limit. So during the session, if the last
      successful run (<Root>\last_ok.txt) is older than $StaleMinutes, say so
      once, with the best guess at why. When runs resume, say that too.
+
+  3. Standby guard, first run of each day. The publishing PC is a Surface
+     Pro 3 whose firmware has no S3: its only sleep is Modern Standby, which
+     Task Scheduler cannot wake it from, and its power button ("Turn off the
+     display", so LidLock locks) entered that standby on every press. Modern
+     Standby is switched off with PlatformAoAcOverride = 0, leaving nothing to
+     sleep into. A reset, a reinstall or a firmware update could bring it
+     back silently - the symptom would be a day of missing snapshots again -
+     so check that Windows still reports it unavailable, and say so once a
+     day until it is fixed. Re-applying needs elevation, which this task does
+     not have, so it reports the fix rather than attempting it.
 
 State lives in <Root>\alert_state.json. Nothing here leaves the machine.
 #>
@@ -86,7 +97,7 @@ function Get-RunTail {
     ($run | Select-Object -Last $Lines) -join "`n"
 }
 
-$state = @{ lastReason = ""; lastShown = ""; staleFor = "" }
+$state = @{ lastReason = ""; lastShown = ""; staleFor = ""; standbyChecked = "" }
 if (Test-Path $stateFile) {
     try {
         $s = Get-Content $stateFile -Raw | ConvertFrom-Json
@@ -155,6 +166,22 @@ if ($stale -and $state.staleFor -ne $key) {
     }
     Show-Toast "Gamma_X: no successful snapshot $since" ($why -join "`n")
     $state.staleFor = $key
+}
+
+# ------------------------------------------------------ 3. standby guard
+$today = $now.ToString("yyyy-MM-dd")
+if ($state.standbyChecked -ne $today) {
+    # powercfg /a lists available states first, then "not available on this
+    # system" ones; Modern Standby must not appear in the first part.
+    $avail = ((powercfg /a) -join "`n" -split 'not available on this system')[0]
+    $ovr = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' -ErrorAction SilentlyContinue).PlatformAoAcOverride
+    if ($avail -match 'S0 Low Power Idle') {
+        $what = if ($ovr -eq 0) { "the override is still set but Windows is ignoring it" }
+                else { "the PlatformAoAcOverride registry value is gone" }
+        Show-Toast "Gamma_X: this PC can sleep again" ("Modern Standby is back on ($what), so the power button will stop the publisher. " +
+            "Fix from an admin prompt, then restart: reg add HKLM\SYSTEM\CurrentControlSet\Control\Power /v PlatformAoAcOverride /t REG_DWORD /d 0 /f")
+    }
+    $state.standbyChecked = $today
 }
 
 $state | ConvertTo-Json | Set-Content $stateFile -Encoding utf8
