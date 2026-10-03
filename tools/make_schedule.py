@@ -12,9 +12,9 @@ day and none of the other 47 occurrences ever did - 3 for 3 against 0 for 141.
 Making each occurrence a start boundary puts every run on the one mechanism
 that demonstrably wakes this machine.
 
-This costs ~50 wake-ups a day of a few seconds each. market_sleep.bat still
+This costs ~48 wake-ups a day of a few seconds each. market_sleep.bat still
 holds the machine awake across the session, so in practice it wakes once at
-09:15 and stays up; the triggers are what carry the day if that fails. Either
+09:50 and stays up; the triggers are what carry the day if that fails. Either
 mechanism alone is enough, which is the point of having both.
 
 WHY THERE ARE TWO TASKS
@@ -26,11 +26,12 @@ the whole document past that, with a message that never names the limit:
     (680,7):CalendarTrigger:
 
 Measured on Windows 11 26200 by registering the real file truncated to each
-length: 46, 47 and 48 registered, 49 and 50 were rejected. The full schedule is
-50 occurrences, so it is split across two tasks that between them cover the
-day. Both run the same publisher; nothing else differs. The windows do not
-overlap, and the narrowest gap between one task's last run and the other's
-first is 15 minutes against runs that take about ten seconds.
+length: 46, 47 and 48 registered, 49 and 50 were rejected. The schedule was
+50 occurrences when this was written and is 48 now - exactly at the limit - so
+it stays split across two tasks that between them cover the day, leaving room
+to add runs. Both run the same publisher; nothing else differs. The windows do
+not overlap, and the narrowest gap between one task's last run and the other's
+first is 10 minutes (14:50 -> 15:00) against runs that take about ten seconds.
 
 The check in build_all() is the point of this note: an edit that pushes a task
 back over the limit now fails here, loudly, instead of writing a file that
@@ -52,8 +53,8 @@ WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
 # (label, first, last, every N minutes, days) - `last` is inclusive,
 # step 0 means a single occurrence, days None means every day.
 SESSION = [
-    ("Session: every 15 minutes, 09:15 through 14:45, weekdays",
-     "09:15", "14:45", 15, WEEKDAYS),
+    ("Session: every 15 minutes, 09:50 through 14:50, weekdays",
+     "09:50", "14:50", 15, WEEKDAYS),
     ("Settlement follow-up, weekdays", "18:20", "18:20", 0, WEEKDAYS),
     ("Off-hours, every day", "20:00", "20:00", 0, None),
     ("Off-hours, every day", "00:00", "00:00", 0, None),
@@ -69,7 +70,7 @@ CLOSE = [
 # (output file, task name/URI, one-line role, schedule)
 TASKS = [
     (TEMPLATE, "Gamma_X Snapshot",
-     "Weekdays every 15 minutes from 09:15 to 14:45, once at 18:20, and daily "
+     "Weekdays every 15 minutes from 09:50 to 14:50, once at 18:20, and daily "
      "at 00:00, 04:00, 08:00 and 20:00.", SESSION),
     (HERE / "GammaX-Snapshot-Close.xml", "Gamma_X Snapshot Close",
      "Weekdays every 5 minutes from 15:00 to 16:45, the cash close and the "
@@ -87,7 +88,7 @@ DESCRIPTION = (
     "start boundaries fired unattended over 09-21 to 09-23, and 0 of 141 "
     "repetitions did. The day is split across two tasks because Task "
     "Scheduler rejects a document with more than 48 triggers and the full "
-    "schedule is 50. publish_snapshot.bat also holds the machine awake across "
+    "schedule is 48, at the limit. publish_snapshot.bat also holds the machine awake across "
     "the session by setting both sleep timers, the attended idle one and the "
     "unattended one whose 120s default was returning the PC to sleep after "
     "each run. Either mechanism alone is enough; both are in place because "
@@ -142,7 +143,7 @@ def build(schedule):
              "         repetitions did.",
              "",
              "         At most 48 per task - Task Scheduler rejects the whole document",
-             "         past that, which is why the day's 50 runs live in two tasks. -->"]
+             "         past that, which is why the day's 48 runs live in two tasks. -->"]
     total = 0
     for label, first, last, step, days in schedule:
         when = times(first, last, step)

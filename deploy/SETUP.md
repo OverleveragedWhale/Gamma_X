@@ -88,11 +88,11 @@ generated page.
 
 ## The scheduled tasks
 
-50 runs a weekday, across **two** tasks:
+48 runs a weekday, across **two** tasks:
 
 | Task | Window | Cadence | Triggers |
 |---|---|---|---|
-| `Gamma_X Snapshot` | 09:15 – 14:45 weekdays | every 15 min | 23 |
+| `Gamma_X Snapshot` | 09:50 – 14:50 weekdays | every 15 min | 21 |
 | | 18:20 weekdays | once | 1 |
 | | 00:00, 04:00, 08:00, 20:00 daily | — | 4 |
 | `Gamma_X Snapshot Close` | 15:00 – 16:45 weekdays | every 5 min | 22 |
@@ -114,10 +114,10 @@ The task XML contains too many nodes of the same type.
 ```
 
 Measured on Windows 11 26200 by registering the real file truncated to each
-length: 46, 47 and 48 register, 49 and 50 are rejected. The full day is 50, so
-it is split. Both tasks run the same publisher and their windows do not
-overlap — the narrowest gap is 15 minutes (14:45 → 15:00) against runs that
-take about ten seconds.
+length: 46, 47 and 48 register, 49 and 50 are rejected. The full day is 48 —
+exactly at the limit — so it stays split, leaving room to add runs. Both tasks
+run the same publisher and their windows do not overlap — the narrowest gap is
+10 minutes (14:50 → 15:00) against runs that take about ten seconds.
 
 **A rejected registration leaves the previous task in place**, still running
 its old schedule. That looks identical to working, which is how a 50-trigger

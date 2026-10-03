@@ -123,10 +123,11 @@ if (Test-Path $alertFile) {
 }
 
 # ------------------------------------------------------------- 2. watchdog
-# Weekday runs are 09:15-16:45, never more than 15 minutes apart. Start
-# checking once two runs could have happened, stop shortly after the last.
+# Weekday runs are 09:50-16:45, never more than 15 minutes apart. Start
+# checking once two runs could have happened (09:50 and 10:05, so from the
+# 10:30 alert run), stop shortly after the last.
 $inSession = $now.DayOfWeek -notin 'Saturday', 'Sunday' -and
-             $now.TimeOfDay -ge [timespan]"09:50" -and $now.TimeOfDay -le [timespan]"17:05"
+             $now.TimeOfDay -ge [timespan]"10:20" -and $now.TimeOfDay -le [timespan]"17:05"
 $lastOk    = Read-Stamp $okFile
 $lastStart = Read-Stamp $startFile
 
