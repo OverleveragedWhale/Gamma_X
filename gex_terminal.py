@@ -2934,11 +2934,30 @@ async function fetchData(){
   if(!IS_SNAPSHOT) return await fetch("/api/data",{cache:"no-store"}).then(res=>res.json());
   // Unique query param gets past the Pages CDN. Falling back to the baked-in
   // copy keeps the page working on first paint and when opened off disk.
-  try{
-    const res = await fetch("data.json?t="+Date.now(),{cache:"no-store"});
-    if(res.ok) return await res.json();
-  }catch(e){}
-  return SNAPSHOT_DATA;
+  //
+  // The same file is also read straight off the snapshot branch. Pages only
+  // updates when an Actions runner builds it: on 2026-10-05 an Actions outage
+  // left every build from 15:20 queued and cancelled by the next push, and
+  // the site sat on 15:15 while the branch had every snapshot to 16:05. The
+  // raw file server does not depend on Actions (CORS-open, ~5 min cache), so
+  // the newer of the two wins.
+  const get = async url => {
+    try{
+      const res = await fetch(url,{cache:"no-store"});
+      if(res.ok) return await res.json();
+    }catch(e){}
+    return null;
+  };
+  const t = Date.now();
+  const pages = get("data.json?t="+t);
+  const m = location.hostname.match(/^([^.]+)\.github\.io$/);
+  const repo = location.pathname.split("/").filter(Boolean)[0];
+  const raw = (m && repo)
+    ? get(`https://raw.githubusercontent.com/${m[1]}/${repo}/snapshot/data.json?t=${t}`)
+    : Promise.resolve(null);
+  const got = (await Promise.all([pages, raw])).filter(Boolean);
+  if(!got.length) return SNAPSHOT_DATA;
+  return got.reduce((a,b)=>((b.epoch||0) > (a.epoch||0) ? b : a));
 }
 
 // The payload is fetched every poll but the code drawing it is baked into
