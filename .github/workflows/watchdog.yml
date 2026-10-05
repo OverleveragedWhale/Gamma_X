@@ -13,6 +13,13 @@ name: Snapshot watchdog
 #
 # When the page is fresh again it closes the issue, which also notifies.
 #
+# It also reads the LIVE site's data.json. On 2026-10-05 an Actions outage
+# left every Pages build from 15:20 ET queued, then cancelled by the next
+# push: the branch had every snapshot while the site sat on 15:15. Checking
+# only the branch would have called that fresh. When the branch is current
+# and the site is not, the issue says so, and no backup publish is started -
+# the snapshots are already there; it is the deploy that is stuck.
+#
 # Only judged during trading-day session hours. The publisher skips a push
 # when the figures have not changed, so a weekend or holiday page is
 # legitimately hours old; in session it moves every 5-15 minutes. The trading
@@ -32,7 +39,7 @@ on:
       force:
         description: "Testing: judge as if in session and this state"
         type: choice
-        options: [none, stale, fresh]
+        options: [none, stale, site_stale, fresh]
         default: none
       dry_run:
         description: "Testing: report what would be done, change nothing"
@@ -41,6 +48,7 @@ on:
 
 permissions:
   contents: read
+  pages: read
   issues: write
   actions: write
 
@@ -50,6 +58,7 @@ concurrency:
 
 env:
   STALE_MINUTES: "75"   # 5 missed 15-minute runs
+  SITE_LAG_MINUTES: "30" # site behind the branch; a healthy deploy is 1-2 min
   LABEL: watchdog
 
 jobs:
@@ -68,28 +77,54 @@ jobs:
         id: age
         env:
           FORCE: ${{ inputs.force || 'none' }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git fetch --depth=1 origin snapshot
           git show FETCH_HEAD:data.json > "$RUNNER_TEMP/data.json"
+          export SITE_URL=$(gh api "repos/${{ github.repository }}/pages" --jq .html_url 2>/dev/null || true)
           python - <<'PY' | tee -a "$GITHUB_OUTPUT"
-          import json, os, time
+          import json, os, time, urllib.request
           import gex_terminal as g
 
           d = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "data.json")))
           age = (time.time() - float(d.get("epoch") or 0)) / 60
+
+          # The live site's copy. Unreachable counts as unknown, not stale:
+          # a blip fetching it shouldn't raise an issue on its own.
+          site = None
+          url = os.environ.get("SITE_URL", "").rstrip("/")
+          if url:
+              try:
+                  req = urllib.request.Request(f"{url}/data.json?t={int(time.time())}",
+                                               headers={"Cache-Control": "no-cache"})
+                  site = json.load(urllib.request.urlopen(req, timeout=30))
+              except Exception as exc:
+                  print(f"site_error={type(exc).__name__}")
+          site_age = (time.time() - float(site.get("epoch") or 0)) / 60 if site else None
+
           now = g.now_et()
           hhmm = now.strftime("%H:%M")
           in_session = g.is_trading_day(now.date()) and "10:15" <= hhmm <= "17:00"
+          limit = float(os.environ["STALE_MINUTES"])
           force = os.environ["FORCE"]
-          if force != "none":
+          if force == "none":
+              stale = age > limit
+              # Behind the BRANCH, not just old: a quiet page is old in both.
+              lag = float(os.environ["SITE_LAG_MINUTES"])
+              site_stale = (not stale) and site_age is not None and site_age - age > lag
+          else:
               in_session = True
-          stale = (age > float(os.environ["STALE_MINUTES"])) if force == "none" else force == "stale"
+              stale, site_stale = force == "stale", force == "site_stale"
           print(f"age_minutes={age:.0f}")
           print(f"generated={d.get('generated')}")
+          print(f"site_age_minutes={'unknown' if site_age is None else f'{site_age:.0f}'}")
+          print(f"site_generated={site.get('generated') if site else 'unknown'}")
+          print(f"site_url={url}")
           print(f"now_et={now.strftime('%Y-%m-%d %H:%M')}")
           print(f"in_session={'true' if in_session else 'false'}")
           print(f"stale={'true' if (in_session and stale) else 'false'}")
+          print(f"site_stale={'true' if (in_session and site_stale) else 'false'}")
           PY
 
       - name: Act on it
@@ -98,6 +133,10 @@ jobs:
           DRY: ${{ inputs.dry_run && 'true' || 'false' }}
           IN_SESSION: ${{ steps.age.outputs.in_session }}
           STALE: ${{ steps.age.outputs.stale }}
+          SITE_STALE: ${{ steps.age.outputs.site_stale }}
+          SITE_AGE: ${{ steps.age.outputs.site_age_minutes }}
+          SITE_GENERATED: ${{ steps.age.outputs.site_generated }}
+          SITE_URL: ${{ steps.age.outputs.site_url }}
           AGE: ${{ steps.age.outputs.age_minutes }}
           GENERATED: ${{ steps.age.outputs.generated }}
           NOW_ET: ${{ steps.age.outputs.now_et }}
@@ -130,8 +169,23 @@ jobs:
               run gh issue create --label "$LABEL" --assignee "${{ github.repository_owner }}" \
                     --title "Dashboard stale: no snapshot for ${AGE} minutes" --body "$body"
             fi
+          elif [ "$SITE_STALE" = true ]; then
+            echo "SITE STALE: branch has $GENERATED but the live site still shows $SITE_GENERATED (${SITE_AGE} min old)."
+            if [ -n "$open" ]; then
+              echo "Issue #$open already open; not notifying again."
+            else
+              body="The publisher is working - the snapshot branch has **${GENERATED}** - but the live site (${SITE_URL}) still shows **${SITE_GENERATED}**, ${SITE_AGE} minutes old, checked at ${NOW_ET} ET.
+
+          That means GitHub Pages isn't deploying, usually a GitHub Actions or Pages incident: https://www.githubstatus.com. Nothing on the PC needs fixing, and no backup publish was started; the next snapshot deploys once GitHub recovers.
+
+          Open pages keep showing fresh numbers in the meantime: the page also reads data.json straight from the snapshot branch.
+
+          This issue closes itself when the site is current again."
+              run gh issue create --label "$LABEL" --assignee "${{ github.repository_owner }}" \
+                    --title "Dashboard site not updating: Pages hasn't deployed for ${SITE_AGE} minutes" --body "$body"
+            fi
           else
-            echo "Fresh: last published $GENERATED, ${AGE} min ago."
+            echo "Fresh: last published $GENERATED, ${AGE} min ago; site shows $SITE_GENERATED."
             if [ -n "$open" ]; then
               run gh issue close "$open" --comment "Page is fresh again: last snapshot ${GENERATED}, checked ${NOW_ET} ET."
             fi
