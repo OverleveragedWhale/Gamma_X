@@ -78,6 +78,17 @@ LIQ_LEVELS = (("99%", Z_99), ("99.9%", Z_999))   # label -> normal quantile
 if any(a[1] >= b[1] for a, b in zip(LIQ_LEVELS, LIQ_LEVELS[1:])):
     raise ValueError("LIQ_LEVELS must ascend in quantile: a wider confidence "
                      "level has to produce a wider band, not a narrower one")
+# Trade plans. The stop comes from tools/score_levels.py replaying the
+# published levels against 5 minute bars, never from a round number: measured
+# 2026-09/10, price ran a median 34 points past a touched ES put wall, so any
+# stop a trader would have guessed at was far too tight. The target comes from
+# TODAY's structure - the flip, or the nearest level the other way - because
+# that is what varies session to session and decides whether a fade is worth
+# taking at all.
+PLAN_BOOK = "near"            # the book the calibration was measured on
+PLAN_MIN_RR = 1.2             # below this the history shows no edge worth it
+PLAN_THIN_N = 6               # fewer touches than this and the figure is noise
+PLAN_AT_LEVEL_PCT = 0.1       # within this of the wall, the entry is live now
 TICKS_PER_POINT = 4           # ES and NQ both quote in quarter points
 FUT_SESSION_OPEN_HOUR = 18    # ET hour Globex opens the next trade date, so
                               # the hour the settled-session anchor steps. All
@@ -138,6 +149,7 @@ INSTRUMENTS = [
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.ini"
+CALIBRATION_PATH = BASE_DIR / "calibration.json"
 LOG_PATH = BASE_DIR / "gex_span.log"
 
 # On Windows, zoneinfo needs the 'tzdata' package (pip install tzdata).
@@ -941,6 +953,120 @@ def build_ladder(per_by_book, books, spot, ref_spot, prior, disp,
             })
     rows.sort(key=lambda r: (-r["strike_pre"], 0 if r["side"] == "call" else 1))
     return rows
+
+
+def trade_plans(ladder, regimes, spot, inst, calib):
+    """A fade plan for the nearest wall each side of spot, or [] if unmeasured.
+
+    The NEAREST wall, not the biggest: over 12 sessions the nearest was touched
+    2-3 times as often (ES calls 35% against 14%, NQ calls 47% against 16%), so
+    the largest-gamma row is usually a level price never reaches and a plan
+    against it would be untakeable by construction.
+
+    Stop is the calibrated p75 of how far price ran past a touched wall, so it
+    survived three touches in four. Target is structural: the gamma flip, or
+    the nearest level the other way, whichever comes first in the profit
+    direction. Both the session's own R:R and the historical base rate travel
+    with the plan, because a 1.8 R:R setup on a side that has only ever paid
+    0.8 is a different proposition from one on a side that has.
+    """
+    stats = (calib.get("symbols") or {}).get(inst["future"]) or {}
+    if not stats or not ladder or not spot:
+        return []
+    flip = (regimes.get(PLAN_BOOK) or {}).get("flip")
+    mult = inst["multiplier"]
+    plans = []
+
+    for side in ("call", "put"):
+        cal = stats.get(side)
+        if not cal or not cal.get("stop_pct"):
+            continue
+        up = side == "call"
+        # Candidates: this side, correct side of spot, carrying gamma in the
+        # calibrated book - a row held up only by the week or full column was
+        # never part of what was measured.
+        rows = [r for r in ladder
+                if r.get("side") == side
+                and ((r["strike"] > spot) if up else (r["strike"] < spot))
+                and ((r.get("books") or {}).get(PLAN_BOOK) or {}).get("net")]
+        if not rows:
+            continue
+        level = min(rows, key=lambda r: abs(r["strike"] - spot))["strike"]
+        stop = level + (1 if up else -1) * spot * cal["stop_pct"] / 100.0
+
+        # Structural levels in the profit direction: the other side's rows
+        # past this one, and the flip.
+        targets = [r["strike"] for r in ladder
+                   if r.get("side") != side
+                   and ((r["strike"] < level) if up else (r["strike"] > level))]
+        if flip and ((flip < level) if up else (flip > level)):
+            targets.append(flip)
+        if not targets:
+            continue
+        risk_pts = abs(stop - level)
+        if risk_pts <= 0:
+            continue
+        # The nearest target at least a stop's distance away, so the plan is
+        # never a worse-than-1:1 by construction. Taking the nearest outright
+        # put an ES put target 1.05 points above its own entry on 2026-10-06 -
+        # the flip sat on the wall - and reported it as a 0.03 R:R "plan".
+        # Nothing qualifying means the structure is too tight to fade: say so
+        # rather than inventing a level further out than anything on the page.
+        ordered = sorted(targets, key=lambda k: abs(k - level))
+        usable = [k for k in ordered if abs(level - k) >= risk_pts]
+        target = usable[0] if usable else None
+        if target is None:
+            plans.append({
+                "side": side, "action": "sell" if up else "buy",
+                "level": round(level, 2),
+                "dist": round(100 * (level - spot) / spot, 2),
+                "stop": round(stop, 2), "target": None,
+                "risk_pts": round(risk_pts, 2), "risk_usd": round(risk_pts * mult),
+                "verdict": "no room",
+                "note": ("nearest level the other way is inside the stop"),
+                "basis": {"n": cal.get("n_touched"), "levels": cal.get("n_levels"),
+                          "touch_rate": cal.get("touch_rate"),
+                          "hist_rr": cal.get("rr"),
+                          "stop_pct": cal.get("stop_pct"),
+                          "scored": calib.get("scored_at"),
+                          "sessions": calib.get("sessions")},
+            })
+            continue
+        reward_pts = abs(level - target)
+        rr = reward_pts / risk_pts
+        hist_rr = cal.get("rr")
+        if (cal.get("n_touched") or 0) < PLAN_THIN_N:
+            verdict = "thin"
+        elif hist_rr is not None and hist_rr < PLAN_MIN_RR:
+            verdict = "no edge"
+        elif rr < PLAN_MIN_RR:
+            verdict = "poor today"
+        else:
+            verdict = "ok"
+        plans.append({
+            "side": side,
+            "action": "sell" if up else "buy",
+            "level": round(level, 2),
+            "dist": round(100 * (level - spot) / spot, 2),
+            "stop": round(stop, 2),
+            "target": round(target, 2),
+            "target_src": "flip" if target == flip else "opposite wall",
+            # Price is already at the wall: the entry is live, not a wait.
+            "at_level": abs(level - spot) / spot * 100 <= PLAN_AT_LEVEL_PCT,
+            "risk_pts": round(risk_pts, 2),
+            "reward_pts": round(reward_pts, 2),
+            "rr": round(rr, 2),
+            "risk_usd": round(risk_pts * mult),
+            "reward_usd": round(reward_pts * mult),
+            "verdict": verdict,
+            "basis": {"n": cal.get("n_touched"), "levels": cal.get("n_levels"),
+                      "touch_rate": cal.get("touch_rate"),
+                      "hist_rr": hist_rr,
+                      "stop_pct": cal.get("stop_pct"),
+                      "scored": calib.get("scored_at"),
+                      "sessions": calib.get("sessions")},
+        })
+    return plans
 
 
 def build_regime(contracts, spot, today, prior, disp, ref_spot=None,
@@ -1805,6 +1931,21 @@ def load_margins():
     return None
 
 
+def load_calibration():
+    """Measured stop/target behaviour per symbol, or {} when absent.
+
+    Written by tools/score_levels.py. Absent means the page shows no plans at
+    all rather than plans resting on a guess: an untested number dressed up as
+    a level to risk money against is worse than a blank.
+    """
+    try:
+        if CALIBRATION_PATH.exists():
+            return json.loads(CALIBRATION_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        logging.exception("could not read calibration.json")
+    return {}
+
+
 def load_closes():
     """Optional [closes] section: prior futures SETTLEMENT per future, used to
     build the chain->future ratio when the auto Yahoo futures pull is missing
@@ -1860,13 +2001,14 @@ def market_status(now):
 
 
 # ---------------- per-symbol structured compute ----------------
-def compute_symbol(inst, margins_cfg, closes_cfg):
+def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
     """Compute one instrument, then map every level to FUTURES terms with a
     single ratio m = prior_future_close / prior_chain_close (real closes; folds
     ETF tracking + the multiplicative futures basis into one number). Future
     close: auto from Yahoo (sanity-checked vs the index ratio to reject
     back-adjusted continuous series), else config [closes], else index terms."""
     future = inst["future"]
+    calib = calib or {}
     now = now_et()
     today = now.date()
     # Which expirations are still live. The calendar date keeps a contract in
@@ -2198,6 +2340,9 @@ def compute_symbol(inst, margins_cfg, closes_cfg):
             if best:
                 r["vp"] = best[1]
 
+        out["plans"] = trade_plans(out["ladder"], out["regimes"], shown_spot,
+                                   inst, calib)
+
     if contracts:
         out["max_pain"] = [
             {"expiry": expiry.isoformat(), "strike": disp(item["strike"]),
@@ -2397,6 +2542,7 @@ def recompute(previous=None, previous_generated=None):
     status = market_status(now)
     margins_cfg = load_margins()
     closes_cfg = load_closes()
+    calib = load_calibration()
 
     # Instruments are independent (different symbols/URLs) and each one is
     # network-bound (Cboe chain + 3 Yahoo calls), so run them concurrently
@@ -2405,7 +2551,7 @@ def recompute(previous=None, previous_generated=None):
 
     def run_one(i, inst):
         try:
-            syms[i] = compute_symbol(inst, margins_cfg, closes_cfg)
+            syms[i] = compute_symbol(inst, margins_cfg, closes_cfg, calib)
             logging.info("dashboard %s OK", inst["future"])
         except Exception as exc:
             logging.exception("dashboard %s failed", inst["future"])
@@ -2604,6 +2750,21 @@ tr.spotrow td{color:var(--ink);font-weight:700;letter-spacing:.06em;
 .chip.decay{color:var(--muted)}
 .chip.decay.hot{color:var(--brass);border-color:rgba(217,164,65,.45)}
 .max-pain{margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
+/* trade plans */
+.plans{margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
+.plans .k{font-size:10px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--muted);margin-bottom:5px}
+.plans .sub{letter-spacing:.04em;text-transform:none;opacity:.6}
+.plans table{width:auto;min-width:520px}
+.plans td,.plans th{padding:3px 12px 3px 0}
+.plans .setup{text-transform:uppercase;letter-spacing:.08em;font-size:10.5px}
+.plans .basis{font-size:10.5px;color:var(--muted)}
+.plans tr.v-ok td{color:var(--ink)}
+.plans tr.v-noedge td,.plans tr.v-thin td,.plans tr.v-noroom td{opacity:.62}
+.chip.v-ok{color:var(--jade);border-color:rgba(75,191,138,.45)}
+.chip.v-thin,.chip.v-poor{color:var(--brass);border-color:rgba(217,164,65,.45)}
+.chip.v-noedge,.chip.v-noroom{color:var(--stress);border-color:rgba(255,93,99,.4)}
+.chip.live{color:var(--brass);border-color:rgba(217,164,65,.6)}
 .active-con{font-size:10px;letter-spacing:.1em;padding:2px 7px;margin-left:10px;
   border:1px solid var(--jade);border-radius:3px;color:var(--jade);vertical-align:middle}
 .con-on{color:var(--jade)}
@@ -2741,6 +2902,65 @@ function bookSummary(s,regimes,books){
     +`<th class="num" title="Dealer delta per day from time passing">Charm /day</th>`
     +`<th class="num" title="Share of the book's gamma expiring within 2 sessions">&le;2d</th>`
     +`</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+// Fade plans for the nearest wall each side. Stop distances are measured by
+// tools/score_levels.py against real bars; targets come from today's structure.
+// The verdict and the base rate are shown on the same row as the R:R on
+// purpose: a 4.4 R:R on a side whose history pays 0.77 is not a 4.4 R:R
+// opportunity, and leaving the reader to go and find that out invites the
+// page to be read as a recommendation.
+const VERDICT = {"ok":["v-ok","measured edge"],
+                 "poor today":["v-poor","structure too tight today"],
+                 "no edge":["v-noedge","history shows no edge on this side"],
+                 "thin":["v-thin","too few touches to trust"],
+                 "no room":["v-noroom","nothing to target inside the stop"]};
+
+function planRow(p){
+  const [cls,why] = VERDICT[p.verdict] || ["v-thin",""];
+  const b = p.basis||{};
+  const money = v => (v>=0?"":"\u2212")+"$"+Math.abs(v).toLocaleString();
+  const tgt = p.target==null
+    ? `<td class="num">\u2014</td><td class="num">\u2014</td>`
+    : `<td class="num">${(+p.target).toFixed(2)}`
+      + ` <span class="pre">${p.target_src==="flip"?"flip":"wall"}</span></td>`
+      + `<td class="num"><b>${(+p.rr).toFixed(2)}</b></td>`;
+  const pl = p.target==null ? "\u2014"
+    : `${money(-p.risk_usd)} / +$${p.reward_usd.toLocaleString()}`;
+  return `<tr class="${cls}">`
+    +`<td class="setup ${p.side==="call"?"side-c":"side-p"}">`
+      +`${p.action} ${p.side}`
+      +(p.at_level?` <span class="chip live">at it now</span>`:"")+`</td>`
+    +`<td class="num">${(+p.level).toFixed(2)}`
+      +` <span class="pre">${p.dist>0?"+":""}${p.dist}%</span></td>`
+    +`<td class="num">${(+p.stop).toFixed(2)}</td>`
+    +tgt
+    +`<td class="num">${pl}</td>`
+    +`<td class="basis" title="${why}">`
+      +`<span class="chip ${cls}">${p.verdict}</span> `
+      +(b.n!=null?`${b.n}/${b.levels} touched`:"")
+      +(b.touch_rate!=null?` ${Math.round(b.touch_rate*100)}%`:"")
+      +(b.hist_rr!=null?` \u00b7 hist R:R ${b.hist_rr}`:"")
+      +(p.note?` \u00b7 ${p.note}`:"")
+    +`</td></tr>`;
+}
+
+function tradePlans(s){
+  const ps = s.plans||[];
+  if(!ps.length) return "";
+  const b = (ps[0].basis)||{};
+  const prov = b.sessions
+    ? `<span class="sub">stops measured over ${b.sessions} session-symbols`
+      + (b.scored?` to ${b.scored}`:"") + `, targets from today</span>`
+    : "";
+  return `<div class="plans"><div class="k">Fade plans, nearest wall each side `
+    + prov + `</div>`
+    + `<table><thead><tr><th>Setup</th><th class="num">Entry</th>`
+    + `<th class="num">Stop</th><th class="num">Target</th>`
+    + `<th class="num" title="Today's reward to risk, from the structural target">R:R</th>`
+    + `<th class="num" title="Per contract, risk / reward">Risk / reward</th>`
+    + `<th>Basis</th></tr></thead>`
+    + `<tbody>${ps.map(planRow).join("")}</tbody></table></div>`;
 }
 
 // The combined ladder: one row per strike, one column per book, so "is this
@@ -2898,6 +3118,7 @@ function panel(s){
     ${contractRow(s.contract)}
     ${s.scale_note?`<div class="scale">levels: ${s.scale_note}</div>`:""}
     ${body}
+    ${tradePlans(s)}
     ${maxPain}
     ${marg}
   </div>`;
