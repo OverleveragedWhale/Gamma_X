@@ -1,174 +1,424 @@
 {
   "book": "near",
   "top": 2,
-  "stop_pct": 0.35,
   "select": "nearest",
+  "era": "all",
+  "plan_r": 1.5,
+  "stop_pctile": 75,
   "entry": "09:50",
   "close": "16:00",
   "sessions": 42,
-  "days": 12,
+  "days": 11,
   "from": "2026-09-21",
-  "to": "2026-10-06",
+  "to": "2026-10-05",
   "scored_at": "2026-10-06",
   "symbols": {
     "CL": {
       "call": {
-        "n_levels": 11,
-        "n_touched": 4,
-        "avg_dist_pct": 3.109,
-        "touch_rate": 0.364,
-        "beyond_p50": 0.76,
-        "beyond_p75": 0.76,
-        "beyond_p90": 1.47,
-        "beyond_p75_pct": 0.816,
-        "back_p50": 3.47,
-        "back_p50_pct": 3.728,
-        "held_rate_at_stop": 0.25,
         "sessions": 6,
-        "stop_pts": 0.76,
-        "stop_pct": 0.816,
-        "target_pts": 3.47,
-        "target_pct": 3.728,
-        "rr": 4.57
+        "n_levels": 11,
+        "fade": {
+          "n": 4,
+          "stop_pct": 0.813,
+          "exp": {
+            "1": 0.0,
+            "1.5": 0.25,
+            "2": 0.5
+          },
+          "win": {
+            "1": 0.5,
+            "1.5": 0.5,
+            "2": 0.5
+          },
+          "by_era": {
+            "single": {
+              "n": 4,
+              "exp_plan": 0.25
+            }
+          },
+          "exp_plan": 0.25,
+          "win_plan": 0.5,
+          "rate": 0.364
+        },
+        "breakout": {
+          "n": 4,
+          "stop_pct": 0.321,
+          "exp": {
+            "1": 0.0,
+            "1.5": -0.375,
+            "2": -0.25
+          },
+          "win": {
+            "1": 0.5,
+            "1.5": 0.25,
+            "2": 0.25
+          },
+          "by_era": {
+            "single": {
+              "n": 4,
+              "exp_plan": -0.375
+            }
+          },
+          "exp_plan": -0.375,
+          "win_plan": 0.25,
+          "rate": 0.364
+        }
       },
       "put": {
-        "n_levels": 9,
-        "n_touched": 4,
-        "avg_dist_pct": 2.013,
-        "touch_rate": 0.444,
-        "beyond_p50": 0.33,
-        "beyond_p75": 0.33,
-        "beyond_p90": 2.2,
-        "beyond_p75_pct": 0.354,
-        "back_p50": 2.06,
-        "back_p50_pct": 2.213,
-        "held_rate_at_stop": 0.5,
         "sessions": 6,
-        "stop_pts": 0.33,
-        "stop_pct": 0.354,
-        "target_pts": 2.06,
-        "target_pct": 2.213,
-        "rr": 6.24
+        "n_levels": 9,
+        "fade": {
+          "n": 4,
+          "stop_pct": 0.36,
+          "exp": {
+            "1": 0.0,
+            "1.5": 0.25,
+            "2": 0.5
+          },
+          "win": {
+            "1": 0.5,
+            "1.5": 0.5,
+            "2": 0.5
+          },
+          "by_era": {
+            "single": {
+              "n": 4,
+              "exp_plan": 0.25
+            }
+          },
+          "exp_plan": 0.25,
+          "win_plan": 0.5,
+          "rate": 0.444
+        },
+        "breakout": {
+          "n": 3,
+          "stop_pct": 1.216,
+          "exp": {
+            "1": -0.333,
+            "1.5": -0.678,
+            "2": -0.678
+          },
+          "win": {
+            "1": 0.333,
+            "1.5": 0.0,
+            "2": 0.0
+          },
+          "by_era": {
+            "single": {
+              "n": 3,
+              "exp_plan": -0.678
+            }
+          },
+          "exp_plan": -0.678,
+          "win_plan": 0.0,
+          "rate": 0.333
+        }
       }
     },
     "ES": {
       "call": {
-        "n_levels": 16,
-        "n_touched": 5,
-        "avg_dist_pct": 0.612,
-        "touch_rate": 0.312,
-        "beyond_p50": 16.83,
-        "beyond_p75": 24.42,
-        "beyond_p90": 40.27,
-        "beyond_p75_pct": 0.315,
-        "back_p50": 34.0,
-        "back_p50_pct": 0.438,
-        "held_rate_at_stop": 0.8,
         "sessions": 11,
-        "stop_pts": 24.42,
-        "stop_pct": 0.315,
-        "target_pts": 34.0,
-        "target_pct": 0.438,
-        "rr": 1.39
+        "n_levels": 16,
+        "fade": {
+          "n": 5,
+          "stop_pct": 0.217,
+          "exp": {
+            "1": -0.404,
+            "1.5": -0.304,
+            "2": -0.204
+          },
+          "win": {
+            "1": 0.2,
+            "1.5": 0.2,
+            "2": 0.2
+          },
+          "by_era": {
+            "single": {
+              "n": 5,
+              "exp_plan": -0.304
+            }
+          },
+          "exp_plan": -0.304,
+          "win_plan": 0.2,
+          "rate": 0.312
+        },
+        "breakout": {
+          "n": 5,
+          "stop_pct": 0.1,
+          "exp": {
+            "1": 0.2,
+            "1.5": 0.5,
+            "2": 0.2
+          },
+          "win": {
+            "1": 0.6,
+            "1.5": 0.6,
+            "2": 0.4
+          },
+          "by_era": {
+            "single": {
+              "n": 5,
+              "exp_plan": 0.5
+            }
+          },
+          "exp_plan": 0.5,
+          "win_plan": 0.6,
+          "rate": 0.312
+        }
       },
       "put": {
-        "n_levels": 20,
-        "n_touched": 8,
-        "avg_dist_pct": 0.581,
-        "touch_rate": 0.4,
-        "beyond_p50": 34.0,
-        "beyond_p75": 36.61,
-        "beyond_p90": 41.99,
-        "beyond_p75_pct": 0.472,
-        "back_p50": 29.75,
-        "back_p50_pct": 0.383,
-        "held_rate_at_stop": 0.5,
         "sessions": 11,
-        "stop_pts": 36.61,
-        "stop_pct": 0.472,
-        "target_pts": 29.75,
-        "target_pct": 0.383,
-        "rr": 0.81
+        "n_levels": 20,
+        "fade": {
+          "n": 8,
+          "stop_pct": 0.152,
+          "exp": {
+            "1": 0.0,
+            "1.5": -0.062,
+            "2": -0.127
+          },
+          "win": {
+            "1": 0.5,
+            "1.5": 0.375,
+            "2": 0.125
+          },
+          "by_era": {
+            "single": {
+              "n": 8,
+              "exp_plan": -0.062
+            }
+          },
+          "exp_plan": -0.062,
+          "win_plan": 0.375,
+          "rate": 0.4
+        },
+        "breakout": {
+          "n": 7,
+          "stop_pct": 0.1,
+          "exp": {
+            "1": 0.005,
+            "1.5": 0.219,
+            "2": 0.433
+          },
+          "win": {
+            "1": 0.429,
+            "1.5": 0.429,
+            "2": 0.429
+          },
+          "by_era": {
+            "single": {
+              "n": 7,
+              "exp_plan": 0.219
+            }
+          },
+          "exp_plan": 0.219,
+          "win_plan": 0.429,
+          "rate": 0.35
+        }
       }
     },
     "GC": {
       "call": {
-        "n_levels": 21,
-        "n_touched": 2,
-        "avg_dist_pct": 1.811,
-        "touch_rate": 0.095,
-        "beyond_p50": 4.88,
-        "beyond_p75": 7.87,
-        "beyond_p90": 7.87,
-        "beyond_p75_pct": 0.179,
-        "back_p50": 9.5,
-        "back_p50_pct": 0.216,
-        "held_rate_at_stop": 1.0,
         "sessions": 11,
-        "stop_pts": 7.87,
-        "stop_pct": 0.179,
-        "target_pts": 9.5,
-        "target_pct": 0.216,
-        "rr": 1.21
+        "n_levels": 21,
+        "fade": {
+          "n": 2,
+          "stop_pct": 0.179,
+          "exp": {
+            "1": 0.0,
+            "1.5": 0.25,
+            "2": 0.5
+          },
+          "win": {
+            "1": 0.5,
+            "1.5": 0.5,
+            "2": 0.5
+          },
+          "by_era": {
+            "single": {
+              "n": 2,
+              "exp_plan": 0.25
+            }
+          },
+          "exp_plan": 0.25,
+          "win_plan": 0.5,
+          "rate": 0.095
+        },
+        "breakout": {
+          "n": 2,
+          "stop_pct": 0.321,
+          "exp": {
+            "1": -0.776,
+            "1.5": -0.776,
+            "2": -0.776
+          },
+          "win": {
+            "1": 0.0,
+            "1.5": 0.0,
+            "2": 0.0
+          },
+          "by_era": {
+            "single": {
+              "n": 2,
+              "exp_plan": -0.776
+            }
+          },
+          "exp_plan": -0.776,
+          "win_plan": 0.0,
+          "rate": 0.095
+        }
       },
       "put": {
-        "n_levels": 18,
-        "n_touched": 10,
-        "avg_dist_pct": 0.671,
-        "touch_rate": 0.556,
-        "beyond_p50": 8.84,
-        "beyond_p75": 15.99,
-        "beyond_p90": 23.66,
-        "beyond_p75_pct": 0.364,
-        "back_p50": 35.8,
-        "back_p50_pct": 0.814,
-        "held_rate_at_stop": 0.7,
         "sessions": 11,
-        "stop_pts": 15.99,
-        "stop_pct": 0.364,
-        "target_pts": 35.8,
-        "target_pct": 0.814,
-        "rr": 2.24
+        "n_levels": 18,
+        "fade": {
+          "n": 10,
+          "stop_pct": 0.268,
+          "exp": {
+            "1": 0.2,
+            "1.5": 0.276,
+            "2": 0.476
+          },
+          "win": {
+            "1": 0.6,
+            "1.5": 0.4,
+            "2": 0.4
+          },
+          "by_era": {
+            "single": {
+              "n": 10,
+              "exp_plan": 0.276
+            }
+          },
+          "exp_plan": 0.276,
+          "win_plan": 0.4,
+          "rate": 0.556
+        },
+        "breakout": {
+          "n": 8,
+          "stop_pct": 0.134,
+          "exp": {
+            "1": 0.0,
+            "1.5": -0.063,
+            "2": 0.125
+          },
+          "win": {
+            "1": 0.5,
+            "1.5": 0.375,
+            "2": 0.375
+          },
+          "by_era": {
+            "single": {
+              "n": 8,
+              "exp_plan": -0.063
+            }
+          },
+          "exp_plan": -0.063,
+          "win_plan": 0.375,
+          "rate": 0.444
+        }
       }
     },
     "NQ": {
       "call": {
-        "n_levels": 18,
-        "n_touched": 8,
-        "avg_dist_pct": 0.535,
-        "touch_rate": 0.444,
-        "beyond_p50": 101.74,
-        "beyond_p75": 134.19,
-        "beyond_p90": 167.53,
-        "beyond_p75_pct": 0.444,
-        "back_p50": 205.5,
-        "back_p50_pct": 0.68,
-        "held_rate_at_stop": 0.625,
         "sessions": 11,
-        "stop_pts": 134.19,
-        "stop_pct": 0.444,
-        "target_pts": 205.5,
-        "target_pct": 0.68,
-        "rr": 1.53
+        "n_levels": 18,
+        "fade": {
+          "n": 8,
+          "stop_pct": 0.214,
+          "exp": {
+            "1": 0.25,
+            "1.5": -0.062,
+            "2": 0.125
+          },
+          "win": {
+            "1": 0.625,
+            "1.5": 0.375,
+            "2": 0.375
+          },
+          "by_era": {
+            "single": {
+              "n": 8,
+              "exp_plan": -0.062
+            }
+          },
+          "exp_plan": -0.062,
+          "win_plan": 0.375,
+          "rate": 0.444
+        },
+        "breakout": {
+          "n": 7,
+          "stop_pct": 0.179,
+          "exp": {
+            "1": 0.429,
+            "1.5": 0.071,
+            "2": -0.143
+          },
+          "win": {
+            "1": 0.714,
+            "1.5": 0.429,
+            "2": 0.286
+          },
+          "by_era": {
+            "single": {
+              "n": 7,
+              "exp_plan": 0.071
+            }
+          },
+          "exp_plan": 0.071,
+          "win_plan": 0.429,
+          "rate": 0.389
+        }
       },
       "put": {
-        "n_levels": 21,
-        "n_touched": 4,
-        "avg_dist_pct": 1.102,
-        "touch_rate": 0.19,
-        "beyond_p50": 39.92,
-        "beyond_p75": 39.92,
-        "beyond_p90": 211.96,
-        "beyond_p75_pct": 0.132,
-        "back_p50": 354.25,
-        "back_p50_pct": 1.172,
-        "held_rate_at_stop": 0.75,
         "sessions": 11,
-        "stop_pts": 39.92,
-        "stop_pct": 0.132,
-        "target_pts": 354.25,
-        "target_pct": 1.172,
-        "rr": 8.87
+        "n_levels": 21,
+        "fade": {
+          "n": 4,
+          "stop_pct": 0.131,
+          "exp": {
+            "1": 0.5,
+            "1.5": 0.875,
+            "2": 1.25
+          },
+          "win": {
+            "1": 0.75,
+            "1.5": 0.75,
+            "2": 0.75
+          },
+          "by_era": {
+            "single": {
+              "n": 4,
+              "exp_plan": 0.875
+            }
+          },
+          "exp_plan": 0.875,
+          "win_plan": 0.75,
+          "rate": 0.19
+        },
+        "breakout": {
+          "n": 3,
+          "stop_pct": 0.202,
+          "exp": {
+            "1": -0.333,
+            "1.5": -0.167,
+            "2": 0.0
+          },
+          "win": {
+            "1": 0.333,
+            "1.5": 0.333,
+            "2": 0.333
+          },
+          "by_era": {
+            "single": {
+              "n": 3,
+              "exp_plan": -0.167
+            }
+          },
+          "exp_plan": -0.167,
+          "win_plan": 0.333,
+          "rate": 0.143
+        }
       }
     }
   }
