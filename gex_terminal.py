@@ -46,6 +46,29 @@ NEAR_MAX_DTE = 32            # near-term bucket: never look further than this
 MAX_PAIN_DAILY_DAYS = 5      # max pain: every expiry inside this many days,
                              # and nothing but monthly opex beyond it
 SHARES_PER_CONTRACT = 100
+# Several option chains on the same underlying are merged into one book. The
+# index chain and its ETF are different ladders over the same market, and
+# dealer hedging answers to both: measured 2026-10-06, QQQ carried 26.0B of
+# dollar gamma against NDX's 14.0B, so reading NQ off QQQ alone dropped a
+# THIRD of the gamma, and ES off SPX alone dropped SPY's 49.4B beside SPX's
+# 475.9B. Dollar gamma is scale-free - gamma x oi x shares x spot^2 x 0.01 is
+# dollars per 1% move whatever the ladder - so the two sum directly once every
+# strike is converted to futures terms by its own chain's ratio.
+#
+# Strikes are then binned, because converted strikes from two chains land near
+# but not on each other (SPX 7805 -> 7894.0 against SPY 779 -> 7894.9 on
+# 2026-10-06). The bin is a fraction of spot rather than points so it travels
+# across instruments, and it is deliberately FINER than any chain's own strike
+# spacing - 0.02% is 1.6 ES points against SPX's 5.1 and 6.3 NQ points against
+# NDX's 10.1 - so each ladder keeps its own structure and only genuinely
+# coincident levels merge. Collapsing nearby walls for REPORTING is a separate
+# job, done by wall_sep in build_ladder.
+LEVEL_BIN_PCT = 0.02
+# An extra chain has to agree with the primary about where spot is, once each
+# is converted by its own ratio. 1% is loose enough for ETF tracking and a
+# stale print, tight enough to catch the real failure: a prior close read off
+# the wrong session, which would slide that chain's whole ladder.
+EXTRA_CHAIN_TOL = 0.01
 WALL_COUNT = 10              # default walls per side; instruments override
                              # it with wall_count. GC runs a shorter list:
                              # gold call open interest genuinely sits far out
@@ -134,12 +157,24 @@ INSTRUMENTS = [
     # the listed strike increment near the money. Two walls that close are
     # reported separately rather than collapsed, which is what makes the
     # ladder line up with the increments actually drawn on a chart.
+    # "chain"/"hist" is the PRIMARY chain: it sets the ratio, the carry gate,
+    # the wall_sep units and the per-chain column on the page. "extra" chains
+    # are additive and individually droppable - each needs its own prior close
+    # for its own ratio, and one that cannot be priced or that disagrees with
+    # the primary on where spot is simply does not contribute. That keeps a
+    # bad second feed from moving levels: the worst case is today's behaviour.
     {"future": "ES",  "chain": "_SPX", "hist": "^GSPC", "index": "^GSPC",
      "fut": "ES=F",  "multiplier": 50,   "cycle": "quarterly", "exch": ".CME",
-     "wall_sep": 5.0,  "wall_count": 10},
+     "wall_sep": 5.0,  "wall_count": 10,
+     "extra": [{"chain": "SPY", "hist": "SPY"}]},
+    # QQQ stays primary over NDX: it is the chain the ratio, the carry gate and
+    # wall_sep were all measured against, and NDX as "index" already feeds the
+    # margin notional. NDX joins as the bigger-strike, finer-grained half of
+    # the same book.
     {"future": "NQ",  "chain": "QQQ",  "hist": "QQQ",   "index": "^NDX",
      "fut": "NQ=F",  "multiplier": 20,   "cycle": "quarterly", "exch": ".CME",
-     "wall_sep": 1.0,  "wall_count": 10},
+     "wall_sep": 1.0,  "wall_count": 10,
+     "extra": [{"chain": "_NDX", "hist": "^NDX"}]},
     # Commodity books ride an ETF chain the same way NQ rides QQQ, but the
     # proxy is looser: see the ratio-noise note in compute_symbol.
     {"future": "GC",  "chain": "GLD",  "hist": "GLD",   "index": "GC=F",
@@ -532,7 +567,27 @@ def parse_occ(occ):
             cp, strike)
 
 
-def load_contracts(options, today):
+def load_contracts(options, today, m=1.0, src=None, bin_pts=0.0):
+    """Chain rows into contracts, converted to FUTURES terms when m is given.
+
+    Every downstream number is then in one unit system, so chains merge by
+    concatenation. The conversions, and why each is what it is:
+
+      strike  x m, then binned - see LEVEL_BIN_PCT.
+      gamma   / m^2. contract_gex multiplies by spot^2, and spot is now m
+              times larger, so this leaves dollar gamma EXACTLY as the chain
+              reported it. Dollar vanna and charm fall out invariant too:
+              both carry one power of gamma and one of spot.
+      shares  100 / m. Open-interest-weighted DOLLAR quantities - max pain -
+              need the contract's real notional, and a SPY contract converted
+              to ES terms controls a tenth of what its converted strike
+              suggests. Without this SPY's book counted tenfold.
+      w       1 / m, the same idea for COUNTS: contract-equivalents, so a
+              put/call ratio is not a SPX contract added to a SPY one.
+
+    The flip is untouched by all of it: it scales its own gammas by a RATIO of
+    two bs_gamma calls, and ratios cancel the scaling.
+    """
     out = []
     for o in options:
         try:
@@ -549,8 +604,13 @@ def load_contracts(options, today):
         dte = (exp - today).days
         if oi <= 0 or dte < 0 or dte > MAX_DTE:
             continue
-        out.append({"exp": exp, "cp": cp, "strike": strike,
-                    "oi": oi, "iv": iv, "gamma": gamma, "vol": vol})
+        k = strike * m
+        if bin_pts:
+            k = round(k / bin_pts) * bin_pts
+        out.append({"exp": exp, "cp": cp, "strike": round(k, 2),
+                    "oi": oi, "iv": iv, "gamma": gamma / (m * m), "vol": vol,
+                    "shares": SHARES_PER_CONTRACT / m, "w": 1.0 / m,
+                    "src": src})
     return out
 
 
@@ -569,8 +629,14 @@ def gex_by_strike(contracts, spot, book_date=None):
     for c in contracts:
         g = contract_gex(c["gamma"], c["oi"], spot)
         d = per.setdefault(c["strike"], {"call": 0.0, "put": 0.0,
-                                         "mag": 0.0, "short": 0.0})
+                                         "mag": 0.0, "short": 0.0,
+                                         "src": set()})
         d["call" if c["cp"] == "C" else "put"] += g
+        # Which chains put gamma here. A level both ladders strike is a
+        # different proposition from one only the ETF has, and the ladder says
+        # which, rather than presenting a merged number with no provenance.
+        if c.get("src"):
+            d["src"].add(c["src"])
         if book_date is not None:
             d["mag"] += abs(g)
             if (c["exp"] - book_date).days <= SHORT_DATED_DAYS:
@@ -604,10 +670,13 @@ def flow_by_strike(contracts, spot):
 
 def flow_summary(contracts):
     """Today's tape against the standing book, in put/call terms."""
-    cv = sum(c["vol"] for c in contracts if c["cp"] == "C")
-    pv = sum(c["vol"] for c in contracts if c["cp"] == "P")
-    co = sum(c["oi"] for c in contracts if c["cp"] == "C")
-    po = sum(c["oi"] for c in contracts if c["cp"] == "P")
+    # Contract-equivalents, so a merged book does not add a SPX contract to a
+    # SPY one: w is 1/m, which is the converted contract's share of the
+    # primary chain's notional.
+    cv = sum(c["vol"] * c.get("w", 1.0) for c in contracts if c["cp"] == "C")
+    pv = sum(c["vol"] * c.get("w", 1.0) for c in contracts if c["cp"] == "P")
+    co = sum(c["oi"] * c.get("w", 1.0) for c in contracts if c["cp"] == "C")
+    po = sum(c["oi"] * c.get("w", 1.0) for c in contracts if c["cp"] == "P")
     return {
         "call_vol": cv, "put_vol": pv, "call_oi": co, "put_oi": po,
         "pc_vol": round(pv / cv, 2) if cv else None,
@@ -691,10 +760,17 @@ def max_pain_by_expiry(contracts, today):
 
     out = {}
     for expiry in sorted(by_expiry):
+        # Weighted by the contract's own share count, not a flat 100: with
+        # two chains merged, a converted SPY strike sits beside an SPX one
+        # while controlling a tenth of the notional, and counting both at 100
+        # shares put SPY's whole book in tenfold and dragged max pain toward
+        # its strikes.
         call_oi, put_oi = {}, {}
         for c in by_expiry[expiry]:
             side = call_oi if c["cp"] == "C" else put_oi
-            side[c["strike"]] = side.get(c["strike"], 0) + c["oi"]
+            side[c["strike"]] = (side.get(c["strike"], 0.0)
+                                 + c["oi"] * c.get("shares",
+                                                   SHARES_PER_CONTRACT))
         strikes = sorted(set(call_oi) | set(put_oi))
         if not strikes:
             continue
@@ -715,7 +791,7 @@ def max_pain_by_expiry(contracts, today):
             put_loss[i] = koi_sum - k * oi_sum
 
         # min over (loss, strike) keeps the original tie-break: lowest strike.
-        loss, strike = min(((call_loss[i] + put_loss[i]) * SHARES_PER_CONTRACT, k)
+        loss, strike = min(((call_loss[i] + put_loss[i]), k)
                            for i, k in enumerate(strikes))
         out[expiry] = {"strike": strike, "loss": loss,
                        "monthly": is_monthly_opex(expiry)}
@@ -1361,6 +1437,12 @@ def _session_close_once(sym, session_date):
     return last
 
 
+# Strike keys moved from chain terms to converted futures terms when the
+# chains merged, so a file written before that cannot be differenced against
+# one written after - every strike would look new and every level would report
+# no change. The marker makes that mismatch explicit: an older file is skipped
+# and the OI change column is blank for one session rather than wrong.
+OI_FORMAT = "fut1"
 OI_DIR_NAME = "oi"           # per-session open-interest history, beside the
                              # published page so it is versioned and shared
                              # between machines rather than living on one
@@ -1513,9 +1595,13 @@ def oi_fingerprint(contracts):
     for c in contracts:
         if c["oi"] <= 0:
             continue
-        d = per.setdefault(round(c["strike"], 2), [0, 0])
-        d[0 if c["cp"] == "C" else 1] += c["oi"]
-    return {str(k): v for k, v in per.items() if sum(v) >= OI_MIN}
+        d = per.setdefault(round(c["strike"], 2), [0.0, 0.0])
+        # Contract-equivalents again: the change reported against yesterday
+        # has to be in the same unit on both days, and a merged book's counts
+        # are only comparable once each chain is weighted to the primary.
+        d[0 if c["cp"] == "C" else 1] += c["oi"] * c.get("w", 1.0)
+    return {str(k): [round(v[0]), round(v[1])]
+            for k, v in per.items() if sum(v) >= OI_MIN}
 
 
 def oi_history_path(book_date):
@@ -1537,11 +1623,18 @@ def prior_oi(book_date):
     older = sorted(f for f in folder.glob("*.json") if f.stem < stamp)
     if not older:
         return None
-    try:
-        return json.loads(older[-1].read_text(encoding="utf-8")), older[-1].stem
-    except (OSError, ValueError):
-        logging.info("open-interest history unreadable: %s", older[-1])
-        return None
+    for path in reversed(older):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            logging.info("open-interest history unreadable: %s", path)
+            continue
+        if data.get("_fmt") != OI_FORMAT:
+            logging.info("open-interest history %s predates the %s strike "
+                         "format, skipped", path.stem, OI_FORMAT)
+            continue
+        return data, path.stem
+    return None
 
 
 def write_oi(book_date, per_symbol):
@@ -1551,7 +1644,8 @@ def write_oi(book_date, per_symbol):
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(per_symbol, separators=(",", ":")),
+        path.write_text(json.dumps({"_fmt": OI_FORMAT, **per_symbol},
+                                   separators=(",", ":")),
                         encoding="utf-8")
         files = sorted(path.parent.glob("*.json"))
         for old in files[:-OI_KEEP_DAYS]:
@@ -2023,8 +2117,8 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
     # below: those two have to name one shared session, and the note above the
     # fetch loop explains what advancing the futures leg alone costs.
     book_date = futures_trade_date(now)
-    spot, options = fetch_chain(inst["chain"])   # SPX~6400 or QQQ~570
-    contracts = load_contracts(options, book_date)
+    spot_chain, options = fetch_chain(inst["chain"])   # SPX~7800 or QQQ~770
+    contracts = []      # loaded below, once every chain's own ratio is known
 
     # Resolve the front contract BEFORE the ratio, because the ratio has to be
     # built from that same contract. inst["fut"] is a continuous front-month
@@ -2156,15 +2250,76 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
     # The session both legs are pinned to, so the panel can show it.
     ratio_date = prior["date"] if prior else None
 
-    def disp(x):                                     # chain scale -> futures
-        return round(x * m, 2)
+    # Every chain for this instrument, each with its own ratio. The primary is
+    # already fetched; extras are priced off the SAME futures close, so they
+    # differ only in their own prior chain close. An extra that cannot be
+    # priced, or that lands spot somewhere the primary does not, is dropped
+    # with a warning rather than quietly moving every level.
+    chains = [{"chain": inst["chain"], "m": m, "spot": spot_chain,
+               "options": options, "primary": True}]
+    for ex in inst.get("extra") or []:
+        if fut_close is None:
+            logging.info("%s: index terms, skipping extra chain %s",
+                         future, ex["chain"])
+            continue
+        try:
+            ex_prior = prior_cash_session(ex["hist"], today)
+            ex_close = ex_prior["c"] if ex_prior else None
+            ex_spot, ex_options = fetch_chain(ex["chain"])
+        except Exception:
+            logging.warning("%s: extra chain %s unavailable, levels built "
+                            "without it", future, ex["chain"])
+            continue
+        if not ex_close or not ex_spot:
+            logging.warning("%s: no prior close for extra chain %s",
+                            future, ex["chain"])
+            continue
+        m_ex = fut_close / ex_close
+        gap = abs(ex_spot * m_ex / (spot_chain * m) - 1.0)
+        if gap > EXTRA_CHAIN_TOL:
+            logging.warning("%s: extra chain %s disagrees on spot by %.2f%% "
+                            "(%.2f against %.2f) - dropped", future,
+                            ex["chain"], 100 * gap, ex_spot * m_ex,
+                            spot_chain * m)
+            continue
+        chains.append({"chain": ex["chain"], "m": m_ex, "spot": ex_spot,
+                       "options": ex_options, "primary": False})
+
+    # One strike grid for every chain, fine enough to keep each ladder's own
+    # structure - see LEVEL_BIN_PCT.
+    # Only when there is something to merge. A single chain's strikes are
+    # already one grid, and binning them would move every level a fraction of
+    # a point for no gain: GC's ladder shifted 0.2-0.4 points and two of its
+    # twelve rows changed identity before this guard.
+    bin_pts = (max(0.01, round(spot_chain * m * LEVEL_BIN_PCT / 100.0, 2))
+               if len(chains) > 1 else 0.0)
+    for cs in chains:
+        got = load_contracts(cs["options"], book_date, cs["m"],
+                             cs["chain"].lstrip("_"), bin_pts)
+        cs["n"] = len(got)
+        cs["gex"] = sum(abs(contract_gex(c["gamma"], c["oi"],
+                                         spot_chain * m)) for c in got)
+        if got and not any(c["gamma"] for c in got):
+            logging.warning("%s: chain %s has open interest but no gamma",
+                            future, cs["chain"])
+        contracts.extend(got)
+        del cs["options"]        # not payload; only the summary travels
+
+    # From here everything is in FUTURES terms: strikes, gamma, spot. disp is
+    # the identity it has to be, kept so the call sites still read the same.
+    spot = spot_chain * m
+
+    def disp(x):
+        return round(x, 2)
 
     asof = f", {ratio_date} closes" if ratio_date else ""
-    scale_note = (f"{inst['chain'].lstrip('_')} x {m:.3f} -> {future} "
-                  f"({ratio_src}{asof})"
+    # Every contributing chain and its own ratio, so a level's provenance is
+    # on the page rather than in the source.
+    merged = " + ".join(f"{c['chain'].lstrip('_')} x {c['m']:.3f}"
+                        for c in chains)
+    scale_note = (f"{merged} -> {future} ({ratio_src}{asof})"
                   if fut_close is not None else
-                  f"{inst['chain'].lstrip('_')} x {m:.3f} -> {future} "
-                  f"INDEX TERMS ({ratio_src}{asof})")
+                  f"{merged} -> {future} INDEX TERMS ({ratio_src}{asof})")
 
     # One quote call covers both the live futures print and the contract
     # ranking further down. inst["fut"] rides along because it is the series m
@@ -2178,7 +2333,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
     live = (stats.get(ratio_sym) or {}).get("price")
     live = float(live) if isinstance(live, (int, float)) and live > 0 else None
     shown_spot = round(live, 2) if live else disp(spot)
-    ref_spot = live / m if live else spot          # back to chain terms
+    ref_spot = live if live else spot              # already futures terms
     spot_src = f"live {ratio_sym}" if live else f"{inst['chain'].lstrip('_')} x {m:.3f}"
 
     out = {"symbol": future, "future": future, "chain": inst["chain"],
@@ -2187,7 +2342,14 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
            "scale_note": scale_note, "ratio_date": ratio_date,
            "ok": True, "error": None,
            "spot": shown_spot, "spot_src": spot_src,
-           "chain_spot": disp(spot), "spot_pre": round(ref_spot, 2),
+           "chain_spot": disp(spot),
+           # The per-chain column on the page stays in the PRIMARY chain's own
+           # strikes, which is the ladder a reader has open beside this.
+           "spot_pre": round(ref_spot / m, 2),
+           "chains": [{"chain": c["chain"], "ratio": round(c["m"], 4),
+                       "contracts": c.get("n", 0),
+                       "gex_str": fmt_dollars(c.get("gex", 0.0)),
+                       "primary": c["primary"]} for c in chains],
            "regimes": {}}
 
     # GEX + walls, split into two expiration buckets (internal math in chain
@@ -2232,6 +2394,11 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
         # leave this symbol out of the day's OI history entirely.
         _OI_PENDING[future] = oi_fingerprint(contracts)
         _OI_PENDING["_book"] = book_date
+    # Prior high/low/close come off the chain's own history, so they need the
+    # same conversion the strikes got before a confluence test means anything.
+    prior_lv = ({k: (prior[k] * m if k in ("h", "l", "c") else prior[k])
+                 for k in prior} if prior else None)
+
     if contracts and has_gamma:
         fut_exp = active["expiry"]
         near_cutoff = min(fut_exp, book_date + timedelta(days=NEAR_MAX_DTE))
@@ -2256,8 +2423,9 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
             "full": f"Full book (thru {MAX_DTE}d)",
         }
         for key, sub in buckets.items():
-            out["regimes"][key] = build_regime(sub, spot, today, prior, disp,
-                                               ref_spot, book_date=book_date)
+            out["regimes"][key] = build_regime(sub, spot, today, prior_lv,
+                                               disp, ref_spot,
+                                               book_date=book_date)
             out["regimes"][key]["label"] = labels[key]
         # Once the week's last expiry is within SHORT_DATED_DAYS, all of the
         # week book's gamma is short-dated by definition and the share reads
@@ -2269,11 +2437,17 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
         out["books"] = list(buckets)
         # wall_sep is quoted in chain points; the ladder wants a fraction.
         sep = inst.get("wall_sep")
+        per_by_book = {k: gex_by_strike(v, spot, book_date)
+                       for k, v in buckets.items()}
         out["ladder"] = build_ladder(
-            {k: gex_by_strike(v, spot, book_date) for k, v in buckets.items()},
-            list(buckets), spot, ref_spot, prior, disp,
+            per_by_book,
+            list(buckets), spot, ref_spot, prior_lv, disp,
             n=inst.get("wall_count"),
-            min_sep=(sep / spot) if (sep and spot) else None)
+            # wall_sep is quoted in PRIMARY chain points and min_sep wants a
+            # fraction of spot, and that fraction is the same number before and
+            # after conversion - so it divides by the chain spot, not the
+            # futures one.
+            min_sep=(sep / spot_chain) if (sep and spot_chain) else None)
 
         # Volume profile, and which GEX levels coincide with it. The page
         # already told you to "lean on volume profile / prior levels" when
@@ -2290,6 +2464,16 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
         # column rather than a fourth "book" because it is not one: a book is
         # a subset of contracts by expiry, this is the same contracts weighted
         # by what traded today instead of by what is open.
+        # Provenance off the widest book, and the primary chain's own strike
+        # for the column a reader has beside this on a chart.
+        widest = per_by_book[list(buckets)[-1]]
+        for r in out["ladder"]:
+            r["chain_k"] = round(r["strike_pre"] / m, 2)
+            src = sorted((widest.get(r["strike_pre"]) or {}).get("src") or ())
+            if src:
+                r["src"] = "+".join(src)
+                r["both"] = len(src) > 1
+
         out["flow"] = flow_summary(contracts)
         flow_per = flow_by_strike(contracts, spot)
         for r in out["ladder"]:
@@ -2346,7 +2530,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
     if contracts:
         out["max_pain"] = [
             {"expiry": expiry.isoformat(), "strike": disp(item["strike"]),
-             "strike_pre": round(item["strike"], 2),
+             "strike_pre": round(item["strike"] / m, 2),
              "dist": round(100 * (item["strike"] - ref_spot) / ref_spot, 2),
              "loss_str": fmt_dollars(item["loss"]),
              "monthly": item["monthly"]}
@@ -2721,6 +2905,7 @@ button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
   color:var(--muted)}
 .vplegend b{color:var(--brass)}
 .chip.vp{color:var(--brass);border-color:rgba(217,164,65,.45)}
+.chip.src{color:var(--muted);border-color:var(--line);letter-spacing:.04em}
 table{width:100%;border-collapse:collapse;font-size:12.5px}
 th{text-align:left;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;
   color:var(--muted);font-weight:500;padding:4px 8px;border-bottom:1px solid var(--line)}
@@ -2972,6 +3157,7 @@ function ladderRow(w,books){
   // Sitting on the volume profile: a wall at the POC has traded size behind
   // it as well as gamma, a wall in a volume hole has only the gamma.
   if(w.vp) chips+=` <span class="chip vp">${w.vp}</span>`;
+  if(w.both) chips+=` <span class="chip src">${w.src}</span>`;
   // Call-dominated in one book, put-dominated in another. The cell colours
   // already say it, but only if you are looking at that row - the chip and
   // the row tint make it findable while scanning.
@@ -3007,7 +3193,7 @@ function ladderRow(w,books){
          +` <span class="sep">/</span> <span class="side-p">${ps}</span></td>`;
      })()
     +`<td class="num">${w.dist>0?"+":""}${w.dist}%</td>`
-    +`<td class="num pre">${w.strike_pre!==undefined&&w.strike_pre!==null?(+w.strike_pre).toFixed(2):"—"}</td>`
+    +`<td class="num pre">${w.chain_k!==undefined&&w.chain_k!==null?(+w.chain_k).toFixed(2):"—"}</td>`
     +`<td>${chips}</td></tr>`;
 }
 
