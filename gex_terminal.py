@@ -165,11 +165,11 @@ YAHOO_QUOTE_URL = ("https://query1.finance.yahoo.com/v7/finance/quote"
 #   index = Yahoo cash index (margin notional + tracking sanity)
 #   fut   = Yahoo futures symbol for the prior settle
 #   cycle = which futures expiration calendar the near-term bucket follows
-# GC and CL have no free cash-index feed (XAUUSD=X is gone), so their `index`
-# is the futures symbol itself. That makes margin notional the futures notional
-# - correct, there being no cash index to convert from - but it also makes the
+# GC has no free cash-index feed (XAUUSD=X is gone), so its `index` is the
+# futures symbol itself. That makes margin notional the futures notional -
+# correct, there being no cash index to convert from - but it also makes the
 # carry sanity gate in compute_symbol vacuous (carry is 0 by construction), so
-# a back-adjusted continuous series would not be caught for those two.
+# a back-adjusted continuous series would not be caught for it.
 INSTRUMENTS = [
     # wall_sep is the finest spacing worth telling apart, in CHAIN points -
     # the listed strike increment near the money. Two walls that close are
@@ -369,33 +369,11 @@ def gc_expiry(year, month):
     return shift_business_days(last_business_day(year, month), -2)
 
 
-def cl_expiry(year, month):
-    """CL: 3 business days before the 25th of the month preceding delivery.
-
-    Nothing calls this today - CL was dropped from INSTRUMENTS because USO is
-    a poor proxy for it: USO's options open interest runs about 6.3x its
-    shares outstanding, so its walls carry far less information than the
-    equity or gold books. The rule is kept because it is non-obvious, was
-    verified against a published CME calendar, and would be needed again the
-    moment a usable CL chain appears.
-
-
-    When the 25th is not a business day the rule counts back from the business
-    day preceding it instead, which is what the step-back loop below gives.
-    """
-    year, month = (year, month - 1) if month > 1 else (year - 1, 12)
-    anchor = date(year, month, 25)
-    while not is_trading_day(anchor):
-        anchor -= timedelta(days=1)
-    return shift_business_days(anchor, -3)
-
-
 # Delivery months and the termination rule for each cycle. GC lists only the
 # even months, which is where essentially all of its open interest sits.
 EXPIRY_CYCLES = {
     "quarterly": (FUTURES_EXPIRY_MONTHS, quarterly_expiry),
     "gc":        ((2, 4, 6, 8, 10, 12), gc_expiry),
-    "cl":        (tuple(range(1, 13)), cl_expiry),
 }
 
 
@@ -407,8 +385,7 @@ def next_futures_expiry(d, cycle="quarterly"):
     with rather than one whose open interest is being closed out.
     """
     months, rule = EXPIRY_CYCLES[cycle]
-    # CL terminates in the month *before* delivery, so start a year back to
-    # catch a December termination belonging to a January delivery.
+    # A year either side, so the roll across New Year is always covered.
     candidates = [rule(year, m)
                   for year in (d.year - 1, d.year, d.year + 1)
                   for m in months]
@@ -1527,8 +1504,8 @@ def session_close(sym, session_date):
 
     Yahoo's DAILY bar is a calendar day, 00:00 to 23:55 ET, not a trading
     session, so its close is the evening Globex print belonging to the NEXT
-    session. On 2026-09-21 that made CL's daily close 95.78 against a real
-    16:59 close of 91.97, 4.1% out, and ES 7,833.50 against 7,829.25.
+    session. On 2026-09-21 that put ES's daily close at 7,833.50 against a
+    real 16:59 close of 7,829.25.
 
     The intraday series is broken by the 17:00-18:00 maintenance halt, so the
     last bar on the session's own date before 17:00 is the close. Cached per
@@ -1641,11 +1618,11 @@ def newest_cash_close(sym, today):
 
         INDEX   the bar stamped 16:00 IS the close             max err 0.0005%
         ETF     that bar is the first AFTER-HOURS bar and misses the closing
-                auction - 0.107% mean and 0.34% worst on USO - so the regular
+                auction - 0.107% mean and 0.34% worst - so the regular
                 session's last bar is the close          0.007-0.024% mean
 
     Either residual is two orders of magnitude under what it removes: a whole
-    session's move, 0.72% on NQ and 2.3% on CL on 2026-09-23.
+    session's move, 0.72% on NQ on 2026-09-23.
     """
     key = (sym, today.isoformat())
     if key in _CASH_CLOSE:
@@ -2098,8 +2075,8 @@ def liq_factor(multiplier):
     Setting liq_factor = 100 / multiplier collapses that to a flat 12.5% of
     margin at the 99% level for any contract size, which is the whole point of
     the number - it is NOT a tick value. It lands on 5.0 for NQ, matching its
-    $5.00 tick purely by coincidence, and on 2.0 for ES, 1.0 for GC and 0.1 for
-    CL against ticks of $12.50, $10.00 and $10.00. Do not "correct" it.
+    $5.00 tick purely by coincidence, and on 2.0 for ES and 1.0 for GC against
+    ticks of $12.50 and $10.00. Do not "correct" it.
     """
     return 100.0 / multiplier
 
@@ -2264,8 +2241,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
     # series: it rolls, and across a roll its prior close and its live print
     # are different deliveries, so m ends up carrying the basis of a contract
     # nobody is looking at. Measured on the 2026-09-21 roll, that put the
-    # expiring September basis into ES and NQ and October's into CL, wrong by
-    # -0.72%, -1.01% and +4.39% respectively.
+    # expiring September basis into ES and NQ, wrong by -0.72% and -1.01%.
     stats = {}
     try:
         stats = contract_stats([c[3] for c in contract_candidates(inst, today)]
@@ -2302,23 +2278,22 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
         prior, chain_close = None, None
 
     # prior cash-index close: margin notional + the tracking-ratio sanity anchor
-    # GC and CL have no free cash index, so their "index" IS the futures
-    # symbol. Point those at the same contract the ratio uses, or k_track is
-    # built from the continuous series while fc is not, and the carry gate
-    # measures the roll gap instead of the basis - which is how it rejected
-    # CL's correct close at -4.21% and fell back to index terms. Where a real
-    # cash index exists this is unchanged.
+    # GC has no free cash index, so its "index" IS the futures symbol. Point
+    # it at the same contract the ratio uses, or k_track is built from the
+    # continuous series while fc is not, and the carry gate measures the roll
+    # gap instead of the basis - rejecting a correct close and falling back
+    # to index terms. Where a real cash index exists this is unchanged.
     idx_sym = ratio_sym if inst["index"] == inst["fut"] else inst["index"]
     idx_close = None
     try:
         idx_prior = (prior_session(fetch_rows(idx_sym, max_rows=5), today)
                      if idx_sym == ratio_sym
                      else prior_cash_session(idx_sym, today))
-        # When the "index" is really the futures contract - GC and CL, which
-        # have no free cash index - it has to be read on the same 16:59 basis
-        # as the futures leg below. Leaving it on the 23:55 daily bar made
-        # carry the gap between two different clocks: -4.0% for CL, which the
-        # gate rejects outright. A real cash index stops printing at its own
+        # When the "index" is really the futures contract - GC, which has no
+        # free cash index - it has to be read on the same 16:59 basis as the
+        # futures leg below. Leaving it on the 23:55 daily bar makes carry the
+        # gap between two different clocks, which can be large enough for the
+        # gate to reject outright. A real cash index stops printing at its own
         # close, so it stays on the daily bar.
         idx_close = (settled_close(idx_sym, idx_prior) if idx_sym == ratio_sym
                      else (idx_prior["c"] if idx_prior else None))
@@ -2351,8 +2326,8 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
             fut_settled = settled_futures(fut_rows, now)
             # The ratio's futures leg is the 16:59 close, not the daily bar:
             # the bar spans the calendar day and closes on the evening reopen,
-            # which put 4.14% of overnight drift into every converted CL level
-            # on 2026-09-21 (m 0.6465 against 0.6207). The chain leg is a cash
+            # which puts the overnight drift into every converted level. The
+            # chain leg is a cash
             # close, so the two are within an hour of each other rather than
             # eight.
             # Pin the futures leg to the chain leg's session BY DATE, not to
@@ -2363,8 +2338,8 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
             # futures series is a day ahead and the ratio books the whole
             # session's move as basis. Measured 2026-09-23 00:14 ET, when
             # every cash series still ended 09-21 and every futures series
-            # had 09-22: NQ m 41.5135 -> 41.8115 (+0.72%) and CL 0.6207 ->
-            # 0.6064 (-2.3%), both well inside the carry gate below.
+            # had 09-22: NQ m 41.5135 -> 41.8115 (+0.72%), well inside the
+            # carry gate below.
             fut_row = None
             if prior:
                 fut_row = next((r for r in reversed(fut_completed)
@@ -2502,9 +2477,8 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
     #          hedging with), but never more than NEAR_MAX_DTE out. Quarterly
     #          spacing is ~91 days against a 95 day book, so without the cap
     #          the bucket would hold almost the whole chain for most of the
-    #          quarter and the two panels would report identical numbers. CL
-    #          is monthly, so for it the cycle date binds and the cap rarely
-    #          does; GC alternates between the two.
+    #          quarter and the two panels would report identical numbers. GC
+    #          alternates between the cycle date and the cap.
     #   full = everything through MAX_DTE, as before
     # Which contract the near-term bucket belongs to, chosen on traded volume
     # rather than nearness to expiry - see active_contract.
@@ -2725,8 +2699,8 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
     # settled_futures above fixed WHICH session the anchor comes from; this
     # fixes WHICH PRICE inside it. prior_fut carries Yahoo's daily bar, which
     # spans 00:00-23:55 ET and so closes on the evening reopen rather than at
-    # the 17:00 halt: on 2026-09-21 that read CL at 95.78 against a 16:59 close
-    # of 91.97, 4.1% out. Every figure the terminal prints still uses prior_fut
+    # the 17:00 halt: on 2026-09-21 that read ES at 7,833.50 against a 16:59
+    # close of 7,829.25. Every figure the terminal prints still uses prior_fut
     # untouched, and the chip falls back to it when the intraday series is
     # unavailable, so it degrades rather than disappearing.
     pine_anchor, pine_src = None, None
