@@ -27,6 +27,7 @@ import http.client
 import http.cookiejar
 import urllib.error
 import urllib.request
+from collections import defaultdict
 from pathlib import Path
 from datetime import datetime, date, timedelta, timezone
 
@@ -69,6 +70,12 @@ LEVEL_BIN_PCT = 0.02
 # stale print, tight enough to catch the real failure: a prior close read off
 # the wrong session, which would slide that chain's whole ladder.
 EXTRA_CHAIN_TOL = 0.01
+# 0DTE: contracts expiring in the session being traded. Measured 2026-10-06,
+# they were 89-94% of the day's gamma-weighted volume on every chain against
+# 11-30% of the standing open-interest gamma - the flow is nearly all 0DTE
+# while the walls barely see it - so they get a book of their own.
+ZERO_RANGE_PCT = 3.0          # strikes kept for the 0DTE table, +/- spot
+ZERO_ROWS = 8                 # rows the 0DTE table shows
 WALL_COUNT = 10              # default walls per side; instruments override
                              # it with wall_count. GC runs a shorter list:
                              # gold call open interest genuinely sits far out
@@ -619,6 +626,10 @@ def load_contracts(options, today, m=1.0, src=None, bin_pts=0.0):
         if bin_pts:
             k = round(k / bin_pts) * bin_pts
         out.append({"exp": exp, "cp": cp, "strike": round(k, 2),
+                    # The chain's own strike. Converted strikes move with the
+                    # daily ratio, so anything compared across days or runs -
+                    # open-interest history - has to key on this instead.
+                    "k0": strike,
                     "oi": oi, "iv": iv, "gamma": gamma / (m * m), "vol": vol,
                     "shares": SHARES_PER_CONTRACT / m, "w": 1.0 / m,
                     "src": src})
@@ -1042,6 +1053,124 @@ def build_ladder(per_by_book, books, spot, ref_spot, prior, disp,
     return rows
 
 
+def zero_dte(contracts, spot, ref_spot, book_date):
+    """The session's own expiry as a book: GEX from open interest, today's
+    gamma-weighted flow, and turnover, per strike near spot and in total.
+
+    Flow sign follows GEX's dealer convention (calls +, puts -), like the
+    Flow column, and like it is a concentration map, not an exposure: volume
+    says a contract traded, not who initiated it or whether it opened or
+    closed. Counts are primary-chain contract-equivalents (w), so a merged
+    book's SPY volume is not added to SPX's at face value.
+
+    Per strike: [call GEX, put GEX, call flow, put flow, call volume,
+    put volume, open interest]. The strike map travels in the payload because
+    the next run needs it: Cboe's volume is cumulative for the day, so the
+    difference between consecutive snapshots is what traded in between.
+    """
+    out = {"date": book_date.isoformat()}
+    z = [c for c in contracts if c["exp"] == book_date]
+    if not z:
+        out["none"] = True
+        return out
+    gex_all = sum(abs(contract_gex(c["gamma"], c["oi"], spot))
+                  for c in contracts) or 1.0
+    flow_all = sum(abs(contract_gex(c["gamma"], c["vol"], spot))
+                   for c in contracts) or 1.0
+    lo = ref_spot * (1 - ZERO_RANGE_PCT / 100.0)
+    hi = ref_spot * (1 + ZERO_RANGE_PCT / 100.0)
+    per = {}
+    net = gex_abs = flow_abs = vol = oi = 0.0
+    for c in z:
+        call = c["cp"] == "C"
+        w = c.get("w", 1.0)
+        g_oi = contract_gex(c["gamma"], c["oi"], spot)
+        g_v = contract_gex(c["gamma"], c["vol"], spot)
+        net += g_oi if call else -g_oi
+        gex_abs += abs(g_oi)
+        flow_abs += abs(g_v)
+        vol += c["vol"] * w
+        oi += c["oi"] * w
+        if lo <= c["strike"] <= hi:
+            d = per.setdefault(f"{c['strike']:.2f}", [0.0] * 7)
+            i = 0 if call else 1
+            d[i] += g_oi
+            d[2 + i] += g_v
+            d[4 + i] += c["vol"] * w
+            d[6] += c["oi"] * w
+    out.update({
+        "net_gex": net, "net_str": fmt_dollars(net),
+        "gex_share": round(100.0 * gex_abs / gex_all, 1),
+        "flow_share": round(100.0 * flow_abs / flow_all, 1),
+        "vol": round(vol), "oi": round(oi),
+        "turnover": round(vol / oi, 2) if oi else None,
+        "strikes": {k: [round(v[0]), round(v[1]), round(v[2]), round(v[3]),
+                        round(v[4], 1), round(v[5], 1), round(v[6], 1)]
+                    for k, v in per.items()},
+    })
+    return out
+
+
+def zero_recent(syms, previous, previous_generated):
+    """Add the last window's 0DTE flow and pick the rows the table shows.
+
+    The window is this snapshot against the previous one, same session only.
+    Recent flow is CURRENT gamma times the change in volume - differencing
+    the gamma-weighted totals would book every gamma move between runs as
+    trading. A drop in cumulative volume means the feed reset, and counts as
+    nothing rather than as selling.
+    """
+    prev = {p.get("symbol"): p for p in (previous or []) if p}
+    for sym in syms:
+        z = (sym or {}).get("zero")
+        if not z or z.get("none") or "strikes" not in z:
+            continue
+        old = (prev.get(sym["symbol"]) or {}).get("zero") or {}
+        cur = z["strikes"]
+        same = old.get("date") == z["date"] and isinstance(old.get("strikes"), dict)
+        recent = {}
+        if same:
+            for k, d in cur.items():
+                o = old["strikes"].get(k) or [0] * 7
+                dvc = max(0.0, d[4] - o[4])
+                dvp = max(0.0, d[5] - o[5])
+                rc = d[2] * dvc / d[4] if d[4] else 0.0
+                rp = d[3] * dvp / d[5] if d[5] else 0.0
+                recent[k] = (rc - rp, dvc + dvp)
+            z["recent_since"] = previous_generated
+            rnet = sum(v[0] for v in recent.values())
+            z["recent_net"] = rnet
+            z["recent_str"] = fmt_dollars(rnet)
+            z["recent_vol"] = round(sum(v[1] for v in recent.values()))
+
+        spot = sym.get("spot") or 0.0
+        flow_net = {k: d[2] - d[3] for k, d in cur.items()}
+        gex_net = {k: d[0] - d[1] for k, d in cur.items()}
+        lead = recent and any(v[0] for v in recent.values())
+        by_flow = sorted(cur, key=lambda k: abs(recent[k][0]) if lead
+                         else abs(flow_net[k]), reverse=True)
+        pick = by_flow[:ZERO_ROWS - 3]
+        for k in sorted(cur, key=lambda k: abs(gex_net[k]), reverse=True):
+            if len(pick) >= ZERO_ROWS:
+                break
+            if k not in pick:
+                pick.append(k)
+        rows = []
+        for k in sorted(pick, key=float, reverse=True):
+            d = cur[k]
+            vol_k = d[4] + d[5]
+            rows.append({
+                "strike": float(k),
+                "dist": round(100 * (float(k) - spot) / spot, 2) if spot else None,
+                "gex": gex_net[k], "gex_str": fmt_dollars(gex_net[k]),
+                "flow": flow_net[k], "flow_str": fmt_dollars(flow_net[k]),
+                "recent": recent[k][0] if k in recent else None,
+                "recent_str": fmt_dollars(recent[k][0]) if k in recent else None,
+                "turnover": round(vol_k / d[6], 1) if d[6] else None,
+            })
+        z["rows"] = rows
+
+
 def _plan_basis(calib, cal, setup):
     """What a plan's verdict rests on, carried so the page can show it."""
     r = cal.get(setup) or {}
@@ -1449,12 +1578,13 @@ def _session_close_once(sym, session_date):
     return last
 
 
-# Strike keys moved from chain terms to converted futures terms when the
-# chains merged, so a file written before that cannot be differenced against
-# one written after - every strike would look new and every level would report
-# no change. The marker makes that mismatch explicit: an older file is skipped
-# and the OI change column is blank for one session rather than wrong.
-OI_FORMAT = "fut1"
+# Keyed by CHAIN and NATIVE strike ("SPX:7805"). The first two-chain version
+# keyed on converted futures strikes, but those move with each day's ratio -
+# 7894.0 one day is 7895.3 the next - so no strike ever matched across days
+# and the OI change column stayed blank from 2026-10-06. Native strikes never
+# move. The marker skips files in any older layout rather than differencing
+# them into nonsense.
+OI_FORMAT = "native1"
 OI_DIR_NAME = "oi"           # per-session open-interest history, beside the
                              # published page so it is versioned and shared
                              # between machines rather than living on one
@@ -1607,13 +1737,10 @@ def oi_fingerprint(contracts):
     for c in contracts:
         if c["oi"] <= 0:
             continue
-        d = per.setdefault(round(c["strike"], 2), [0.0, 0.0])
-        # Contract-equivalents again: the change reported against yesterday
-        # has to be in the same unit on both days, and a merged book's counts
-        # are only comparable once each chain is weighted to the primary.
-        d[0 if c["cp"] == "C" else 1] += c["oi"] * c.get("w", 1.0)
-    return {str(k): [round(v[0]), round(v[1])]
-            for k, v in per.items() if sum(v) >= OI_MIN}
+        key = f"{c.get('src') or 'chain'}:{c.get('k0', c['strike']):g}"
+        d = per.setdefault(key, [0, 0])
+        d[0 if c["cp"] == "C" else 1] += c["oi"]
+    return {k: v for k, v in per.items() if sum(v) >= OI_MIN}
 
 
 def oi_history_path(book_date):
@@ -2303,7 +2430,11 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
     # already one grid, and binning them would move every level a fraction of
     # a point for no gain: GC's ladder shifted 0.2-0.4 points and two of its
     # twelve rows changed identity before this guard.
-    bin_pts = (max(0.01, round(spot_chain * m * LEVEL_BIN_PCT / 100.0, 2))
+    # Sized off the PRIOR close, not live spot: the bin has to be the same on
+    # every run of a session or a strike's key drifts as price moves and the
+    # run-to-run 0DTE flow window compares different keys.
+    bin_base = (chain_close or spot_chain) * m
+    bin_pts = (max(0.01, round(bin_base * LEVEL_BIN_PCT / 100.0, 2))
                if len(chains) > 1 else 0.0)
     for cs in chains:
         got = load_contracts(cs["options"], book_date, cs["m"],
@@ -2486,6 +2617,14 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
                 r["src"] = "+".join(src)
                 r["both"] = len(src) > 1
 
+        out["zero"] = zero_dte(contracts, spot, ref_spot, book_date)
+        zs = out["zero"].get("strikes") or {}
+        for r in out["ladder"]:
+            d = zs.get(f"{r['strike_pre']:.2f}")
+            if d and (d[0] or d[1]):
+                r["z"] = d[0] - d[1]
+                r["z_str"] = fmt_dollars(r["z"])
+
         out["flow"] = flow_summary(contracts)
         flow_per = flow_by_strike(contracts, spot)
         for r in out["ladder"]:
@@ -2504,15 +2643,32 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
             before, before_date = hist
             prev = (before or {}).get(future) or {}
             out["oi_prev_date"] = before_date
+            # A ladder row is a bin that can hold several native strikes from
+            # several chains; its change is theirs summed, each chain weighted
+            # to primary-chain contract-equivalents so SPY's counts are not
+            # added to SPX's at face value.
+            members = defaultdict(set)
+            w_src = {}
+            for c in contracts:
+                src = c.get("src") or "chain"
+                members[round(c["strike"], 2)].add(f"{src}:{c.get('k0', c['strike']):g}")
+                w_src[src] = c.get("w", 1.0)
+            now_fp = _OI_PENDING[future]
             for r in out["ladder"]:
-                key = str(round(r["strike_pre"], 2))
-                was = prev.get(key)
-                now_oi = _OI_PENDING[future].get(key)
-                if not was or not now_oi:
+                dc = dp = base = 0.0
+                hit = False
+                for key in members.get(round(r["strike_pre"], 2), ()):
+                    was, now_oi = prev.get(key), now_fp.get(key)
+                    if not was or not now_oi:
+                        continue
+                    w = w_src.get(key.split(":", 1)[0], 1.0)
+                    dc += (now_oi[0] - was[0]) * w
+                    dp += (now_oi[1] - was[1]) * w
+                    base += (was[0] + was[1]) * w
+                    hit = True
+                if not hit:
                     continue
-                dc = now_oi[0] - was[0]
-                dp = now_oi[1] - was[1]
-                base = was[0] + was[1]
+                dc, dp = round(dc), round(dp)
                 r["d_call_oi"] = dc
                 r["d_put_oi"] = dp
                 r["d_oi_pct"] = (round(100.0 * (dc + dp) / base, 1)
@@ -2766,6 +2922,7 @@ def recompute(previous=None, previous_generated=None):
     # plans need nothing the hold lacks - the held ladder and flip, and the
     # LIVE futures price, which the feed gap does not touch - so they are
     # rebuilt rather than carried, and their distances stay current.
+    zero_recent(syms, previous, previous_generated)
     by_future = {inst["future"]: inst for inst in INSTRUMENTS}
     for sym in syms:
         inst = by_future.get((sym or {}).get("symbol"))
@@ -2970,9 +3127,17 @@ tr.spotrow td{color:var(--ink);font-weight:700;letter-spacing:.06em;
 .plans td,.plans th{padding:3px 12px 3px 0}
 .plans .setup{text-transform:uppercase;letter-spacing:.08em;font-size:10.5px}
 .plans .basis{font-size:10.5px;color:var(--muted)}
-.plans .caveat{margin-top:8px;font-size:10.5px;line-height:1.5;color:var(--muted);
-  max-width:72ch}
-.plans .caveat b{color:var(--brass);font-weight:500}
+.plans .caveat,.zero .caveat{margin-top:8px;font-size:10.5px;line-height:1.5;
+  color:var(--muted);max-width:72ch}
+.plans .caveat b,.zero .caveat b,.zero .k b{color:var(--brass);font-weight:500}
+/* 0DTE */
+.zero{margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
+.zero .k{font-size:10px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--muted);margin-bottom:5px}
+.zero .zsum{font-size:11.5px;color:var(--muted);margin-bottom:6px;line-height:1.5}
+.zero .zsum b{color:var(--ink);font-weight:500}
+.zero table{width:auto;min-width:480px}
+.zero td,.zero th{padding:3px 12px 3px 0}
 .plans tr.v-ok td{color:var(--ink)}
 .plans tr.v-noedge td,.plans tr.v-thin td,.plans tr.v-noroom td{opacity:.62}
 .chip.v-ok{color:var(--jade);border-color:rgba(75,191,138,.45)}
@@ -3199,6 +3364,52 @@ function tradePlans(s){
     + `<tbody>${ps.map(planRow).join("")}</tbody></table>` + note + `</div>`;
 }
 
+// Today's expiry on its own: the standing book, the day's flow, and what
+// traded since the last snapshot. Measured, it is ~90% of the session's flow
+// and a fraction of the open interest the walls are built from, so it gets
+// its own read instead of being averaged into the books.
+function zeroSection(s){
+  const z=s.zero;
+  if(!z) return "";
+  if(z.none) return `<div class="zero"><div class="k">0DTE</div>`
+    + `<div class="zsum">Nothing on this book expires in the session (${z.date}).</div></div>`;
+  const hhmm = t => t ? String(t).slice(11,16) : "";
+  const eq = `${chainName(s)}-equivalent contracts`;
+  const sum = `Net GEX <b class="${(z.net_gex||0)>=0?"pos":"neg"}">${z.net_str}</b>`
+    + ` \u00b7 ${z.gex_share}% of the book's gamma`
+    + ` \u00b7 <b>${(z.vol||0).toLocaleString()}</b> ${eq} traded`
+    + (z.turnover!=null?`, <b>${z.turnover}\u00d7</b> open interest`:"")
+    + ` \u00b7 ${z.flow_share}% of today's flow`
+    + (z.recent_since
+        ? ` \u00b7 since ${hhmm(z.recent_since)}: <b class="${(z.recent_net||0)>=0?"pos":"neg"}">${z.recent_str}</b>`
+          + ` on ${(z.recent_vol||0).toLocaleString()} contracts`
+        : ` \u00b7 first snapshot of the session, no recent window yet`);
+  const rows=(z.rows||[]).map(r=>`<tr>`
+    +`<td class="num">${(+r.strike).toFixed(0)}</td>`
+    +`<td class="num">${r.dist>0?"+":""}${r.dist}%</td>`
+    +`<td class="num ${r.gex>=0?"pos":"neg"}">${r.gex_str}</td>`
+    +`<td class="num ${r.flow>=0?"pos":"neg"}">${r.flow_str}</td>`
+    +`<td class="num ${(r.recent||0)>=0?"pos":"neg"}">${r.recent_str||"\u2014"}</td>`
+    +`<td class="num">${r.turnover!=null?r.turnover+"\u00d7":"\u2014"}</td>`
+    +`</tr>`).join("");
+  const since = z.recent_since?`Since ${hhmm(z.recent_since)}`:"Last window";
+  return `<div class="zero"><div class="k">0DTE<b>*</b>, expiring ${z.date}</div>`
+    + `<div class="zsum">${sum}</div>`
+    + (rows?`<table><thead><tr><th class="num">Strike</th><th class="num">Dist</th>`
+      + `<th class="num" title="Today's expiry, from yesterday's open interest">OI GEX</th>`
+      + `<th class="num" title="Gamma-weighted volume traded today, netted">Flow today</th>`
+      + `<th class="num" title="Gamma-weighted volume traded between the previous snapshot and this one">${since}</th>`
+      + `<th class="num" title="Today's volume against open interest at this strike">Turnover</th>`
+      + `</tr></thead><tbody>${rows}</tbody></table>`:"")
+    + `<div class="caveat"><b>*</b> Volume shows where contracts traded, not who `
+    + `bought or sold or whether positions opened or closed; signs follow the GEX `
+    + `convention, calls + and puts \u2212. Open interest is yesterday's close, so `
+    + `positions opened today are not in OI GEX \u2014 turnover well above 1\u00d7 `
+    + `means the standing 0DTE book has changed hands since. Cboe's feed runs about `
+    + `15 minutes behind, and the window column is the change in its cumulative `
+    + `volume between this snapshot and the previous one.</div></div>`;
+}
+
 // The combined ladder: one row per strike, one column per book, so "is this
 // wall this week's or the monthly book's" is read across rather than by
 // flipping between two tables that ordered their strikes differently.
@@ -3237,6 +3448,7 @@ function ladderRow(w,books){
     +`<td class="num">${(+w.strike).toFixed(0)}</td>`
     +cells
     +`<td class="num ${(w.flow||0)>=0?"pos":"neg"}">${w.flow_str||"\u2014"}</td>`
+    +`<td class="num ${(w.z||0)>=0?"pos":"neg"}">${w.z_str||"\u2014"}</td>`
     +(function(){
        const c=(w.books||{})[books[0]]||{};
        const cs=c.call_str||w.call_str, ps=c.put_str||w.put_str;
@@ -3256,12 +3468,14 @@ function combinedLadder(s,rows,books,spot,spotPre){
     `<tr class="spotrow"><td>SPOT</td><td class="num">${(+spot).toFixed(2)}</td>`
     +`${"<td class=\"num\">—</td>".repeat(span)}`
     +`<td class="num">\u2014</td>`   // Flow, blank on the spot row
+    +`<td class="num">\u2014</td>`   // 0DTE, likewise
     +`<td class="num">—</td><td class="num">0.00%</td>`
     +`<td class="num pre">${spotPre!==undefined&&spotPre!==null?(+spotPre).toFixed(2):"—"}</td>`
     +`<td></td></tr>`;
   const head = `<tr><th>Side</th><th class="num">Strike</th>`
     + books.map(b=>`<th class="num">${b}</th>`).join("")
     + `<th class="num" title="Gamma-weighted volume traded TODAY at this strike, netted. Open interest is T-1; this is the session. Not an exposure - volume says a contract traded, not whether it opened or closed.">Flow</th>`
+    + `<th class="num" title="Gamma from TODAY's expiry alone, from open interest - where same-day pinning pressure sits beside the longer-dated books. Open interest is yesterday's close, so positions opened today are not in it.">0DTE</th>`
     + `<th class="num" title="Calls and puts behind the ${books[0]} net. Hover any book's cell for its own split.">Call / Put &middot; ${books[0]}</th><th class="num">Dist</th>`
     + `<th class="num">${chainName(s)}</th><th>Tags</th></tr>`;
   return `<div class="walls"><table><thead>${head}</thead><tbody>`
@@ -3355,6 +3569,7 @@ function panel(s){
     ${contractRow(s.contract)}
     ${s.scale_note?`<div class="scale">levels: ${s.scale_note}</div>`:""}
     ${body}
+    ${zeroSection(s)}
     ${tradePlans(s)}
     ${maxPain}
     ${marg}
