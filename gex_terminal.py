@@ -101,22 +101,27 @@ LIQ_LEVELS = (("99%", Z_99), ("99.9%", Z_999))   # label -> normal quantile
 if any(a[1] >= b[1] for a, b in zip(LIQ_LEVELS, LIQ_LEVELS[1:])):
     raise ValueError("LIQ_LEVELS must ascend in quantile: a wider confidence "
                      "level has to produce a wider band, not a narrower one")
-# Trade plans. The stop comes from tools/score_levels.py replaying the
-# published levels against 5 minute bars, never from a round number: measured
-# 2026-09/10, price ran a median 34 points past a touched ES put wall, so any
-# stop a trader would have guessed at was far too tight. The target comes from
-# TODAY's structure - the flip, or the nearest level the other way - because
-# that is what varies session to session and decides whether a fade is worth
-# taking at all.
+# Trade plans. Stops and base rates come from tools/score_levels.py walking
+# each trade bar by bar against the published levels, never from a round
+# number: measured 2026-09/10, price ran a median 34 points past a touched ES
+# put wall, so any stop a trader would have guessed at was far too tight. The
+# target comes from TODAY's structure, because that is what varies session to
+# session and decides whether a setup is worth taking at all.
 PLAN_BOOK = "near"            # the book the calibration was measured on
-PLAN_MIN_RR = 1.2             # below this the history shows no edge worth it
-PLAN_THIN_N = 6               # fewer touches than this and the figure is noise
+PLAN_MIN_EXP = 0.10           # expectancy in R a setup must clear. Not zero:
+                              # the stop is fitted to the trades it is scored
+                              # on, so a figure that only just clears zero has
+                              # not cleared it.
+PLAN_MIN_RR = 1.5             # today's target, in R, when the calibration does
+                              # not say what multiple it was measured at
+PLAN_THIN_N = 6               # fewer trades than this and the figure is noise
 PLAN_AT_LEVEL_PCT = 0.1       # within this of the wall, the entry is live now
 # Below this many sessions the page says outright that a verdict can flip on
 # one day's data, because it does: refreshing the calibration on 2026-10-06
 # rolled the window a single session and moved ES calls 0.77 -> 1.39 and NQ
-# calls 0.85 -> 1.53, both across PLAN_MIN_RR. The clause retires itself as the
-# history grows rather than needing to be remembered.
+# calls 0.85 -> 1.53 on the R:R measure then in use, both across the line it
+# drew. The clause retires itself as the history grows rather than needing to
+# be remembered.
 PLAN_SHAKY_DAYS = 30
 TICKS_PER_POINT = 4           # ES and NQ both quote in quarter points
 FUT_SESSION_OPEN_HOUR = 18    # ET hour Globex opens the next trade date, so
@@ -1037,20 +1042,40 @@ def build_ladder(per_by_book, books, spot, ref_spot, prior, disp,
     return rows
 
 
+def _plan_basis(calib, cal, setup):
+    """What a plan's verdict rests on, carried so the page can show it."""
+    r = cal.get(setup) or {}
+    return {"n": r.get("n"), "levels": cal.get("n_levels"), "rate": r.get("rate"),
+            "exp": r.get("exp_plan"), "win": r.get("win_plan"),
+            "plan_r": calib.get("plan_r"), "stop_pct": r.get("stop_pct"),
+            "scored": calib.get("scored_at"), "sessions": calib.get("sessions"),
+            # The sample, so the page states it rather than letting "measured"
+            # sound like settled fact.
+            "days": calib.get("days"),
+            "shaky": (calib.get("days") or 0) < PLAN_SHAKY_DAYS,
+            "from": calib.get("from"), "to": calib.get("to"),
+            "sym_sessions": cal.get("sessions")}
+
+
 def trade_plans(ladder, regimes, spot, inst, calib):
-    """A fade plan for the nearest wall each side of spot, or [] if unmeasured.
+    """Fade AND breakout plans for the nearest wall each side of spot.
 
     The NEAREST wall, not the biggest: over 12 sessions the nearest was touched
     2-3 times as often (ES calls 35% against 14%, NQ calls 47% against 16%), so
-    the largest-gamma row is usually a level price never reaches and a plan
-    against it would be untakeable by construction.
+    the largest-gamma row is usually a level price never reaches.
 
-    Stop is the calibrated p75 of how far price ran past a touched wall, so it
-    survived three touches in four. Target is structural: the gamma flip, or
-    the nearest level the other way, whichever comes first in the profit
-    direction. Both the session's own R:R and the historical base rate travel
-    with the plan, because a 1.8 R:R setup on a side that has only ever paid
-    0.8 is a different proposition from one on a side that has.
+    Both setups, because tools/score_levels.py found they pay on different
+    symbols once each trade is walked bar by bar from its real entry: ES fades
+    lost money (-0.30R calls, -0.06R puts at 1.5R) while ES breakouts paid
+    (+0.50R, +0.22R), and GC put fades were the reverse (+0.28R against
+    -0.06R). Showing only fades left the page recommending the losing side of
+    ES. Each row carries its own base rate, so the reader sees which applies.
+
+    Stop: the calibrated p75 of how far price went against that setup's entry
+    before reaching its best point. Target: the first structural level - any
+    wall, or the flip - in the trade's direction at least a stop's distance
+    out. The base rate was measured at PLAN_R, so a target closer than that
+    today means the measured expectancy does not apply as stated.
     """
     stats = (calib.get("symbols") or {}).get(inst["future"]) or {}
     if not stats or not ladder or not spot:
@@ -1061,7 +1086,7 @@ def trade_plans(ladder, regimes, spot, inst, calib):
 
     for side in ("call", "put"):
         cal = stats.get(side)
-        if not cal or not cal.get("stop_pct"):
+        if not isinstance(cal, dict):
             continue
         up = side == "call"
         # Candidates: this side, correct side of spot, carrying gamma in the
@@ -1074,86 +1099,61 @@ def trade_plans(ladder, regimes, spot, inst, calib):
         if not rows:
             continue
         level = min(rows, key=lambda r: abs(r["strike"] - spot))["strike"]
-        stop = level + (1 if up else -1) * spot * cal["stop_pct"] / 100.0
+        structure = [(r["strike"], "wall") for r in ladder]
+        if flip:
+            structure.append((flip, "flip"))
 
-        # Structural levels in the profit direction: the other side's rows
-        # past this one, and the flip.
-        targets = [r["strike"] for r in ladder
-                   if r.get("side") != side
-                   and ((r["strike"] < level) if up else (r["strike"] > level))]
-        if flip and ((flip < level) if up else (flip > level)):
-            targets.append(flip)
-        if not targets:
-            continue
-        risk_pts = abs(stop - level)
-        if risk_pts <= 0:
-            continue
-        # The nearest target at least a stop's distance away, so the plan is
-        # never a worse-than-1:1 by construction. Taking the nearest outright
-        # put an ES put target 1.05 points above its own entry on 2026-10-06 -
-        # the flip sat on the wall - and reported it as a 0.03 R:R "plan".
-        # Nothing qualifying means the structure is too tight to fade: say so
-        # rather than inventing a level further out than anything on the page.
-        ordered = sorted(targets, key=lambda k: abs(k - level))
-        usable = [k for k in ordered if abs(level - k) >= risk_pts]
-        target = usable[0] if usable else None
-        if target is None:
-            plans.append({
-                "side": side, "action": "sell" if up else "buy",
-                "level": round(level, 2),
-                "dist": round(100 * (level - spot) / spot, 2),
-                "stop": round(stop, 2), "target": None,
-                "risk_pts": round(risk_pts, 2), "risk_usd": round(risk_pts * mult),
-                "verdict": "no room",
-                "note": ("nearest level the other way is inside the stop"),
-                "basis": {"n": cal.get("n_touched"), "levels": cal.get("n_levels"),
-                          "touch_rate": cal.get("touch_rate"),
-                          "hist_rr": cal.get("rr"),
-                          "stop_pct": cal.get("stop_pct"),
-                          "scored": calib.get("scored_at"),
-                          "sessions": calib.get("sessions")},
-            })
-            continue
-        reward_pts = abs(level - target)
-        rr = reward_pts / risk_pts
-        hist_rr = cal.get("rr")
-        if (cal.get("n_touched") or 0) < PLAN_THIN_N:
-            verdict = "thin"
-        elif hist_rr is not None and hist_rr < PLAN_MIN_RR:
-            verdict = "no edge"
-        elif rr < PLAN_MIN_RR:
-            verdict = "poor today"
-        else:
-            verdict = "ok"
-        plans.append({
-            "side": side,
-            "action": "sell" if up else "buy",
-            "level": round(level, 2),
-            "dist": round(100 * (level - spot) / spot, 2),
-            "stop": round(stop, 2),
-            "target": round(target, 2),
-            "target_src": "flip" if target == flip else "opposite wall",
-            # Price is already at the wall: the entry is live, not a wait.
-            "at_level": abs(level - spot) / spot * 100 <= PLAN_AT_LEVEL_PCT,
-            "risk_pts": round(risk_pts, 2),
-            "reward_pts": round(reward_pts, 2),
-            "rr": round(rr, 2),
-            "risk_usd": round(risk_pts * mult),
-            "reward_usd": round(reward_pts * mult),
-            "verdict": verdict,
-            "basis": {"n": cal.get("n_touched"), "levels": cal.get("n_levels"),
-                      "touch_rate": cal.get("touch_rate"),
-                      "hist_rr": hist_rr,
-                      "stop_pct": cal.get("stop_pct"),
-                      "scored": calib.get("scored_at"),
-                      "sessions": calib.get("sessions"),
-                      # The sample, carried so the page can state it rather
-                      # than leave "measured" to sound like settled fact.
-                      "days": calib.get("days"),
-                      "shaky": (calib.get("days") or 0) < PLAN_SHAKY_DAYS,
-                      "from": calib.get("from"), "to": calib.get("to"),
-                      "sym_sessions": cal.get("sessions")},
-        })
+        for setup in ("fade", "breakout"):
+            r = cal.get(setup)
+            if not r or not r.get("stop_pct"):
+                continue
+            # Fade against the approach, breakout with it.
+            direction = ((-1 if up else +1) if setup == "fade"
+                         else (+1 if up else -1))
+            if setup == "fade":
+                action = "sell call wall" if up else "buy put wall"
+            else:
+                action = "buy break above" if up else "sell break below"
+            stop = level - direction * spot * r["stop_pct"] / 100.0
+            risk_pts = abs(level - stop)
+            basis = _plan_basis(calib, cal, setup)
+            base = {"setup": setup, "side": side, "action": action,
+                    "level": round(level, 2),
+                    "dist": round(100 * (level - spot) / spot, 2),
+                    "stop": round(stop, 2), "risk_pts": round(risk_pts, 2),
+                    "risk_usd": round(risk_pts * mult),
+                    "at_level": abs(level - spot) / spot * 100 <= PLAN_AT_LEVEL_PCT,
+                    "basis": basis}
+
+            # First structural level in the trade's direction at least a stop
+            # out, so a plan is never worse than 1:1 by construction. Taking
+            # the nearest outright once put an ES target 1.05 points from its
+            # own entry - the flip sat on the wall.
+            ahead = sorted(((k, src) for k, src in structure
+                            if (k - level) * direction >= risk_pts),
+                           key=lambda t: abs(t[0] - level))
+            n = basis["n"] or 0
+            exp = basis["exp"]
+            if not ahead:
+                verdict = "thin" if n < PLAN_THIN_N else "no room"
+                plans.append({**base, "target": None, "verdict": verdict,
+                              "note": "nothing to target outside the stop"})
+                continue
+            target, src = ahead[0]
+            reward_pts = abs(target - level)
+            rr = reward_pts / risk_pts if risk_pts else 0.0
+            if n < PLAN_THIN_N:
+                verdict = "thin"
+            elif exp is None or exp <= PLAN_MIN_EXP:
+                verdict = "no edge"
+            elif rr < (calib.get("plan_r") or PLAN_MIN_RR):
+                verdict = "poor today"
+            else:
+                verdict = "ok"
+            plans.append({**base, "target": round(target, 2),
+                          "target_src": src, "reward_pts": round(reward_pts, 2),
+                          "reward_usd": round(reward_pts * mult),
+                          "rr": round(rr, 2), "verdict": verdict})
     return plans
 
 
@@ -3104,44 +3104,50 @@ function bookSummary(s,regimes,books){
     +`</tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
-// Fade plans for the nearest wall each side. Stop distances are measured by
-// tools/score_levels.py against real bars; targets come from today's structure.
-// The verdict and the base rate are shown on the same row as the R:R on
-// purpose: a 4.4 R:R on a side whose history pays 0.77 is not a 4.4 R:R
-// opportunity, and leaving the reader to go and find that out invites the
-// page to be read as a recommendation.
-const VERDICT = {"ok":["v-ok","measured edge"],
-                 "poor today":["v-poor","structure too tight today"],
-                 "no edge":["v-noedge","history shows no edge on this side"],
-                 "thin":["v-thin","too few touches to trust"],
-                 "no room":["v-noroom","nothing to target inside the stop"]};
+// Fade and breakout plans for the nearest wall each side. Stops and base rates
+// are measured by tools/score_levels.py, walking each trade bar by bar from its
+// real entry; targets come from today's structure. The verdict and base rate
+// sit on the same row as today's R:R on purpose: a 3.6 R:R fade on a side
+// whose measured expectancy is negative is not an opportunity, and leaving
+// the reader to go and find that out invites the page to be read as a call.
+const VERDICT = {"ok":["v-ok","positive measured expectancy, and today's target reaches it"],
+                 "poor today":["v-poor","today's target is closer than the one the base rate was measured at"],
+                 "no edge":["v-noedge","measured expectancy is not above zero"],
+                 "thin":["v-thin","too few trades to trust"],
+                 "no room":["v-noroom","nothing to target outside the stop"]};
 
 function planRow(p){
   const [cls,why] = VERDICT[p.verdict] || ["v-thin",""];
   const b = p.basis||{};
-  const money = v => (v>=0?"":"\u2212")+"$"+Math.abs(v).toLocaleString();
+  const money = v => (v>=0?"":"−")+"$"+Math.abs(v).toLocaleString();
   const tgt = p.target==null
-    ? `<td class="num">\u2014</td><td class="num">\u2014</td>`
+    ? `<td class="num">—</td><td class="num">—</td>`
     : `<td class="num">${(+p.target).toFixed(2)}`
-      + ` <span class="pre">${p.target_src==="flip"?"flip":"wall"}</span></td>`
+      + ` <span class="pre">${p.target_src}</span></td>`
       + `<td class="num"><b>${(+p.rr).toFixed(2)}</b></td>`;
-  const pl = p.target==null ? "\u2014"
+  const pl = p.target==null ? `${money(-p.risk_usd)} / —`
     : `${money(-p.risk_usd)} / +$${p.reward_usd.toLocaleString()}`;
+  // A breakout's entry is a 5 minute close beyond the wall, not a resting
+  // order at it, and the cell says so rather than showing the same number as
+  // the fade beside it.
+  const entry = p.setup==="breakout"
+    ? `close ${p.side==="call"?"&gt;":"&lt;"} ${(+p.level).toFixed(2)}`
+    : (+p.level).toFixed(2);
+  const r = b.plan_r!=null ? b.plan_r : 1.5;
   return `<tr class="${cls}">`
-    +`<td class="setup ${p.side==="call"?"side-c":"side-p"}">`
-      +`${p.action} ${p.side}`
+    +`<td class="setup ${p.side==="call"?"side-c":"side-p"}">${p.action}`
       +(p.at_level?` <span class="chip live">at it now</span>`:"")+`</td>`
-    +`<td class="num">${(+p.level).toFixed(2)}`
+    +`<td class="num">${entry}`
       +` <span class="pre">${p.dist>0?"+":""}${p.dist}%</span></td>`
     +`<td class="num">${(+p.stop).toFixed(2)}</td>`
     +tgt
     +`<td class="num">${pl}</td>`
     +`<td class="basis" title="${why}">`
       +`<span class="chip ${cls}">${p.verdict}</span> `
-      +(b.n!=null?`${b.n}/${b.levels} touched`:"")
-      +(b.touch_rate!=null?` ${Math.round(b.touch_rate*100)}%`:"")
-      +(b.hist_rr!=null?` \u00b7 hist R:R ${b.hist_rr}`:"")
-      +(p.note?` \u00b7 ${p.note}`:"")
+      +(b.n!=null?`${b.n} trades`:"")
+      +(b.win!=null?` · ${Math.round(b.win*100)}% win`:"")
+      +(b.exp!=null?` · ${b.exp>0?"+":""}${(+b.exp).toFixed(2)}R at ${r}R`:"")
+      +(p.note?` · ${p.note}`:"")
     +`</td></tr>`;
 }
 
@@ -3149,25 +3155,28 @@ function tradePlans(s){
   const ps = s.plans||[];
   if(!ps.length) return "";
   const b = (ps[0].basis)||{};
-  // The caveat states the sample rather than characterising it, so it stays
-  // true as the history grows: 12 sessions reads as thin on its own, and the
-  // same sentence will read as adequate at 60 without being rewritten.
+  // States the sample rather than characterising it, so the sentence stays
+  // true as the history grows.
   const ns = ps.map(p=>(p.basis||{}).n).filter(n=>n!=null);
-  const touches = !ns.length ? null
+  const trades = !ns.length ? null
     : (Math.min(...ns)===Math.max(...ns) ? `${ns[0]}`
-       : `${Math.min(...ns)}\u2013${Math.max(...ns)}`);
+       : `${Math.min(...ns)}–${Math.max(...ns)}`);
   const span = (b.from&&b.to) ? `${b.from} to ${b.to}` : b.scored;
-  const note = `<div class="caveat"><b>*</b> Stops are measured, not assumed`
-    + (b.sym_sessions?` \u2014 ${b.sym_sessions} sessions of this symbol`:"")
+  const r = b.plan_r!=null ? b.plan_r : 1.5;
+  const note = `<div class="caveat"><b>*</b> Stops and base rates are measured, `
+    + `not assumed`
+    + (b.sym_sessions?` — ${b.sym_sessions} sessions of this symbol`:"")
     + (span?` (${span})`:"")
-    + (touches?`, ${touches} touches a side`:"")
-    + `. R:R is a best case, pairing a perfect exit with a stop that held 3 `
-    + `touches in 4, and targets come from today's structure rather than being `
-    + `measured at all.`
+    + (trades?`, ${trades} trades per setup`:"")
+    + `. Each trade was walked bar by bar from its real entry to a ${r}R target `
+    + `or its stop, whichever came first, and the stop was fitted to those same `
+    + `trades, which flatters every figure somewhat. Targets here come from `
+    + `today's structure and are not measured.`
     + (b.shaky?` At this sample a verdict can flip on a single session, so `
       + `read every base rate here as provisional.`:"")
     + `</div>`;
-  return `<div class="plans"><div class="k">Fade plans<b>*</b>, nearest wall each side</div>`
+  return `<div class="plans"><div class="k">Plans<b>*</b>, nearest wall each side: `
+    + `fade it or trade the break</div>`
     + `<table><thead><tr><th>Setup</th><th class="num">Entry</th>`
     + `<th class="num">Stop</th><th class="num">Target</th>`
     + `<th class="num" title="Today's reward to risk, from the structural target">R:R</th>`
