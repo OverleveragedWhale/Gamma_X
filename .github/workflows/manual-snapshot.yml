@@ -32,6 +32,12 @@ jobs:
         with:
           python-version: "3.11"
 
+      # The same render check the PC runs before it publishes. Without an
+      # engine check_page.py warns and passes, so a page that cannot run would
+      # go live from here unchecked - the 2026-10-01 blank-page class.
+      - name: Install the page-check engine
+        run: python -m pip install --quiet --disable-pip-version-check mini-racer
+
       - name: Generate and publish snapshot
         id: publish
         run: |
@@ -45,9 +51,14 @@ jobs:
           git worktree add pub origin/snapshot
 
           python gex_terminal.py --snapshot pub/index.html --skip-unchanged
+          python tools/check_page.py pub/index.html
 
           cd pub
-          git add index.html data.json
+          # oi/ as well, as the PC's publisher does: the session's open-interest
+          # fingerprint is written once, by its first run, and if that run is
+          # this one and the file stays behind, the next day's OI change column
+          # has nothing to compare against.
+          git add index.html data.json oi
           if git diff --cached --quiet; then
             echo "figures match the live page; nothing to publish"
             echo "published=false" >> "$GITHUB_OUTPUT"

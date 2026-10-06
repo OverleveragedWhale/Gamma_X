@@ -93,6 +93,7 @@ PLAN_R = 1.5              # the target multiple the dashboard's verdict reads
 STOP_PCTILE = 75
 TOP_DEFAULT = 3
 APPROACHES = ("fade", "breakout")
+CURRENT = {inst["future"] for inst in g.INSTRUMENTS}
 
 
 # ----------------------------------------------------------------- history
@@ -202,6 +203,11 @@ def sessions(book, top, since=None, until=None, select="net"):
         for sym in payload.get("symbols") or []:
             if not sym.get("ok") or sym.get("regimes_from"):
                 continue          # failed, or a panel held from another session
+            # Only what the dashboard still publishes. The history holds
+            # symbols since dropped, and scoring them put figures for products
+            # nobody trades here into the calibration and the weekly log.
+            if sym.get("symbol") not in CURRENT:
+                continue
             lv = levels_of(sym, book, top, select)
             if not lv["call"] and not lv["put"]:
                 continue
@@ -548,25 +554,35 @@ def score(book, top, since=None, until=None, select="net", era="all",
             "symbols": calib}
 
 
+LOG_HEADER = ["scored_at", "days", "from", "to", "symbol", "side", "setup",
+              "n", "rate", "stop_pct", f"exp_{PLAN_R:g}R", f"win_{PLAN_R:g}R"]
+
+
 def append_log(path, out):
-    """One row per symbol, side and setup, so verdict drift is on record."""
+    """One row per symbol, side and setup, so verdict drift is on record.
+
+    A second run on the same day REPLACES that day's rows rather than adding
+    to them: a hand run and the scheduled one on one date put every row in
+    twice, which reads as two measurements when it was one.
+    """
     path = Path(path)
-    new = not path.exists()
-    with path.open("a", newline="", encoding="utf-8") as fh:
+    rows = []
+    if path.exists():
+        with path.open(newline="", encoding="utf-8") as fh:
+            rows = [r for r in csv.reader(fh)][1:]
+    rows = [r for r in rows if r and r[0] != out["scored_at"]]
+    for sym, sides in sorted(out["symbols"].items()):
+        for side, v in sorted(sides.items()):
+            for name in APPROACHES:
+                r = v.get(name)
+                if r:
+                    rows.append([out["scored_at"], out["days"], out["from"],
+                                 out["to"], sym, side, name, r["n"], r["rate"],
+                                 r["stop_pct"], r["exp_plan"], r["win_plan"]])
+    with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        if new:
-            w.writerow(["scored_at", "days", "from", "to", "symbol", "side",
-                        "setup", "n", "rate", "stop_pct",
-                        f"exp_{PLAN_R:g}R", f"win_{PLAN_R:g}R"])
-        for sym, sides in sorted(out["symbols"].items()):
-            for side, v in sorted(sides.items()):
-                for name in APPROACHES:
-                    r = v.get(name)
-                    if r:
-                        w.writerow([out["scored_at"], out["days"], out["from"],
-                                    out["to"], sym, side, name, r["n"],
-                                    r["rate"], r["stop_pct"], r["exp_plan"],
-                                    r["win_plan"]])
+        w.writerow(LOG_HEADER)
+        w.writerows(rows)
 
 
 def main():
