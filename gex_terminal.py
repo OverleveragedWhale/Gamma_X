@@ -112,6 +112,12 @@ PLAN_BOOK = "near"            # the book the calibration was measured on
 PLAN_MIN_RR = 1.2             # below this the history shows no edge worth it
 PLAN_THIN_N = 6               # fewer touches than this and the figure is noise
 PLAN_AT_LEVEL_PCT = 0.1       # within this of the wall, the entry is live now
+# Below this many sessions the page says outright that a verdict can flip on
+# one day's data, because it does: refreshing the calibration on 2026-10-06
+# rolled the window a single session and moved ES calls 0.77 -> 1.39 and NQ
+# calls 0.85 -> 1.53, both across PLAN_MIN_RR. The clause retires itself as the
+# history grows rather than needing to be remembered.
+PLAN_SHAKY_DAYS = 30
 TICKS_PER_POINT = 4           # ES and NQ both quote in quarter points
 FUT_SESSION_OPEN_HOUR = 18    # ET hour Globex opens the next trade date, so
                               # the hour the settled-session anchor steps. All
@@ -1140,7 +1146,13 @@ def trade_plans(ladder, regimes, spot, inst, calib):
                       "hist_rr": hist_rr,
                       "stop_pct": cal.get("stop_pct"),
                       "scored": calib.get("scored_at"),
-                      "sessions": calib.get("sessions")},
+                      "sessions": calib.get("sessions"),
+                      # The sample, carried so the page can state it rather
+                      # than leave "measured" to sound like settled fact.
+                      "days": calib.get("days"),
+                      "shaky": (calib.get("days") or 0) < PLAN_SHAKY_DAYS,
+                      "from": calib.get("from"), "to": calib.get("to"),
+                      "sym_sessions": cal.get("sessions")},
         })
     return plans
 
@@ -2944,6 +2956,9 @@ tr.spotrow td{color:var(--ink);font-weight:700;letter-spacing:.06em;
 .plans td,.plans th{padding:3px 12px 3px 0}
 .plans .setup{text-transform:uppercase;letter-spacing:.08em;font-size:10.5px}
 .plans .basis{font-size:10.5px;color:var(--muted)}
+.plans .caveat{margin-top:8px;font-size:10.5px;line-height:1.5;color:var(--muted);
+  max-width:72ch}
+.plans .caveat b{color:var(--brass);font-weight:500}
 .plans tr.v-ok td{color:var(--ink)}
 .plans tr.v-noedge td,.plans tr.v-thin td,.plans tr.v-noroom td{opacity:.62}
 .chip.v-ok{color:var(--jade);border-color:rgba(75,191,138,.45)}
@@ -3134,18 +3149,31 @@ function tradePlans(s){
   const ps = s.plans||[];
   if(!ps.length) return "";
   const b = (ps[0].basis)||{};
-  const prov = b.sessions
-    ? `<span class="sub">stops measured over ${b.sessions} session-symbols`
-      + (b.scored?` to ${b.scored}`:"") + `, targets from today</span>`
-    : "";
-  return `<div class="plans"><div class="k">Fade plans, nearest wall each side `
-    + prov + `</div>`
+  // The caveat states the sample rather than characterising it, so it stays
+  // true as the history grows: 12 sessions reads as thin on its own, and the
+  // same sentence will read as adequate at 60 without being rewritten.
+  const ns = ps.map(p=>(p.basis||{}).n).filter(n=>n!=null);
+  const touches = !ns.length ? null
+    : (Math.min(...ns)===Math.max(...ns) ? `${ns[0]}`
+       : `${Math.min(...ns)}\u2013${Math.max(...ns)}`);
+  const span = (b.from&&b.to) ? `${b.from} to ${b.to}` : b.scored;
+  const note = `<div class="caveat"><b>*</b> Stops are measured, not assumed`
+    + (b.sym_sessions?` \u2014 ${b.sym_sessions} sessions of this symbol`:"")
+    + (span?` (${span})`:"")
+    + (touches?`, ${touches} touches a side`:"")
+    + `. R:R is a best case, pairing a perfect exit with a stop that held 3 `
+    + `touches in 4, and targets come from today's structure rather than being `
+    + `measured at all.`
+    + (b.shaky?` At this sample a verdict can flip on a single session, so `
+      + `read every base rate here as provisional.`:"")
+    + `</div>`;
+  return `<div class="plans"><div class="k">Fade plans<b>*</b>, nearest wall each side</div>`
     + `<table><thead><tr><th>Setup</th><th class="num">Entry</th>`
     + `<th class="num">Stop</th><th class="num">Target</th>`
     + `<th class="num" title="Today's reward to risk, from the structural target">R:R</th>`
     + `<th class="num" title="Per contract, risk / reward">Risk / reward</th>`
     + `<th>Basis</th></tr></thead>`
-    + `<tbody>${ps.map(planRow).join("")}</tbody></table></div>`;
+    + `<tbody>${ps.map(planRow).join("")}</tbody></table>` + note + `</div>`;
 }
 
 // The combined ladder: one row per strike, one column per book, so "is this

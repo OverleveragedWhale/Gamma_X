@@ -43,6 +43,11 @@ Caveats this cannot fix
     which only a perfect exit captures, while the stop is sized off the p75 of
     'beyond'. Read a figure under about 1.2 as "no edge here" rather than as
     a measurement of what a real fade would have returned.
+  - The figures are unstable at this length. Refreshing on 2026-10-06 rolled
+    the window by one session and moved ES calls from 0.77 R:R to 1.39 and NQ
+    calls from 0.85 to 1.53 - both across the 1.2 the dashboard treats as the
+    line between no edge and a setup. Re-run this as history accumulates and
+    expect the verdicts to move until n per side is in the dozens.
   - The history is short. Thirteen sessions is a baseline to extend, not a
     verdict; n is printed beside every figure for that reason.
   - The payload changed shape on 2026-09-29 (per-book wall lists became one
@@ -393,6 +398,9 @@ def score(book, top, stop_pct, since=None, until=None, verbose=False,
                     "back_p50": round(pct(back, 50), 2),
                     "back_p50_pct": round(100.0 * pct(back, 50) / spot, 3),
                     "held_rate_at_stop": round(held, 3),
+                    # Carried per side so the dashboard's caveat can state the
+                    # sample instead of asserting it is small.
+                    "sessions": counted[sym],
                     # What the dashboard's trade plans read: a stop that held
                     # 3 touches in 4, the median retrace as the target, and
                     # their ratio. Points are per-session absolutes, so the
@@ -429,9 +437,13 @@ def score(book, top, stop_pct, since=None, until=None, verbose=False,
     print()
     print("Sessions with bars: "
           + ", ".join(f"{k} {v}" for k, v in sorted(counted.items())))
+    days = sorted({r["date"] for r in rows})
     return {"book": book, "top": top, "stop_pct": stop_pct, "select": select,
             "entry": ENTRY_HHMM, "close": CLOSE_HHMM,
-            "sessions": len(rows), "scored_at": g.now_et().strftime("%Y-%m-%d"),
+            "sessions": len(rows), "days": len(days),
+            "from": days[0].isoformat() if days else None,
+            "to": days[-1].isoformat() if days else None,
+            "scored_at": g.now_et().strftime("%Y-%m-%d"),
             "symbols": calib}
 
 
