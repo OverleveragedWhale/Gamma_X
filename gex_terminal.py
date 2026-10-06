@@ -2760,6 +2760,20 @@ def recompute(previous=None, previous_generated=None):
     for t in threads:
         t.join()
     hold_regimes(syms, previous, previous_generated)
+    # A held panel keeps its ladder but would otherwise drop its plans, which
+    # are built only when the chain had greeks: on 2026-10-06 09:45 Cboe zeroed
+    # every chain and all three panels published with no plans at all. The
+    # plans need nothing the hold lacks - the held ladder and flip, and the
+    # LIVE futures price, which the feed gap does not touch - so they are
+    # rebuilt rather than carried, and their distances stay current.
+    by_future = {inst["future"]: inst for inst in INSTRUMENTS}
+    for sym in syms:
+        inst = by_future.get((sym or {}).get("symbol"))
+        if inst and sym.get("ok") and sym.get("regimes_from") \
+                and not sym.get("held_all") and not sym.get("plans"):
+            sym["plans"] = trade_plans(sym.get("ladder") or [],
+                                       sym.get("regimes") or {},
+                                       sym.get("spot"), inst, calib)
 
     # One line covering every product, so the overlay is a single copy and a
     # single paste rather than one per chart:
