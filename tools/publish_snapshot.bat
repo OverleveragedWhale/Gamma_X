@@ -114,13 +114,30 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem The setups page (setups.html + setups.json): a 09:50 map frozen once a
+rem session and the events fired against it. It must never cost the
+rem dashboard a publish, so a failure here - or its page failing its own
+rem render check - leaves the previous setups page in place and publishes the
+rem dashboard anyway. The git reset below puts a failed page back.
+set "SETUPS_OK=1"
+%PY% "%REPO%\setups.py" --pub "%PUB%" >> "%LOG%" 2>&1
+if errorlevel 1 set "SETUPS_OK=0"
+if "%SETUPS_OK%"=="1" (
+  %PY% "%REPO%\tools\check_page.py" "%PUB%\setups.html" >> "%LOG%" 2>&1
+  if errorlevel 1 set "SETUPS_OK=0"
+)
+
 cd /d "%PUB%"
+if "%SETUPS_OK%"=="0" (
+  echo [%NOW%] WARN: setups page failed, previous one kept >> "%LOG%"
+  git checkout -q -- setups.html setups.json >> "%LOG%" 2>&1
+)
 rem oi\ carries one open-interest fingerprint per session, which is what
 rem lets the page say whether a wall is being built or decaying. It is
 rem written once a day and pruned at 45 sessions, about 24 KB each, so it
 rem costs roughly a megabyte steady state. Without it here the history
 rem never leaves the machine that generated it and the other PC sees none.
-git add index.html data.json oi >> "%LOG%" 2>&1
+git add index.html data.json oi setups.html setups.json >> "%LOG%" 2>&1
 git diff --cached --quiet
 if not errorlevel 1 (
   echo [%NOW%] no change, nothing to publish >> "%LOG%"

@@ -109,6 +109,37 @@ def payload_of(html):
     return json.JSONDecoder().raw_decode(html, i)[0]
 
 
+def check_setups(ctx, engine, html):
+    """setups.html: same principle - compile it, then RUN its renderer on the
+    data baked into it and check what comes out."""
+    js = "\n".join(l for l in script_of(html).split("\n")
+                   if not l.strip().startswith(("paint(", "setInterval(")))
+    try:
+        ctx.eval(STUB + "\n" + js)
+    except Exception as exc:
+        return fail(f"setups script does not compile: {str(exc)[:200]}")
+    ok(f"setups script compiles in a real engine ({engine})")
+    bad = 0
+    try:
+        out = ctx.eval("renderSetups(SETUPS_DATA)")
+    except Exception as exc:
+        return fail(f"renderSetups threw: {str(exc)[:200]}")
+    if not out or len(out) < 200:
+        bad += fail(f"renderSetups returned {len(out or '')} chars")
+    if "undefined" in (out or ""):
+        bad += fail("renderSetups: the string 'undefined' reached the page")
+    if (out or "").count("<div") != (out or "").count("</div>"):
+        bad += fail("renderSetups: unbalanced <div> in output")
+    for i, table in enumerate(re.findall(r"<table>.*?</table>", out or "", re.S)):
+        for problem in check_rows(f"setups table {i + 1}", table):
+            bad += fail(problem)
+    if not bad:
+        ok(f"renderSetups renders, {len(out):,} chars, cells balanced")
+    print()
+    print("PAGE OK" if not bad else f"{bad} PROBLEM(S) - do not publish")
+    return 1 if bad else 0
+
+
 def check_rows(name, table_html):
     """Every row in a rendered table must carry the header's cell count.
 
@@ -167,6 +198,9 @@ def main():
         print("WARN  pip install mini-racer    (development only; the dashboard")
         print("WARN  itself stays pure stdlib)")
         return 0
+
+    if "function renderSetups" in html:
+        return check_setups(ctx, engine, html)
 
     bad = 0
     js = "\n".join(l for l in script_of(html).split("\n")

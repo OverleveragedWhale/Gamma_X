@@ -273,7 +273,11 @@ def bars(sym):
 
 def session_bars(sym, day, start_hhmm):
     rows = bars(sym).get(day) or []
-    return [b for b in rows if start_hhmm <= b[0] <= CLOSE_HHMM]
+    # Strictly before the close: the bar stamped 16:00 covers 16:00-16:05,
+    # after the cash close. Including it marked open trades at 16:05 and let
+    # stops and targets be "hit" after the session; the 15:55 bar's close IS
+    # the 16:00 price. Found cross-checking the setups page, which had it right.
+    return [b for b in rows if start_hhmm <= b[0] < CLOSE_HHMM]
 
 
 # ------------------------------------------------------------------ trades

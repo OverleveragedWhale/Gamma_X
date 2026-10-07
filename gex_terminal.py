@@ -119,10 +119,7 @@ PLAN_MIN_EXP = 0.10           # expectancy in R a setup must clear. Not zero:
                               # the stop is fitted to the trades it is scored
                               # on, so a figure that only just clears zero has
                               # not cleared it.
-PLAN_MIN_RR = 1.5             # today's target, in R, when the calibration does
-                              # not say what multiple it was measured at
 PLAN_THIN_N = 6               # fewer trades than this and the figure is noise
-PLAN_AT_LEVEL_PCT = 0.1       # within this of the wall, the entry is live now
 # Below this many sessions the page says outright that a verdict can flip on
 # one day's data, because it does: refreshing the calibration on 2026-10-06
 # rolled the window a single session and moved ES calls 0.77 -> 1.39 and NQ
@@ -1148,7 +1145,7 @@ def zero_recent(syms, previous, previous_generated):
         z["rows"] = rows
 
 
-def _plan_basis(calib, cal, setup):
+def plan_basis(calib, cal, setup):
     """What a plan's verdict rests on, carried so the page can show it."""
     r = cal.get(setup) or {}
     # Wall-to-wall: the same trade the R:R column describes - the first wall
@@ -1173,107 +1170,23 @@ def _plan_basis(calib, cal, setup):
             "sym_sessions": cal.get("sessions")}
 
 
-def trade_plans(ladder, regimes, spot, inst, calib):
-    """Fade AND breakout plans for the nearest wall each side of spot.
+def plan_verdict(basis, has_target):
+    """The verdict a setup carries, from its measured base rate.
 
-    The NEAREST wall, not the biggest: over 12 sessions the nearest was touched
-    2-3 times as often (ES calls 35% against 14%, NQ calls 47% against 16%), so
-    the largest-gamma row is usually a level price never reaches.
-
-    Both setups, because tools/score_levels.py found they pay on different
-    symbols once each trade is walked bar by bar from its real entry: ES fades
-    lost money (-0.30R calls, -0.06R puts at 1.5R) while ES breakouts paid
-    (+0.50R, +0.22R), and GC put fades were the reverse (+0.28R against
-    -0.06R). Showing only fades left the page recommending the losing side of
-    ES. Each row carries its own base rate, so the reader sees which applies.
-
-    Stop: the calibrated p75 of how far price went against that setup's entry
-    before reaching its best point. Target: the first structural level - any
-    wall, or the flip - in the trade's direction at least a stop's distance
-    out. The base rate was measured at PLAN_R, so a target closer than that
-    today means the measured expectancy does not apply as stated.
+    Shared with setups.py, which freezes it into the 09:50 session map, so the
+    two pages can never disagree about a setup. The base rate is wall-to-wall
+    (see plan_basis), so it already averages over targets of every distance
+    and today's R:R is not a separate gate.
     """
-    stats = (calib.get("symbols") or {}).get(inst["future"]) or {}
-    if not stats or not ladder or not spot:
-        return []
-    flip = (regimes.get(PLAN_BOOK) or {}).get("flip")
-    mult = inst["multiplier"]
-    plans = []
-
-    for side in ("call", "put"):
-        cal = stats.get(side)
-        if not isinstance(cal, dict):
-            continue
-        up = side == "call"
-        # Candidates: this side, correct side of spot, carrying gamma in the
-        # calibrated book - a row held up only by the week or full column was
-        # never part of what was measured.
-        rows = [r for r in ladder
-                if r.get("side") == side
-                and ((r["strike"] > spot) if up else (r["strike"] < spot))
-                and ((r.get("books") or {}).get(PLAN_BOOK) or {}).get("net")]
-        if not rows:
-            continue
-        level = min(rows, key=lambda r: abs(r["strike"] - spot))["strike"]
-        structure = [(r["strike"], "wall") for r in ladder]
-        if flip:
-            structure.append((flip, "flip"))
-
-        for setup in ("fade", "breakout"):
-            r = cal.get(setup)
-            if not r or not r.get("stop_pct"):
-                continue
-            # Fade against the approach, breakout with it.
-            direction = ((-1 if up else +1) if setup == "fade"
-                         else (+1 if up else -1))
-            if setup == "fade":
-                action = "sell call wall" if up else "buy put wall"
-            else:
-                action = "buy break above" if up else "sell break below"
-            stop = level - direction * spot * r["stop_pct"] / 100.0
-            risk_pts = abs(level - stop)
-            basis = _plan_basis(calib, cal, setup)
-            base = {"setup": setup, "side": side, "action": action,
-                    "level": round(level, 2),
-                    "dist": round(100 * (level - spot) / spot, 2),
-                    "stop": round(stop, 2), "risk_pts": round(risk_pts, 2),
-                    "risk_usd": round(risk_pts * mult),
-                    "at_level": abs(level - spot) / spot * 100 <= PLAN_AT_LEVEL_PCT,
-                    "basis": basis}
-
-            # First structural level in the trade's direction at least a stop
-            # out, so a plan is never worse than 1:1 by construction. Taking
-            # the nearest outright once put an ES target 1.05 points from its
-            # own entry - the flip sat on the wall.
-            ahead = sorted(((k, src) for k, src in structure
-                            if (k - level) * direction >= risk_pts),
-                           key=lambda t: abs(t[0] - level))
-            n = basis["n"] or 0
-            exp = basis["exp"]
-            if not ahead:
-                verdict = "thin" if n < PLAN_THIN_N else "no room"
-                plans.append({**base, "target": None, "verdict": verdict,
-                              "note": "nothing to target outside the stop"})
-                continue
-            target, src = ahead[0]
-            reward_pts = abs(target - level)
-            rr = reward_pts / risk_pts if risk_pts else 0.0
-            if n < PLAN_THIN_N:
-                verdict = "thin"
-            elif exp is None or exp <= PLAN_MIN_EXP:
-                verdict = "no edge"
-            elif basis.get("measure") == "fixed" and \
-                    rr < (calib.get("plan_r") or PLAN_MIN_RR):
-                # Only meaningful against a fixed-R base rate: a wall-to-wall
-                # base rate already averages over targets of every distance.
-                verdict = "poor today"
-            else:
-                verdict = "ok"
-            plans.append({**base, "target": round(target, 2),
-                          "target_src": src, "reward_pts": round(reward_pts, 2),
-                          "reward_usd": round(reward_pts * mult),
-                          "rr": round(rr, 2), "verdict": verdict})
-    return plans
+    n = basis.get("n") or 0
+    if not has_target:
+        return "thin" if n < PLAN_THIN_N else "no room"
+    if n < PLAN_THIN_N:
+        return "thin"
+    exp = basis.get("exp")
+    if exp is None or exp <= PLAN_MIN_EXP:
+        return "no edge"
+    return "ok"
 
 
 def build_regime(contracts, spot, today, prior, disp, ref_spot=None,
@@ -2679,9 +2592,6 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
             if best:
                 r["vp"] = best[1]
 
-        out["plans"] = trade_plans(out["ladder"], out["regimes"], shown_spot,
-                                   inst, calib)
-
     if contracts:
         out["max_pain"] = [
             {"expiry": expiry.isoformat(), "strike": disp(item["strike"]),
@@ -2903,21 +2813,7 @@ def recompute(previous=None, previous_generated=None):
     for t in threads:
         t.join()
     hold_regimes(syms, previous, previous_generated)
-    # A held panel keeps its ladder but would otherwise drop its plans, which
-    # are built only when the chain had greeks: on 2026-10-06 09:45 Cboe zeroed
-    # every chain and all three panels published with no plans at all. The
-    # plans need nothing the hold lacks - the held ladder and flip, and the
-    # LIVE futures price, which the feed gap does not touch - so they are
-    # rebuilt rather than carried, and their distances stay current.
     zero_recent(syms, previous, previous_generated)
-    by_future = {inst["future"]: inst for inst in INSTRUMENTS}
-    for sym in syms:
-        inst = by_future.get((sym or {}).get("symbol"))
-        if inst and sym.get("ok") and sym.get("regimes_from") \
-                and not sym.get("held_all") and not sym.get("plans"):
-            sym["plans"] = trade_plans(sym.get("ladder") or [],
-                                       sym.get("regimes") or {},
-                                       sym.get("spot"), inst, calib)
 
     # One line covering every product, so the overlay is a single copy and a
     # single paste rather than one per chart:
@@ -3105,18 +3001,9 @@ tr.spotrow td{color:var(--ink);font-weight:700;letter-spacing:.06em;
 .chip.decay{color:var(--muted)}
 .chip.decay.hot{color:var(--brass);border-color:rgba(217,164,65,.45)}
 .max-pain{margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
-/* trade plans */
-.plans{margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
-.plans .k{font-size:10px;letter-spacing:.13em;text-transform:uppercase;
-  color:var(--muted);margin-bottom:5px}
-.plans .sub{letter-spacing:.04em;text-transform:none;opacity:.6}
-.plans table{width:auto;min-width:520px}
-.plans td,.plans th{padding:3px 12px 3px 0}
-.plans .setup{text-transform:uppercase;letter-spacing:.08em;font-size:10.5px}
-.plans .basis{font-size:10.5px;color:var(--muted)}
-.plans .caveat,.zero .caveat{margin-top:8px;font-size:10.5px;line-height:1.5;
+.zero .caveat{margin-top:8px;font-size:10.5px;line-height:1.5;
   color:var(--muted);max-width:72ch}
-.plans .caveat b,.zero .caveat b,.zero .k b{color:var(--brass);font-weight:500}
+.zero .caveat b,.zero .k b{color:var(--brass);font-weight:500}
 /* 0DTE */
 .zero{margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
 .zero .k{font-size:10px;letter-spacing:.13em;text-transform:uppercase;
@@ -3125,12 +3012,6 @@ tr.spotrow td{color:var(--ink);font-weight:700;letter-spacing:.06em;
 .zero .zsum b{color:var(--ink);font-weight:500}
 .zero table{width:auto;min-width:480px}
 .zero td,.zero th{padding:3px 12px 3px 0}
-.plans tr.v-ok td{color:var(--ink)}
-.plans tr.v-noedge td,.plans tr.v-thin td,.plans tr.v-noroom td{opacity:.62}
-.chip.v-ok{color:var(--jade);border-color:rgba(75,191,138,.45)}
-.chip.v-thin,.chip.v-poor{color:var(--brass);border-color:rgba(217,164,65,.45)}
-.chip.v-noedge,.chip.v-noroom{color:var(--stress);border-color:rgba(255,93,99,.4)}
-.chip.live{color:var(--brass);border-color:rgba(217,164,65,.6)}
 .active-con{font-size:10px;letter-spacing:.1em;padding:2px 7px;margin-left:10px;
   border:1px solid var(--jade);border-radius:3px;color:var(--jade);vertical-align:middle}
 .con-on{color:var(--jade)}
@@ -3164,6 +3045,9 @@ code.pine{background:var(--raised);border:1px solid var(--line);border-radius:4p
 .flowrow b{color:var(--ink)}
 .chip.oi.up{color:var(--jade);border-color:rgba(75,191,138,.4)}
 .chip.oi.down{color:var(--verm);border-color:rgba(224,96,63,.4)}
+.navlink{color:var(--brass);text-decoration:none;border:1px solid var(--brass);
+  border-radius:4px;padding:5px 10px;font-size:12px;letter-spacing:.06em}
+.navlink:hover{background:rgba(217,164,65,.1)}
 @media(prefers-reduced-motion:reduce){.dot.pulse{animation:none}.flash{animation:none}}
 </style></head>
 <body><div class="wrap">
@@ -3174,6 +3058,7 @@ code.pine{background:var(--raised);border:1px solid var(--line);border-radius:4p
     <span>updated <b id="upd">--</b></span>
     <span><span id="cdlab">next refresh</span> <b id="cd">--</b></span>
     <button id="refresh">Refresh now</button>
+    <a class="navlink" href="setups.html">Setups &rarr;</a>
   </div>
 </header>
 <div id="panels"></div>
@@ -3268,96 +3153,6 @@ function bookSummary(s,regimes,books){
     +`<th class="num" title="Dealer delta per day from time passing">Charm /day</th>`
     +`<th class="num" title="Share of the book's gamma expiring within 2 sessions">&le;2d</th>`
     +`</tr></thead><tbody>${rows}</tbody></table></div>`;
-}
-
-// Fade and breakout plans for the nearest wall each side. Stops and base rates
-// are measured by tools/score_levels.py, walking each trade bar by bar from its
-// real entry; targets come from today's structure. The verdict and base rate
-// sit on the same row as today's R:R on purpose: a 3.6 R:R fade on a side
-// whose measured expectancy is negative is not an opportunity, and leaving
-// the reader to go and find that out invites the page to be read as a call.
-const VERDICT = {"ok":["v-ok","positive measured expectancy, and today's target reaches it"],
-                 "poor today":["v-poor","today's target is closer than the one the base rate was measured at"],
-                 "no edge":["v-noedge","measured expectancy is not above zero"],
-                 "thin":["v-thin","too few trades to trust"],
-                 "no room":["v-noroom","nothing to target outside the stop"]};
-
-function planRow(p){
-  const [cls,why] = VERDICT[p.verdict] || ["v-thin",""];
-  const b = p.basis||{};
-  const money = v => (v>=0?"":"−")+"$"+Math.abs(v).toLocaleString();
-  const tgt = p.target==null
-    ? `<td class="num">—</td><td class="num">—</td>`
-    : `<td class="num">${(+p.target).toFixed(2)}`
-      + ` <span class="pre">${p.target_src}</span></td>`
-      + `<td class="num"><b>${(+p.rr).toFixed(2)}</b></td>`;
-  const pl = p.target==null ? `${money(-p.risk_usd)} / —`
-    : `${money(-p.risk_usd)} / +$${p.reward_usd.toLocaleString()}`;
-  // A breakout's entry is a 5 minute close beyond the wall, not a resting
-  // order at it, and the cell says so rather than showing the same number as
-  // the fade beside it.
-  const entry = p.setup==="breakout"
-    ? `close ${p.side==="call"?"&gt;":"&lt;"} ${(+p.level).toFixed(2)}`
-    : (+p.level).toFixed(2);
-  const r = b.plan_r!=null ? b.plan_r : 1.5;
-  return `<tr class="${cls}">`
-    +`<td class="setup ${p.side==="call"?"side-c":"side-p"}">${p.action}`
-      +(p.at_level?` <span class="chip live">at it now</span>`:"")+`</td>`
-    +`<td class="num">${entry}`
-      +` <span class="pre">${p.dist>0?"+":""}${p.dist}%</span></td>`
-    +`<td class="num">${(+p.stop).toFixed(2)}</td>`
-    +tgt
-    +`<td class="num">${pl}</td>`
-    +`<td class="basis" title="${why}">`
-      +`<span class="chip ${cls}">${p.verdict}</span> `
-      +(b.n!=null?`${b.n} trades`:"")
-      +(b.win!=null?` · ${Math.round(b.win*100)}% win`:"")
-      +(b.exp!=null?` · ${b.exp>0?"+":""}${(+b.exp).toFixed(2)}R`
-        +(b.measure==="wall"?` wall to wall`:` at ${r}R`):"")
-      +(p.note?` · ${p.note}`:"")
-    +`</td></tr>`;
-}
-
-function tradePlans(s){
-  const ps = s.plans||[];
-  if(!ps.length) return "";
-  const b = (ps[0].basis)||{};
-  // States the sample rather than characterising it, so the sentence stays
-  // true as the history grows.
-  const ns = ps.map(p=>(p.basis||{}).n).filter(n=>n!=null);
-  const trades = !ns.length ? null
-    : (Math.min(...ns)===Math.max(...ns) ? `${ns[0]}`
-       : `${Math.min(...ns)}–${Math.max(...ns)}`);
-  const span = (b.from&&b.to) ? `${b.from} to ${b.to}` : b.scored;
-  const r = b.plan_r!=null ? b.plan_r : 1.5;
-  const note = `<div class="caveat"><b>*</b> Stops and base rates are measured, `
-    + `not assumed`
-    + (b.sym_sessions?` — ${b.sym_sessions} sessions of this symbol`:"")
-    + (span?` (${span})`:"")
-    + (trades?`, ${trades} trades per setup`:"")
-    + (b.measure==="wall"
-       ? `. Each base rate replays the same trade the table shows: entered at `
-         + `the wall, stopped at the fitted distance, and targeting the first `
-         + `wall or flip on that morning's ladder in the trade's direction, `
-         + `walked bar by bar to whichever came first. R:R is today's version of `
-         + `that target; the base rate is how such trades actually ended, `
-         + `winners and losers averaged. The stop was fitted to those same `
-         + `trades, which flatters every figure somewhat.`
-       : `. Each trade was walked bar by bar from its real entry to a ${r}R `
-         + `target or its stop, whichever came first, and the stop was fitted to `
-         + `those same trades, which flatters every figure somewhat. Targets `
-         + `here come from today's structure and are not measured.`)
-    + (b.shaky?` At this sample a verdict can flip on a single session, so `
-      + `read every base rate here as provisional.`:"")
-    + `</div>`;
-  return `<div class="plans"><div class="k">Plans<b>*</b>, nearest wall each side: `
-    + `fade it or trade the break</div>`
-    + `<table><thead><tr><th>Setup</th><th class="num">Entry</th>`
-    + `<th class="num">Stop</th><th class="num">Target</th>`
-    + `<th class="num" title="Today's reward to risk, from the structural target">R:R</th>`
-    + `<th class="num" title="Per contract, risk / reward">Risk / reward</th>`
-    + `<th>Basis</th></tr></thead>`
-    + `<tbody>${ps.map(planRow).join("")}</tbody></table>` + note + `</div>`;
 }
 
 // Today's expiry on its own: the standing book, the day's flow, and what
@@ -3566,7 +3361,6 @@ function panel(s){
     ${s.scale_note?`<div class="scale">levels: ${s.scale_note}</div>`:""}
     ${body}
     ${zeroSection(s)}
-    ${tradePlans(s)}
     ${maxPain}
     ${marg}
   </div>`;
