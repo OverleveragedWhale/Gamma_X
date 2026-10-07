@@ -411,7 +411,13 @@ def summarise(evs):
     if len(evs) < 2:
         return None
     heat = [100.0 * e["adv"] / e["entry"] for e in evs]
-    stop_pct = max(MIN_STOP_PCT, pct(heat, STOP_PCTILE))
+    # Rounded BEFORE it is used, to exactly the figure calibration.json
+    # publishes and the setups page trades. Simulating with the unrounded
+    # value while publishing the rounded one let a base rate and the page
+    # disagree on a close trade: an ES call fade on 2026-09-24 came within
+    # 0.08 points (under a tick) of its stop - stopped out at 0.21734%, held
+    # at the published 0.217%.
+    stop_pct = round(max(MIN_STOP_PCT, pct(heat, STOP_PCTILE)), 3)
     out = {"n": len(evs), "stop_pct": round(stop_pct, 3), "exp": {}, "win": {},
            "by_era": {}}
     for mult in TARGETS_R:
