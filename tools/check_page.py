@@ -109,32 +109,37 @@ def payload_of(html):
     return json.JSONDecoder().raw_decode(html, i)[0]
 
 
-def check_setups(ctx, engine, html):
-    """setups.html: same principle - compile it, then RUN its renderer on the
-    data baked into it and check what comes out."""
+def check_setups(ctx, engine, html, calls=("renderSetups(SETUPS_DATA)",),
+                 name="setups"):
+    """setups.html and scorecard.html: same principle - compile it, then RUN
+    its renderer on the data baked into it and check what comes out."""
     js = "\n".join(l for l in script_of(html).split("\n")
-                   if not l.strip().startswith(("paint(", "setInterval(")))
+                   if not l.strip().startswith(("paint(", "setInterval(", "boot(")))
     try:
         ctx.eval(STUB + "\n" + js)
     except Exception as exc:
-        return fail(f"setups script does not compile: {str(exc)[:200]}")
-    ok(f"setups script compiles in a real engine ({engine})")
+        return fail(f"{name} script does not compile: {str(exc)[:200]}")
+    ok(f"{name} script compiles in a real engine ({engine})")
     bad = 0
-    try:
-        out = ctx.eval("renderSetups(SETUPS_DATA)")
-    except Exception as exc:
-        return fail(f"renderSetups threw: {str(exc)[:200]}")
-    if not out or len(out) < 200:
-        bad += fail(f"renderSetups returned {len(out or '')} chars")
-    if "undefined" in (out or ""):
-        bad += fail("renderSetups: the string 'undefined' reached the page")
-    if (out or "").count("<div") != (out or "").count("</div>"):
-        bad += fail("renderSetups: unbalanced <div> in output")
-    for i, table in enumerate(re.findall(r"<table>.*?</table>", out or "", re.S)):
-        for problem in check_rows(f"setups table {i + 1}", table):
-            bad += fail(problem)
-    if not bad:
-        ok(f"renderSetups renders, {len(out):,} chars, cells balanced")
+    for call in calls:
+        try:
+            out = ctx.eval(call)
+        except Exception as exc:
+            bad += fail(f"{call[:60]} threw: {str(exc)[:200]}")
+            continue
+        if not out or (len(out) < 200 and "(null" not in call):
+            bad += fail(f"{call[:60]} returned {len(out or '')} chars")
+        for word in ("undefined", "NaN"):
+            if word in (out or ""):
+                bad += fail(f"{call[:60]}: the string '{word}' reached the page")
+        if (out or "").count("<div") != (out or "").count("</div>"):
+            bad += fail(f"{call[:60]}: unbalanced <div> in output")
+        for i, table in enumerate(re.findall(r"<table[ >].*?</table>", out or "", re.S)):
+            for problem in check_rows(f"{name} table {i + 1}",
+                                      re.sub(r"<table [^>]*>", "<table>", table)):
+                bad += fail(problem)
+        if not bad:
+            ok(f"{call[:60]} renders, {len(out):,} chars, cells balanced")
     print()
     print("PAGE OK" if not bad else f"{bad} PROBLEM(S) - do not publish")
     return 1 if bad else 0
@@ -201,6 +206,15 @@ def main():
 
     if "function renderSetups" in html:
         return check_setups(ctx, engine, html)
+    if "function renderLab" in html:
+        # Each window, a filtered set, an asymmetric stop with a flat-by time,
+        # and no data at all: every branch of the page.
+        s = "defaultState(LAB_DATA)"
+        return check_setups(ctx, engine, html, name="scorecard", calls=(
+            f"renderLab(LAB_DATA, {s})",
+            f"renderLab(LAB_DATA, Object.assign({s}, {{win:'day', setup:'fade', regime:'negative'}}))",
+            f"renderLab(LAB_DATA, Object.assign({s}, {{sym:'GC', stop:10, target:20, link:false, flat:'00:00'}}))",
+            "renderLab(null, {})"))
 
     bad = 0
     js = "\n".join(l for l in script_of(html).split("\n")

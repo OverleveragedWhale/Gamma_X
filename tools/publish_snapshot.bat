@@ -127,17 +127,31 @@ if "%SETUPS_OK%"=="1" (
   if errorlevel 1 set "SETUPS_OK=0"
 )
 
+rem The scorecard lab (scorecard.html): every scored trade, replayable at any
+rem stop and target. Same rule: a failure keeps the previous page.
+set "LAB_OK=1"
+%PY% "%REPO%\lab.py" --pub "%PUB%" >> "%LOG%" 2>&1
+if errorlevel 1 set "LAB_OK=0"
+if "%LAB_OK%"=="1" (
+  %PY% "%REPO%\tools\check_page.py" "%PUB%\scorecard.html" >> "%LOG%" 2>&1
+  if errorlevel 1 set "LAB_OK=0"
+)
+
 cd /d "%PUB%"
 if "%SETUPS_OK%"=="0" (
   echo [%NOW%] WARN: setups page failed, previous one kept >> "%LOG%"
   git checkout -q -- setups.html setups.json >> "%LOG%" 2>&1
+)
+if "%LAB_OK%"=="0" (
+  echo [%NOW%] WARN: scorecard page failed, previous one kept >> "%LOG%"
+  git checkout -q -- scorecard.html >> "%LOG%" 2>&1
 )
 rem oi\ carries one open-interest fingerprint per session, which is what
 rem lets the page say whether a wall is being built or decaying. It is
 rem written once a day and pruned at 45 sessions, about 24 KB each, so it
 rem costs roughly a megabyte steady state. Without it here the history
 rem never leaves the machine that generated it and the other PC sees none.
-git add index.html data.json oi setups.html setups.json >> "%LOG%" 2>&1
+git add index.html data.json oi setups.html setups.json scorecard.html >> "%LOG%" 2>&1
 git diff --cached --quiet
 if not errorlevel 1 (
   echo [%NOW%] no change, nothing to publish >> "%LOG%"

@@ -218,29 +218,82 @@ def sessions(book, top, since=None, until=None, select="net"):
         if stamp.strftime("%H:%M") > ENTRY_HHMM or not g.is_trading_day(day):
             continue
         for sym in payload.get("symbols") or []:
-            if not sym.get("ok") or sym.get("regimes_from"):
-                continue          # failed, or a panel held from another session
-            # Only what the dashboard still publishes. The history holds
-            # symbols since dropped, and scoring them put figures for products
-            # nobody trades here into the calibration and the weekly log.
-            if sym.get("symbol") not in CURRENT:
-                continue
-            lv = levels_of(sym, book, top, select)
-            if not lv["call"] and not lv["put"]:
-                continue
-            regime = ((sym.get("regimes") or {}).get(book) or {}).get("regime")
-            chosen[(day, sym["symbol"])] = {
-                "date": day, "symbol": sym["symbol"], "at": stamp,
-                "spot": float(sym["spot"]), "regime": regime,
-                "contract": (sym.get("contract") or {}).get("symbol"),
-                "levels": lv,
-                "structure": structure_of(sym, book),
-                # Which option-chain era built these levels: ES and NQ moved
-                # from one chain to two on 2026-10-06, and the two eras are
-                # not the same levels.
-                "era": "multi" if len(sym.get("chains") or []) > 1 else "single",
-            }
+            entry = session_entry(sym, day, stamp, book, top, select)
+            if entry:
+                chosen[(day, sym["symbol"])] = entry
     return [chosen[k] for k in sorted(chosen)]
+
+
+def session_entry(sym, day, stamp, book, top, select):
+    """One symbol's levels from one snapshot, or None if not scoreable."""
+    if not sym.get("ok") or sym.get("regimes_from"):
+        return None               # failed, or a panel held from another session
+    # Only what the dashboard still publishes. The history holds symbols since
+    # dropped, and scoring them put figures for products nobody trades here
+    # into the calibration and the weekly log.
+    if sym.get("symbol") not in CURRENT:
+        return None
+    lv = levels_of(sym, book, top, select)
+    if not lv["call"] and not lv["put"]:
+        return None
+    regime = ((sym.get("regimes") or {}).get(book) or {}).get("regime")
+    return {
+        "date": day, "symbol": sym["symbol"], "at": stamp,
+        "spot": float(sym["spot"]), "regime": regime,
+        "contract": (sym.get("contract") or {}).get("symbol"),
+        "levels": lv,
+        "structure": structure_of(sym, book),
+        # Which option-chain era built these levels: ES and NQ moved from one
+        # chain to two on 2026-10-06, and the two eras are not the same levels.
+        "era": "multi" if len(sym.get("chains") or []) > 1 else "single",
+    }
+
+
+# ---------------------------------------------------------------- evening
+# The Globex evening into Asia, scored like the day. The map is the FIRST
+# clean snapshot after the 18:00 roll - by then the book has dropped the day's
+# expired options and the ratio stands on the newest cash close, so it is the
+# evening's own book - and its walls are traded from that snapshot to London's
+# open. "date" is the calendar evening: the evening of Monday trades into
+# Tuesday's session. Friday and Saturday evenings have no session.
+EVENING_MAP_FROM = "18:00"
+EVENING_MAP_TO = "21:00"   # a map later than this has missed the evening
+EVENING_END = "03:00"
+WINDOWS = ("day", "evening")
+
+
+def evening_sessions(book, top, since=None, until=None, select="net"):
+    chosen = {}
+    for sha, _ in snapshot_commits():
+        payload = payload_at(sha)
+        if not payload:
+            continue
+        stamp = generated_et(payload)
+        if not stamp:
+            continue
+        day = stamp.date()
+        if (since and day < since) or (until and day > until):
+            continue
+        hhmm = stamp.strftime("%H:%M")
+        if not EVENING_MAP_FROM <= hhmm < EVENING_MAP_TO or day.weekday() in (4, 5):
+            continue
+        for sym in payload.get("symbols") or []:
+            key = (day, sym.get("symbol"))
+            # The FIRST snapshot: a later one has seen the evening's bars.
+            if key in chosen and chosen[key]["at"] <= stamp:
+                continue
+            entry = session_entry(sym, day, stamp, book, top, select)
+            if entry:
+                chosen[key] = entry
+    return [chosen[k] for k in sorted(chosen)]
+
+
+def evening_bars(sym, day, start_hhmm):
+    """Bars from the evening map to EVENING_END, across midnight."""
+    b = bars(sym)
+    return ([r for r in b.get(day) or [] if r[0] >= start_hhmm]
+            + [r for r in b.get(day + timedelta(days=1)) or []
+               if r[0] < EVENING_END])
 
 
 # -------------------------------------------------------------------- bars
@@ -375,7 +428,115 @@ def fmt(v, nd=2):
 RULE_POINTS = {"NQ": 40.0, "GC": 10.0}
 
 
-def score_rules(since=None, until=None):
+def trade_path(rows, start, entry, direction, fill_bar_adverse_only):
+    """A trade's running worst and best, enough to replay ANY stop and target.
+
+    adv, fav   [[bar, points], ...] each time the running max grows, bars
+               counted from `start`. The first adv step at or past a stop is
+               where it stops out; the first fav step at or past a target is
+               where it pays; on the same bar the stop wins, as in simulate().
+               A fade's fill bar counts against only, as there.
+    marks      [[hh:mm, bar, points], ...] the open result at every half hour
+               and at the last bar, so a trade can be closed by a time.
+
+    This is derived from the bars without being them: no prices, only how far
+    each trade went for and against, so it can sit on a public page.
+    """
+    adv, fav, marks = [], [], []
+    worst = best = 0.0
+    seg = rows[start:]
+    for k, (t, hi, lo, cl) in enumerate(seg):
+        a = (entry - lo) if direction > 0 else (hi - entry)
+        f = (hi - entry) if direction > 0 else (entry - lo)
+        if k == 0 and fill_bar_adverse_only:
+            f = 0.0
+        if a > worst:
+            worst = a
+            adv.append([k, round(a, 4)])
+        if f > best:
+            best = f
+            fav.append([k, round(f, 4)])
+        end = (datetime.strptime(t, "%H:%M") + timedelta(minutes=5)).strftime("%H:%M")
+        if end[3:] in ("00", "30") or k == len(seg) - 1:
+            marks.append([end, k, round((cl - entry) * direction, 4)])
+    return adv, fav, marks
+
+
+def replay(t, stop, target):
+    """(R, how) for a stored trade at any stop and target, held to its end.
+    The page's replay() is this, line for line."""
+    ks = next((k for k, v in t["adv"] if v >= stop), None)
+    kt = next((k for k, v in t["fav"] if v >= target), None)
+    if ks is not None and (kt is None or ks <= kt):
+        return -1.0, "stop"
+    if kt is not None:
+        return target / stop, "target"
+    return t["marks"][-1][2] / stop, "close"
+
+
+def rule_trades(since=None, until=None):
+    """Every fade and breakout at every scored wall, day and evening, any
+    symbol still published, each with its path (trade_path).
+
+    Returns (trades, covered): covered is every (date, window, symbol) these
+    bars could score, so a merge knows which stored sessions they replace.
+    """
+    now = g.now_et().replace(tzinfo=None)
+    out, covered = [], set()
+    for win, rows_of, bars_of, end in (
+            ("day", sessions, session_bars, CLOSE_HHMM),
+            ("evening", evening_sessions, evening_bars, EVENING_END)):
+        for s in rows_of("near", 2, since, until, "nearest"):
+            sym = s["symbol"]
+            over = datetime.combine(
+                s["date"] + timedelta(days=1 if win == "evening" else 0),
+                datetime.strptime(end, "%H:%M").time())
+            if over > now or not s["contract"]:
+                continue              # still trading, or nothing to price it
+            try:
+                rb = bars_of(s["contract"], s["date"], s["at"].strftime("%H:%M"))
+            except Exception:
+                continue
+            if len(rb) < 6:
+                continue
+            covered.add((s["date"].isoformat(), win, sym))
+            flip = s["levels"].get("flip")
+            open_px = rb[0][3]
+            for side in ("call", "put"):
+                for level in s["levels"][side]:
+                    if (level <= open_px) if side == "call" else (level >= open_px):
+                        continue      # passed before the map: never a trade
+                    for name, finder, fill in (("fade", fade_event, True),
+                                               ("breakout", breakout_event, False)):
+                        ev = finder(rb, level, side)
+                        if not ev:
+                            continue
+                        start, entry, d = ev
+                        adv, fav, marks = trade_path(rb, start, entry, d, fill)
+                        out.append({
+                            "date": s["date"].isoformat(), "window": win,
+                            "symbol": sym, "setup": name, "side": side,
+                            "level": round(level, 2), "regime": s["regime"],
+                            "flip_side": (("above" if entry > flip else "below")
+                                          if flip else None),
+                            "era": s["era"], "map_at": s["at"].strftime("%H:%M"),
+                            "time": rb[start if fill else start - 1][0],
+                            "entry": round(entry, 2),
+                            "adv": adv, "fav": fav, "marks": marks})
+    return out, covered
+
+
+def merge_trades(stored, fresh, covered):
+    """Fresh trades replace stored ones for every session the bars covered;
+    every other stored session is kept. Yahoo serves 60 days of 5-minute bars,
+    so without this the record could never grow past two months."""
+    keep = [t for t in stored
+            if (t["date"], t.get("window", "day"), t["symbol"]) not in covered]
+    return sorted(keep + fresh, key=lambda t: (t["date"], t.get("window", "day"),
+                                               t["symbol"], t["time"]))
+
+
+def score_rules(trades, window="day"):
     """Fades and breakouts under RULE_POINTS, split by gamma context.
 
     regime   the near book's net GEX sign in the snapshot the levels came from
@@ -389,39 +550,20 @@ def score_rules(since=None, until=None):
     15 won) against -0.09R in positive; breakouts lost in both (-0.29R /
     -0.24R). Against the textbook, which has positive gamma favouring fades.
     """
-    now = g.now_et()
-    live = now.date() if now.strftime("%H:%M") < CLOSE_HHMM else None
     acc = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-    for s in sessions("near", 2, since, until, "nearest"):
-        sym = s["symbol"]
-        if sym not in RULE_POINTS or s["date"] == live or not s["contract"]:
-            continue
-        try:
-            rb = session_bars(s["contract"], s["date"], s["at"].strftime("%H:%M"))
-        except Exception:
-            continue
-        if len(rb) < 6:
+    for t in trades:
+        sym = t["symbol"]
+        if sym not in RULE_POINTS or t.get("window", "day") != window:
             continue
         pts = RULE_POINTS[sym]
-        flip = s["levels"].get("flip")
-        open_px = rb[0][3]
-        for side in ("call", "put"):
-            for level in s["levels"][side]:
-                if (level <= open_px) if side == "call" else (level >= open_px):
-                    continue
-                for name, finder, fill in (("fade", fade_event, True),
-                                           ("breakout", breakout_event, False)):
-                    ev = finder(rb, level, side)
-                    if not ev:
-                        continue
-                    start, entry, d = ev
-                    r, how = simulate(rb, start, entry, d, pts, pts, fill)
-                    rec = (r, how == "target")
-                    acc[sym][name]["all"].append(rec)
-                    if s["regime"] in ("positive", "negative"):
-                        acc[sym][name][s["regime"]].append(rec)
-                    if flip:
-                        acc[sym][name]["above" if entry > flip else "below"].append(rec)
+        r, how = replay(t, pts, pts)
+        rec = (r, how == "target")
+        grp = acc[sym][t["setup"]]
+        grp["all"].append(rec)
+        if t["regime"] in ("positive", "negative"):
+            grp[t["regime"]].append(rec)
+        if t["flip_side"]:
+            grp[t["flip_side"]].append(rec)
     out = {}
     for sym, setups in acc.items():
         for name, groups in setups.items():
@@ -663,7 +805,7 @@ def fmt_r(v):
 
 
 def score(book, top, since=None, until=None, select="net", era="all",
-          verbose=False):
+          verbose=False, trades_path=None):
     rows = sessions(book, top, since, until, select)
     if era != "all":
         rows = [r for r in rows if r["era"] == era]
@@ -826,18 +968,28 @@ def score(book, top, since=None, until=None, select="net", era="all",
     print("Sessions with bars: "
           + ", ".join(f"{k} {v}" for k, v in sorted(counted.items())))
 
-    rules = score_rules(since, until)
-    if rules:
-        print(f"\nYour rules (fixed 1:1 points), by gamma context:")
-        for sym in sorted(rules):
+    fresh, covered = rule_trades(since, until)
+    stored = []
+    if trades_path and Path(trades_path).exists():
+        stored = json.loads(Path(trades_path).read_text(encoding="utf-8"))["trades"]
+    all_trades = merge_trades(stored, fresh, covered)
+    lo, hi = (since.isoformat() if since else ""), (until.isoformat() if until else "9")
+    window_trades = [t for t in all_trades if lo <= t["date"] <= hi]
+    rules = score_rules(window_trades, "day")
+    rules_evening = score_rules(window_trades, "evening")
+    for label, rs in (("day", rules), ("evening, 18:00 map to 03:00", rules_evening)):
+        if not rs:
+            continue
+        print(f"\nYour rules (fixed 1:1 points), {label}, by gamma context:")
+        for sym in sorted(rs):
             for name in APPROACHES:
-                x = rules[sym].get(name) or {}
+                x = rs[sym].get(name) or {}
                 parts = []
                 for k in ("all", "positive", "negative", "above", "below"):
                     if k in x:
                         parts.append(f"{k} {x[k]['won']}/{x[k]['n']} "
                                      f"{fmt_r(x[k]['exp'])}")
-                print(f"  {sym} {rules[sym]['points']:g}pt {name:<9} "
+                print(f"  {sym} {rs[sym]['points']:g}pt {name:<9} "
                       + "   ".join(parts))
 
     orb = score_orb(since, until)
@@ -863,7 +1015,8 @@ def score(book, top, since=None, until=None, select="net", era="all",
             "from": days[0].isoformat() if days else None,
             "to": days[-1].isoformat() if days else None,
             "scored_at": g.now_et().strftime("%Y-%m-%d"),
-            "symbols": calib, "orb": orb, "rules": rules}
+            "symbols": calib, "orb": orb, "rules": rules,
+            "rules_evening": rules_evening, "_trades": all_trades}
 
 
 LOG_HEADER = ["scored_at", "days", "from", "to", "symbol", "side", "setup",
@@ -965,11 +1118,24 @@ def main():
                     help="append this run's figures to a CSV history")
     ap.add_argument("--split-log", metavar="PATH",
                     help="write the open-location split to its own CSV history")
+    ap.add_argument("--trades", metavar="PATH",
+                    help="every rule trade with its path, merged into PATH; "
+                         "the scorecard lab replays these")
     ap.add_argument("--verbose", action="store_true", help="print every trade")
     a = ap.parse_args()
     day = lambda v: datetime.strptime(v, "%Y-%m-%d").date() if v else None
     out = score(a.book, a.top, day(a.since), day(a.until), a.select, a.era,
-                a.verbose)
+                a.verbose, a.trades)
+    trades = out.pop("_trades")
+    if a.trades:
+        Path(a.trades).write_text(json.dumps(
+            {"scored_at": out["scored_at"], "points": RULE_POINTS,
+             "multipliers": {i["future"]: i["multiplier"] for i in g.INSTRUMENTS},
+             "evening": {"map_from": EVENING_MAP_FROM, "map_to": EVENING_MAP_TO,
+                         "end": EVENING_END},
+             "day": {"map_at": ENTRY_HHMM, "end": CLOSE_HHMM},
+             "trades": trades}, separators=(",", ":")), encoding="utf-8")
+        print(f"trades -> {a.trades} ({len(trades)})")
     if a.json:
         Path(a.json).write_text(json.dumps(out, indent=2), encoding="utf-8")
         print(f"\ncalibration -> {a.json}")

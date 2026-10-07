@@ -3058,7 +3058,7 @@ code.pine{background:var(--raised);border:1px solid var(--line);border-radius:4p
     <span>updated <b id="upd">--</b></span>
     <span><span id="cdlab">next refresh</span> <b id="cd">--</b></span>
     <button id="refresh">Refresh now</button>
-    <a class="navlink" href="setups.html">Setups &rarr;</a>
+    <a class="navlink" href="setups.html">Setups &rarr;</a><a class="navlink" href="scorecard.html" style="margin-left:0">Scorecard &rarr;</a>
   </div>
 </header>
 <div id="panels"></div>

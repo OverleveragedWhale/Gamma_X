@@ -51,6 +51,7 @@ jobs:
           python tools/score_levels.py --book near --top 2 --select nearest \
               --json calibration.json --log calibration_history.csv \
               --split-log calibration_splits.csv \
+              --trades rules_trades.json \
               | tee "$RUNNER_TEMP/score.txt"
           {
             echo '### Level scorecard'
@@ -64,7 +65,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add calibration.json calibration_history.csv calibration_splits.csv
+          git add calibration.json calibration_history.csv calibration_splits.csv rules_trades.json
           if git diff --cached --quiet; then
             echo "calibration unchanged"
             exit 0

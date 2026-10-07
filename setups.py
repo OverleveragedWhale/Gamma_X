@@ -379,7 +379,7 @@ tr.hot td{background:rgba(217,164,65,.07)}
 <header>
   <h1>Gamma<span class="g">/</span>Setups<b style="color:var(--brass)">*</b></h1>
   <div class="meta" id="meta"></div>
-  <a class="navlink" href="./">&larr; Dashboard</a>
+  <a class="navlink" href="scorecard.html">Scorecard</a><a class="navlink" href="./" style="margin-left:0">Dashboard</a>
 </header>
 <div id="root"></div>
 </div>

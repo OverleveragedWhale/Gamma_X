@@ -933,5 +933,121 @@
         }
       }
     }
+  },
+  "rules_evening": {
+    "GC": {
+      "points": 10.0,
+      "fade": {
+        "all": {
+          "n": 12,
+          "won": 5,
+          "exp": -0.065
+        },
+        "negative": {
+          "n": 11,
+          "won": 5,
+          "exp": 0.02
+        },
+        "below": {
+          "n": 11,
+          "won": 5,
+          "exp": 0.02
+        },
+        "positive": {
+          "n": 1,
+          "won": 0,
+          "exp": -1.0
+        },
+        "above": {
+          "n": 1,
+          "won": 0,
+          "exp": -1.0
+        }
+      },
+      "breakout": {
+        "all": {
+          "n": 11,
+          "won": 7,
+          "exp": 0.333
+        },
+        "negative": {
+          "n": 10,
+          "won": 6,
+          "exp": 0.266
+        },
+        "below": {
+          "n": 10,
+          "won": 6,
+          "exp": 0.266
+        },
+        "positive": {
+          "n": 1,
+          "won": 1,
+          "exp": 1.0
+        },
+        "above": {
+          "n": 1,
+          "won": 1,
+          "exp": 1.0
+        }
+      }
+    },
+    "NQ": {
+      "points": 40.0,
+      "fade": {
+        "all": {
+          "n": 6,
+          "won": 1,
+          "exp": -0.667
+        },
+        "positive": {
+          "n": 5,
+          "won": 1,
+          "exp": -0.6
+        },
+        "above": {
+          "n": 4,
+          "won": 1,
+          "exp": -0.5
+        },
+        "below": {
+          "n": 2,
+          "won": 0,
+          "exp": -1.0
+        },
+        "negative": {
+          "n": 1,
+          "won": 0,
+          "exp": -1.0
+        }
+      },
+      "breakout": {
+        "all": {
+          "n": 6,
+          "won": 5,
+          "exp": 0.667
+        },
+        "positive": {
+          "n": 5,
+          "won": 4,
+          "exp": 0.6
+        },
+        "above": {
+          "n": 4,
+          "won": 3,
+          "exp": 0.5
+        },
+        "below": {
+          "n": 2,
+          "won": 2,
+          "exp": 1.0
+        },
+        "negative": {
+          "n": 1,
+          "won": 1,
+          "exp": 1.0
+        }
+      }
+    }
   }
 }

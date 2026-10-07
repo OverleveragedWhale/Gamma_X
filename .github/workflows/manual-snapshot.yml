@@ -58,13 +58,17 @@ jobs:
             echo "setups page failed; previous one kept"
             git -C pub checkout -q -- setups.html setups.json 2>/dev/null || true
           fi
+          if ! { python lab.py --pub pub && python tools/check_page.py pub/scorecard.html; }; then
+            echo "scorecard page failed; previous one kept"
+            git -C pub checkout -q -- scorecard.html 2>/dev/null || true
+          fi
 
           cd pub
           # oi/ as well, as the PC's publisher does: the session's open-interest
           # fingerprint is written once, by its first run, and if that run is
           # this one and the file stays behind, the next day's OI change column
           # has nothing to compare against.
-          git add index.html data.json oi setups.html setups.json
+          git add index.html data.json oi setups.html setups.json scorecard.html
           if git diff --cached --quiet; then
             echo "figures match the live page; nothing to publish"
             echo "published=false" >> "$GITHUB_OUTPUT"
