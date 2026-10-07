@@ -18,10 +18,10 @@ So this page does exactly that and no more:
   map     frozen once per session from the first clean snapshot at or after
           09:50 (after Cboe's routine 09:45 outage): the nearest walls each
           side - the same walls, count and book the scorecard measured - and
-          the session's gamma regime. Traded symbols carry both setups as the
+          the session's gamma regime. Every symbol carries both setups as the
           trader's RULES (fixed 1:1 points, tools/score_levels.RULE_POINTS),
           each with its base rate in every regime and a verdict for today's;
-          watched symbols (ES) carry walls only, as context.
+          ES is shown in full but marked reference, not traded.
   events  each run replays the session's COMPLETED 5-minute futures bars from
           09:50 against that map, so a touch between two runs is never missed.
           Every wall/setup goes watching -> armed (within one stop) ->
@@ -133,13 +133,39 @@ def rule_verdict(stats):
     return "ok"
 
 
+def wall_setups(side, rules, regime):
+    up = side == "call"
+    out = {}
+    for setup in SETUPS:
+        base = rules.get(setup) or {}
+        out[setup] = {"direction": ((-1 if up else +1) if setup == "fade"
+                                    else (+1 if up else -1)),
+                      "base": base, "verdict": rule_verdict(base.get(regime))}
+    return out
+
+
+def with_rules(smap, calib, win):
+    """A map frozen while its symbol had no rules (ES before 2026-10-07 was
+    walls only) gets them, from the walls and regime it already froze."""
+    name = smap["symbol"]
+    if smap.get("points") or name not in sl.RULE_POINTS:
+        return smap
+    rules = ((calib.get(WINDOWS[win]["rules"]) or {}).get(name) or {})
+    smap = dict(smap, points=sl.RULE_POINTS[name],
+                traded=name not in sl.REFERENCE_ONLY)
+    smap.pop("mode", None)
+    smap["walls"] = [dict(w, setups=wall_setups(w["side"], rules, smap.get("regime")))
+                     for w in smap["walls"]]
+    return smap
+
+
 def build_symbol_map(sym, inst, calib, stamp, win="day"):
     """The session map for one symbol.
 
-    Traded symbols (sl.RULE_POINTS) get both setups as rules - fixed 1:1 in
-    points - each carrying its base rate in every gamma context, measured in
-    THIS window, and a verdict for the session's regime. Symbols watched
-    rather than traded (ES) get walls only: context for the others.
+    Every symbol gets both setups as rules - fixed 1:1 in points
+    (sl.RULE_POINTS) - each carrying its base rate in every gamma context,
+    measured in THIS window, and a verdict for the session's regime. ES is
+    shown in full but flagged traded=False: a reference for NQ, not a trade.
     """
     top = calib.get("top") or 2
     lv = sl.levels_of(sym, g.PLAN_BOOK, top, "nearest")
@@ -147,22 +173,10 @@ def build_symbol_map(sym, inst, calib, stamp, win="day"):
     name = sym["symbol"]
     pts = sl.RULE_POINTS.get(name)
     rules = ((calib.get(WINDOWS[win]["rules"]) or {}).get(name) or {})
-    walls = []
-    for side in ("call", "put"):
-        up = side == "call"
-        for level in lv[side]:
-            w = {"side": side, "level": round(level, 2)}
-            if pts:
-                w["setups"] = {}
-                for setup in SETUPS:
-                    base = rules.get(setup) or {}
-                    w["setups"][setup] = {
-                        "direction": ((-1 if up else +1) if setup == "fade"
-                                      else (+1 if up else -1)),
-                        "base": base,
-                        "verdict": rule_verdict(base.get(regime))}
-            walls.append(w)
-    return {"symbol": name, "mode": "rules" if pts else "awareness",
+    walls = [{"side": side, "level": round(level, 2),
+              "setups": wall_setups(side, rules, regime)}
+             for side in ("call", "put") for level in lv[side]]
+    return {"symbol": name, "traded": name not in sl.REFERENCE_ONLY,
             "points": pts, "contract": (sym.get("contract") or {}).get("symbol"),
             "multiplier": inst["multiplier"], "frozen_at": stamp,
             "regime": regime, "spot_at_map": sym.get("spot"),
@@ -177,8 +191,6 @@ def evaluate(smap, bars, session_over):
     Entry and the bar rules are the scorecard's; stop and target are the
     rule's fixed points either side of the actual entry.
     """
-    if smap.get("mode") != "rules":
-        return []
     last = bars[-1][3] if bars else None
     open_px = bars[0][3] if bars else None
     pts = smap["points"]
@@ -299,7 +311,8 @@ def step_window(win, ws, history, payload, calib, insts, now):
     """Advance one session window by one run. Returns (window, history)."""
     spec = WINDOWS[win]
     due = session_due(win, now)
-    session, maps = ws.get("session"), ws.get("maps") or {}
+    session = ws.get("session")
+    maps = {k: with_rules(v, calib, win) for k, v in (ws.get("maps") or {}).items()}
     # A new session replaces the old one when its map time comes; one left
     # unfinished - the PC off at its end, say - is finished first so its
     # setups still reach the record. Yahoo keeps the bars for days.
@@ -445,7 +458,6 @@ td.num,th.num{text-align:right}
 .s-won{color:var(--jade);border-color:var(--jade)}
 .s-lost{color:var(--verm);border-color:var(--verm)}
 tr.dim td{opacity:.55}
-tr.hot td{background:rgba(217,164,65,.07)}
 .g-neg{color:#ffb38a;border-color:rgba(224,96,63,.5)}
 .g-pos{color:#9fd8bd;border-color:rgba(75,191,138,.5)}
 .empty{color:var(--muted);font-size:12px;padding:6px 0}
@@ -489,28 +501,11 @@ function ruleCell(st, regime){
 }
 
 function mapTable(sm){
-  if(sm.mode==="awareness"){
-    return "";
-  }
   const rows = sm.walls.map(w=>`<tr><td class="side-${w.side[0]}">${w.side.toUpperCase()}</td>`
     +`<td class="num">${fx(w.level)}</td><td>${ruleCell(w.setups.fade, sm.regime)}</td>`
     +`<td>${ruleCell(w.setups.breakout, sm.regime)}</td></tr>`).join("");
   return `<div class="scroll"><table><thead><tr><th>Wall</th><th class="num">Level</th>`
     +`<th>Fade it</th><th>Trade the break</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-}
-
-function awareness(s){
-  const m=s.map||{}, last=s.last;
-  const rows=(m.walls||[]).slice().sort((a,b)=>b.level-a.level).map(w=>{
-    const d = last!=null ? w.level-last : null;
-    const near = d!=null && Math.abs(d) <= 0.0015*last;
-    return `<tr class="${near?"hot":""}"><td class="side-${w.side[0]}">${w.side.toUpperCase()}</td>`
-      +`<td class="num">${fx(w.level)}</td>`
-      +`<td class="num">${d==null?"—":(d>0?"+":"")+fx(d)} pts</td>`
-      +`<td>${near?chip("at a wall","s-armed"):""}</td></tr>`;
-  }).join("");
-  return `<div class="scroll"><table><thead><tr><th>Wall</th><th class="num">Level</th>`
-    +`<th class="num">From price</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function eventRows(evs, mult){
@@ -562,25 +557,21 @@ function renderSetups(d, win){
   const w = d.windows.find(x=>x.name===win) || d.windows[0];
   const evening = w.name==="evening";
   const syms = (w.symbols||[]).slice().sort((a,b)=>
-    ((a.map||{}).mode==="awareness") - ((b.map||{}).mode==="awareness"));
+    ((a.map||{}).traded===false) - ((b.map||{}).traded===false));
   let html = windowTabs(d, w.name);
   if(!w.session) html += `<div class="panel empty">` + (evening
     ? `The evening map freezes at the first clean snapshot after ${esc(w.map_from)} ET, Sunday to Thursday, and its setups run to ${esc(w.end)} ET.`
     : `The session map freezes at ${esc(w.map_from)} ET on trading days.`) + `</div>`;
   for(const s of syms){
     const m = s.map||{};
-    const aware = m.mode==="awareness";
     html += `<div class="panel"><div class="phead"><span class="sym">${esc(s.symbol)}</span>`
-      + (aware ? chip("awareness only") : chip(`rules: 1:1, ${fx(m.points,0)} pts`))
+      + chip(`rules: 1:1, ${fx(m.points,0)} pts`)
+      + (m.traded===false ? ` ${chip("reference, not traded")}` : "")
       + ` ${regimeChip(m.regime)}`
       + (m.basis==="live" ? ` ${chip("gamma at live price")}` : "")
       + `<span class="sub">map frozen ${esc(m.frozen_at)} ET · flip ${fx(m.flip)}`
       + (s.last!=null?` · last ${fx(s.last)} (${esc(s.bars_to)} bar)`:"")+`</span></div>`
       + (s.error?`<div class="err">${esc(s.error)}</div>`:"");
-    if(aware){
-      html += `<div class="k">Walls, for context</div>` + awareness(s) + `</div>`;
-      continue;
-    }
     html += `<div class="k">Setups ${evening?"tonight":"today"}</div>` + eventRows(s.events||[], m.multiplier)
       + `<div class="k">Session map: each rule's ${evening?"evening ":""}history in each gamma regime</div>` + mapTable(m) + `</div>`;
   }

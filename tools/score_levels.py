@@ -425,12 +425,13 @@ def fmt(v, nd=2):
 
 
 # ------------------------------------------------------------------ rules
-# The trader's own rules, as traded: a fixed 1:1 stop and target in futures
-# points, both setups, on the symbols actually traded. ES is watched, not
-# traded, so it has none. Measured alongside the calibrated figures, split by
-# the gamma context known when each trade triggers, because that is the call
-# the trader makes at the screen.
-RULE_POINTS = {"NQ": 40.0, "GC": 10.0}
+# The trader's own rules: a fixed 1:1 stop and target in futures points, both
+# setups. ES is not traded but is measured and shown exactly like the others,
+# as a reference for NQ - REFERENCE_ONLY marks it so the pages say so. Measured
+# alongside the calibrated figures, split by the gamma context known when each
+# trade triggers, because that is the call the trader makes at the screen.
+RULE_POINTS = {"NQ": 40.0, "GC": 10.0, "ES": 10.0}
+REFERENCE_ONLY = {"ES"}
 
 
 def trade_path(rows, start, entry, direction, fill_bar_adverse_only):
@@ -1136,6 +1137,7 @@ def main():
     if a.trades:
         Path(a.trades).write_text(json.dumps(
             {"scored_at": out["scored_at"], "points": RULE_POINTS,
+             "reference": sorted(REFERENCE_ONLY),
              "multipliers": {i["future"]: i["multiplier"] for i in g.INSTRUMENTS},
              "evening": {"map_from": EVENING_MAP_FROM, "map_to": EVENING_MAP_TO,
                          "end": EVENING_END},

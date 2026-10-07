@@ -353,7 +353,7 @@ function controls(d){
   const num = (k, label) => `<label>${label}<input type="number" min="0" step="${step}" value="${esc(S[k])}" onchange="set('${k}',this.value)"></label>`;
   const date = (k, label) => `<label>${label}<input type="date" value="${esc(S[k])}" onchange="set('${k}',this.value)"></label>`;
   document.getElementById("controls").innerHTML =
-      sel("sym","Symbol", syms.map(s=>[s, s + ((d.points||{})[s]?"":" (watched)")]))
+      sel("sym","Symbol", syms.map(s=>[s, s + ((d.reference||[]).includes(s)?" (reference, not traded)":"")]))
     + sel("setup","Setup", [["all","Both"],["fade","Fade"],["breakout","Breakout"]])
     + sel("regime","Gamma regime", [["all","Any"],["negative","Negative"],["positive","Positive"]])
     + sel("flip","Entry vs flip", [["all","Any"],["below","Below flip"],["above","Above flip"]])
