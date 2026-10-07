@@ -77,7 +77,7 @@ import json
 import subprocess
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -351,6 +351,36 @@ MIN_STOP_PCT = 0.10       # floor on a calibrated stop, percent of spot. About
                           # its close-out as dozens of R.
 
 
+def open_location(series, day):
+    """'in' or 'out': the 09:30 price against the prior session's 09:30-16:00
+    range, or None if either is missing.
+
+    Logged weekly as a split, not used by the plans. On 2026-10-07, over 33
+    sessions, fades did +0.16R when the open was inside the prior range and
+    -0.47R outside, breakouts the reverse (-0.13R / +0.18R) - the only split
+    where both setups lined up with auction theory, at about 1.8 standard
+    errors. Suggestive, not acted on: this records whether it holds.
+    """
+    days = bars(series)
+    today = days.get(day) or []
+    at_open = [b for b in today if b[0] == "09:25"] or \
+              [b for b in today if b[0] == "09:30"]
+    if not at_open:
+        return None
+    px = at_open[0][3]
+    d = day
+    for _ in range(6):
+        d = d - timedelta(days=1)
+        if not g.is_trading_day(d):
+            continue
+        prev = [b for b in (days.get(d) or []) if "09:30" <= b[0] < "16:00"]
+        if prev:
+            lo, hi = min(b[2] for b in prev), max(b[1] for b in prev)
+            return "in" if lo <= px <= hi else "out"
+        return None
+    return None
+
+
 def summarise(evs):
     """Fit a stop to these trades, then score every target multiple.
 
@@ -380,6 +410,12 @@ def summarise(evs):
         eras[e["era"]].append(e["r"][PLAN_R])
     for era, rs in eras.items():
         out["by_era"][era] = {"n": len(rs), "exp_plan": round(sum(rs) / len(rs), 3)}
+    locs = defaultdict(list)
+    for e in evs:
+        if e.get("loc"):
+            locs[e["loc"]].append(e["r"][PLAN_R])
+    out["by_open"] = {k: {"n": len(rs), "exp_plan": round(sum(rs) / len(rs), 3)}
+                      for k, rs in locs.items()}
     return out
 
 
@@ -441,6 +477,8 @@ def score(book, top, since=None, until=None, select="net", era="all",
                     wrong_side[sym] += 1
                     continue
                 levels[sym][side] += 1
+                if "loc" not in s:
+                    s["loc"] = open_location(series, day)
                 for name, finder, fill in (("fade", fade_event, True),
                                            ("breakout", breakout_event, False)):
                     ev = finder(rb, level, side)
@@ -453,7 +491,10 @@ def score(book, top, since=None, until=None, select="net", era="all",
                     trades[sym][side][name].append({
                         "rows": rb, "start": start, "entry": entry,
                         "dir": direction, "fill": fill, "adv": ex[0],
-                        "best": ex[1], "era": s["era"], "date": day})
+                        "best": ex[1], "era": s["era"], "date": day,
+                        # Only once the open is known: a trade entered before
+                        # 09:30 could not have been filtered on it.
+                        "loc": s["loc"] if rb[start][0] >= "09:30" else None})
                     if verbose:
                         print(f"  {day} {sym} {side} {name:<8} {level:,.2f} "
                               f"entry {entry:,.2f} heat {ex[0]:.2f} "
@@ -558,6 +599,36 @@ LOG_HEADER = ["scored_at", "days", "from", "to", "symbol", "side", "setup",
               "n", "rate", "stop_pct", f"exp_{PLAN_R:g}R", f"win_{PLAN_R:g}R"]
 
 
+SPLIT_HEADER = ["scored_at", "days", "from", "to", "symbol", "side", "setup",
+                "split", "value", "n", f"exp_{PLAN_R:g}R"]
+
+
+def append_split_log(path, out):
+    """The open-location split, one row per symbol, side, setup and value.
+
+    Its own file so the main log keeps its format; same-day rows replaced.
+    """
+    path = Path(path)
+    rows = []
+    if path.exists():
+        with path.open(newline="", encoding="utf-8") as fh:
+            rows = [r for r in csv.reader(fh)][1:]
+    rows = [r for r in rows if r and r[0] != out["scored_at"]]
+    for sym, sides in sorted(out["symbols"].items()):
+        for side, v in sorted(sides.items()):
+            if not isinstance(v, dict):
+                continue
+            for name in APPROACHES:
+                for val, x in sorted(((v.get(name) or {}).get("by_open") or {}).items()):
+                    rows.append([out["scored_at"], out["days"], out["from"],
+                                 out["to"], sym, side, name, "open_vs_prior_range",
+                                 val, x["n"], x["exp_plan"]])
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(SPLIT_HEADER)
+        w.writerows(rows)
+
+
 def append_log(path, out):
     """One row per symbol, side and setup, so verdict drift is on record.
 
@@ -600,6 +671,8 @@ def main():
                     help="write the calibration the dashboard reads")
     ap.add_argument("--log", metavar="PATH",
                     help="append this run's figures to a CSV history")
+    ap.add_argument("--split-log", metavar="PATH",
+                    help="write the open-location split to its own CSV history")
     ap.add_argument("--verbose", action="store_true", help="print every trade")
     a = ap.parse_args()
     day = lambda v: datetime.strptime(v, "%Y-%m-%d").date() if v else None
@@ -611,6 +684,9 @@ def main():
     if a.log:
         append_log(a.log, out)
         print(f"history -> {a.log}")
+    if a.split_log:
+        append_split_log(a.split_log, out)
+        print(f"splits -> {a.split_log}")
     return 0
 
 

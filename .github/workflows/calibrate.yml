@@ -50,6 +50,7 @@ jobs:
           set -euo pipefail
           python tools/score_levels.py --book near --top 2 --select nearest \
               --json calibration.json --log calibration_history.csv \
+              --split-log calibration_splits.csv \
               | tee "$RUNNER_TEMP/score.txt"
           {
             echo '### Level scorecard'
@@ -63,7 +64,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add calibration.json calibration_history.csv
+          git add calibration.json calibration_history.csv calibration_splits.csv
           if git diff --cached --quiet; then
             echo "calibration unchanged"
             exit 0
@@ -71,6 +72,6 @@ jobs:
           span=$(python -c "import json;d=json.load(open('calibration.json'));print(f\"{d['days']} sessions, {d['from']} to {d['to']}\")")
           git commit -m "Refresh trade-plan calibration ($span)"
           # main may have moved while this ran; rebase onto it rather than
-          # failing, since these two files are only ever written here.
+          # failing, since these files are only ever written here.
           git pull --rebase --quiet origin main
           git push origin HEAD:main
