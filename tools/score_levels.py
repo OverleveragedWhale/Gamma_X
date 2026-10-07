@@ -419,6 +419,126 @@ def summarise(evs):
     return out
 
 
+# --------------------------------------------------------- opening range
+ORB_CUTOFF = "09:30"      # context only from snapshots published before this
+ORB_LAST_ENTRY = "15:00"
+
+
+def orb_context(since=None, until=None):
+    """Pre-open gamma context per (date, symbol): regime, flip, nearby walls.
+
+    From the last snapshot published BEFORE 09:30, so everything an ORB split
+    uses was known before the range even formed.
+    """
+    chosen = {}
+    for sha, _ in snapshot_commits():
+        p = payload_at(sha)
+        if not p:
+            continue
+        stamp = generated_et(p)
+        if not stamp or stamp.strftime("%H:%M") >= ORB_CUTOFF:
+            continue
+        day = stamp.date()
+        if (since and day < since) or (until and day > until):
+            continue
+        if not g.is_trading_day(day):
+            continue
+        for sym in p.get("symbols") or []:
+            if (not sym.get("ok") or sym.get("regimes_from")
+                    or sym.get("symbol") not in CURRENT):
+                continue
+            lv = levels_of(sym, "near", 3, "nearest")
+            if not lv["call"] and not lv["put"]:
+                continue        # a feed-gap snapshot with no walls
+            near = (sym.get("regimes") or {}).get("near") or {}
+            chosen[(day, sym["symbol"])] = {
+                "date": day, "symbol": sym["symbol"],
+                "contract": (sym.get("contract") or {}).get("symbol"),
+                "regime": near.get("regime"), "flip": near.get("flip"),
+                "walls": lv["call"] + lv["put"]}
+    return [chosen[k] for k in sorted(chosen)]
+
+
+def score_orb(since=None, until=None):
+    """15-minute opening-range breakout, split by pre-open gamma context.
+
+    Rules fixed on 2026-10-07 and NOT fitted: range = 09:30-09:45 high/low;
+    entry on the first 5-minute close beyond it up to 15:00, one per session;
+    stop at the far side of the range ("range") or its midpoint ("mid");
+    1.5R target; a bar touching both is the stop; open trades marked at the
+    close. Logged weekly, never shown on the page.
+
+    Why it is logged: over 36 sessions to 2026-10-06 it paid +0.61R when the
+    09:30 price was ABOVE the near-book gamma flip and -0.33R below it, for
+    long and short breaks alike, and better with no published wall between
+    entry and target (+0.39R clear, -0.06R blocked) - against the textbook
+    view that negative gamma favours breakouts. About 2.3 standard errors on
+    a few dozen comparisons; this records whether it survives.
+    """
+    now = g.now_et()
+    live = now.date() if now.strftime("%H:%M") < CLOSE_HHMM else None
+    trades = []
+    for c in orb_context(since, until):
+        if c["date"] == live or not c["contract"]:
+            continue
+        try:
+            days = bars(c["contract"])
+        except Exception:
+            continue
+        today = days.get(c["date"]) or []
+        rth = [b for b in today if "09:30" <= b[0] < CLOSE_HHMM]
+        first = [b for b in rth if b[0] in ("09:30", "09:35", "09:40")]
+        if len(first) < 3 or len(rth) < 30:
+            continue
+        pre = [b for b in today if b[0] == "09:25"]
+        open_px = pre[0][3] if pre else first[0][3]
+        hi, lo = max(b[1] for b in first), min(b[2] for b in first)
+        after = [b for b in rth if b[0] >= "09:45"]
+        entry_i = next((i for i, b in enumerate(after)
+                        if b[0] <= ORB_LAST_ENTRY and (b[3] > hi or b[3] < lo)),
+                       None)
+        if entry_i is None or entry_i + 1 >= len(after):
+            continue
+        entry = after[entry_i][3]
+        direction = +1 if entry > hi else -1
+        rec = {"symbol": c["symbol"],
+               "flip": (("above" if open_px > c["flip"] else "below")
+                        if c["flip"] else None),
+               "regime": c["regime"], "r": {}}
+        for stop_name, stop_px in (("range", lo if direction > 0 else hi),
+                                   ("mid", (hi + lo) / 2)):
+            risk = abs(entry - stop_px)
+            if risk <= 0:
+                continue
+            r, _ = simulate(after, entry_i + 1, entry, direction, risk,
+                            risk * PLAN_R, False)
+            rec["r"][stop_name] = r
+            if stop_name == "range":
+                tgt = entry + direction * risk * PLAN_R
+                a, b = sorted((entry, tgt))
+                rec["path"] = ("blocked" if any(a < w < b for w in c["walls"])
+                               else "clear")
+        trades.append(rec)
+
+    out = {}
+    for sym in sorted({t["symbol"] for t in trades}) + ["ALL"]:
+        sub = [t for t in trades if sym == "ALL" or t["symbol"] == sym]
+        for stop_name in ("range", "mid"):
+            cell = out.setdefault(sym, {}).setdefault(stop_name, {})
+            for split, key in (("all", lambda t: "all"),
+                               ("open_vs_flip", lambda t: t["flip"]),
+                               ("regime", lambda t: t["regime"]),
+                               ("wall_in_path", lambda t: t.get("path"))):
+                groups = defaultdict(list)
+                for t in sub:
+                    if stop_name in t["r"] and key(t):
+                        groups[key(t)].append(t["r"][stop_name])
+                cell[split] = {v: {"n": len(rs),
+                                   "exp_plan": round(sum(rs) / len(rs), 3)}
+                               for v, rs in groups.items()}
+    return out
+
+
 def fmt_r(v):
     return "-" if v is None else f"{v:+.2f}"
 
@@ -581,6 +701,18 @@ def score(book, top, since=None, until=None, select="net", era="all",
     print("Sessions with bars: "
           + ", ".join(f"{k} {v}" for k, v in sorted(counted.items())))
 
+    orb = score_orb(since, until)
+    if orb.get("ALL"):
+        print(f"\nOpening-range breakout (logged, not used), {PLAN_R:g}R target:")
+        for stop_name in ("range", "mid"):
+            sp = orb["ALL"][stop_name]
+            parts = [f"all {fmt_r(sp['all']['all']['exp_plan'])} "
+                     f"(n={sp['all']['all']['n']})"] if sp.get("all") else []
+            for split in ("open_vs_flip", "wall_in_path"):
+                for v, x in sorted((sp.get(split) or {}).items()):
+                    parts.append(f"{v} {fmt_r(x['exp_plan'])} (n={x['n']})")
+            print(f"  {stop_name:<5} stop: " + "   ".join(parts))
+
     # The span of sessions actually SCORED: one still trading, or without
     # bars, is in rows but measured nothing, and counting it would let the
     # page claim a day of evidence it does not have.
@@ -592,7 +724,7 @@ def score(book, top, since=None, until=None, select="net", era="all",
             "from": days[0].isoformat() if days else None,
             "to": days[-1].isoformat() if days else None,
             "scored_at": g.now_et().strftime("%Y-%m-%d"),
-            "symbols": calib}
+            "symbols": calib, "orb": orb}
 
 
 LOG_HEADER = ["scored_at", "days", "from", "to", "symbol", "side", "setup",
@@ -623,6 +755,14 @@ def append_split_log(path, out):
                     rows.append([out["scored_at"], out["days"], out["from"],
                                  out["to"], sym, side, name, "open_vs_prior_range",
                                  val, x["n"], x["exp_plan"]])
+    # ORB rows: side is "both", setup names its stop.
+    for sym, stops in sorted((out.get("orb") or {}).items()):
+        for stop_name, splits in stops.items():
+            for split, values in splits.items():
+                for val, x in sorted(values.items()):
+                    rows.append([out["scored_at"], out["days"], out["from"],
+                                 out["to"], sym, "both", f"orb_{stop_name}stop",
+                                 split, val, x["n"], x["exp_plan"]])
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(SPLIT_HEADER)
