@@ -366,6 +366,72 @@ def fmt(v, nd=2):
     return "-" if v is None else f"{v:,.{nd}f}"
 
 
+# ------------------------------------------------------------------ rules
+# The trader's own rules, as traded: a fixed 1:1 stop and target in futures
+# points, both setups, on the symbols actually traded. ES is watched, not
+# traded, so it has none. Measured alongside the calibrated figures, split by
+# the gamma context known when each trade triggers, because that is the call
+# the trader makes at the screen.
+RULE_POINTS = {"NQ": 40.0, "GC": 10.0}
+
+
+def score_rules(since=None, until=None):
+    """Fades and breakouts under RULE_POINTS, split by gamma context.
+
+    regime   the near book's net GEX sign in the snapshot the levels came from
+    flip     the ENTRY price above or below that book's flip
+
+    Same entries and bar rules as everything else here; only the stop and
+    target are fixed. Nothing is fitted, so these carry none of the in-sample
+    flattery of the calibrated stops.
+
+    Measured 2026-10-07 over 50 trades: fades +0.60R in negative gamma (12 of
+    15 won) against -0.09R in positive; breakouts lost in both (-0.29R /
+    -0.24R). Against the textbook, which has positive gamma favouring fades.
+    """
+    now = g.now_et()
+    live = now.date() if now.strftime("%H:%M") < CLOSE_HHMM else None
+    acc = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+    for s in sessions("near", 2, since, until, "nearest"):
+        sym = s["symbol"]
+        if sym not in RULE_POINTS or s["date"] == live or not s["contract"]:
+            continue
+        try:
+            rb = session_bars(s["contract"], s["date"], s["at"].strftime("%H:%M"))
+        except Exception:
+            continue
+        if len(rb) < 6:
+            continue
+        pts = RULE_POINTS[sym]
+        flip = s["levels"].get("flip")
+        open_px = rb[0][3]
+        for side in ("call", "put"):
+            for level in s["levels"][side]:
+                if (level <= open_px) if side == "call" else (level >= open_px):
+                    continue
+                for name, finder, fill in (("fade", fade_event, True),
+                                           ("breakout", breakout_event, False)):
+                    ev = finder(rb, level, side)
+                    if not ev:
+                        continue
+                    start, entry, d = ev
+                    r, how = simulate(rb, start, entry, d, pts, pts, fill)
+                    rec = (r, how == "target")
+                    acc[sym][name]["all"].append(rec)
+                    if s["regime"] in ("positive", "negative"):
+                        acc[sym][name][s["regime"]].append(rec)
+                    if flip:
+                        acc[sym][name]["above" if entry > flip else "below"].append(rec)
+    out = {}
+    for sym, setups in acc.items():
+        for name, groups in setups.items():
+            out.setdefault(sym, {"points": RULE_POINTS[sym]})[name] = {
+                k: {"n": len(v), "won": sum(1 for _, w in v if w),
+                    "exp": round(sum(r for r, _ in v) / len(v), 3)}
+                for k, v in groups.items()}
+    return out
+
+
 MIN_STOP_PCT = 0.10       # floor on a calibrated stop, percent of spot. About
                           # one 5 minute ES bar: a stop inside a single bar's
                           # range is noise, and a breakout that ran at once
@@ -760,6 +826,20 @@ def score(book, top, since=None, until=None, select="net", era="all",
     print("Sessions with bars: "
           + ", ".join(f"{k} {v}" for k, v in sorted(counted.items())))
 
+    rules = score_rules(since, until)
+    if rules:
+        print(f"\nYour rules (fixed 1:1 points), by gamma context:")
+        for sym in sorted(rules):
+            for name in APPROACHES:
+                x = rules[sym].get(name) or {}
+                parts = []
+                for k in ("all", "positive", "negative", "above", "below"):
+                    if k in x:
+                        parts.append(f"{k} {x[k]['won']}/{x[k]['n']} "
+                                     f"{fmt_r(x[k]['exp'])}")
+                print(f"  {sym} {rules[sym]['points']:g}pt {name:<9} "
+                      + "   ".join(parts))
+
     orb = score_orb(since, until)
     if orb.get("ALL"):
         print(f"\nOpening-range breakout (logged, not used), {PLAN_R:g}R target:")
@@ -783,7 +863,7 @@ def score(book, top, since=None, until=None, select="net", era="all",
             "from": days[0].isoformat() if days else None,
             "to": days[-1].isoformat() if days else None,
             "scored_at": g.now_et().strftime("%Y-%m-%d"),
-            "symbols": calib, "orb": orb}
+            "symbols": calib, "orb": orb, "rules": rules}
 
 
 LOG_HEADER = ["scored_at", "days", "from", "to", "symbol", "side", "setup",
@@ -815,6 +895,15 @@ def append_split_log(path, out):
                     rows.append([out["scored_at"], out["days"], out["from"],
                                  out["to"], sym, side, name, "open_vs_prior_range",
                                  val, x["n"], x["exp_plan"]])
+    # Rule rows: fixed-point 1:1, split by gamma context.
+    for sym, setups in sorted((out.get("rules") or {}).items()):
+        for name in APPROACHES:
+            for val, x in sorted((setups.get(name) or {}).items()):
+                split = ("regime" if val in ("positive", "negative") else
+                         "entry_vs_flip" if val in ("above", "below") else "all")
+                rows.append([out["scored_at"], out["days"], out["from"],
+                             out["to"], sym, "both", f"rule_{name}", split, val,
+                             x["n"], x["exp"]])
     # ORB rows: side is "both", setup names its stop.
     for sym, stops in sorted((out.get("orb") or {}).items()):
         for stop_name, splits in stops.items():

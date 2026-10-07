@@ -17,8 +17,11 @@ So this page does exactly that and no more:
 
   map     frozen once per session from the first clean snapshot at or after
           09:50 (after Cboe's routine 09:45 outage): the nearest walls each
-          side - the same walls, count and book the scorecard measured - with
-          each setup's verdict, stop and wall-to-wall target fixed there.
+          side - the same walls, count and book the scorecard measured - and
+          the session's gamma regime. Traded symbols carry both setups as the
+          trader's RULES (fixed 1:1 points, tools/score_levels.RULE_POINTS),
+          each with its base rate in every regime and a verdict for today's;
+          watched symbols (ES) carry walls only, as context.
   events  each run replays the session's COMPLETED 5-minute futures bars from
           09:50 against that map, so a touch between two runs is never missed.
           Every wall/setup goes watching -> armed (within one stop) ->
@@ -26,9 +29,9 @@ So this page does exactly that and no more:
   record  every resolved setup is appended to a forward-test history, so the
           page's live record can be set against the scorecard's backtest.
 
-The rules - entry, stop, target, bar touching both is the stop - are the
-scorecard's own (tools/score_levels.py) and the verdict is the dashboard's
-(gex_terminal.plan_verdict), so the page never shows a trade nobody measured.
+Entry and the bar rules are the scorecard's own (tools/score_levels.py), and
+the base rates are its score_rules() - the same trades, measured - so the page
+never shows a trade nobody measured.
 """
 import argparse
 import json
@@ -78,118 +81,122 @@ def session_bars(series, day, now):
     return rows
 
 
-def first_target(structure, ref, direction, stop_pts):
-    """First level in the trade's direction at least a stop away - the rule
-    the scorecard measured and the dashboard used."""
-    ahead = sorted((abs(k - ref), k) for k in structure
-                   if (k - ref) * direction >= stop_pts)
-    return ahead[0] if ahead else (None, None)
+def rule_verdict(stats):
+    """A rule's verdict in one gamma context, from its measured base rate."""
+    if not stats or (stats.get("n") or 0) < g.PLAN_THIN_N:
+        return "thin"
+    if stats.get("exp") is None or stats["exp"] <= g.PLAN_MIN_EXP:
+        return "no edge"
+    return "ok"
 
 
-# ------------------------------------------------------------------- map
 def build_symbol_map(sym, inst, calib, stamp):
+    """The 09:50 map for one symbol.
+
+    Traded symbols (sl.RULE_POINTS) get both setups as rules - fixed 1:1 in
+    points - each carrying its base rate in every gamma context, and a verdict
+    for TODAY's regime. Symbols watched rather than traded (ES) get walls only:
+    their levels are context for the others, not trades.
+    """
     top = calib.get("top") or 2
     lv = sl.levels_of(sym, g.PLAN_BOOK, top, "nearest")
-    structure = sl.structure_of(sym, g.PLAN_BOOK)
-    cal = (calib.get("symbols") or {}).get(sym["symbol"]) or {}
+    regime = ((sym.get("regimes") or {}).get(g.PLAN_BOOK) or {}).get("regime")
+    name = sym["symbol"]
+    pts = sl.RULE_POINTS.get(name)
+    rules = ((calib.get("rules") or {}).get(name) or {})
     walls = []
     for side in ("call", "put"):
         up = side == "call"
-        side_cal = cal.get(side) if isinstance(cal.get(side), dict) else {}
         for level in lv[side]:
-            setups = {}
-            for setup in SETUPS:
-                basis = g.plan_basis(calib, side_cal, setup)
-                stop_pct = (side_cal.get(setup) or {}).get("stop_pct")
-                direction = ((-1 if up else +1) if setup == "fade"
-                             else (+1 if up else -1))
-                stop_pts = level * stop_pct / 100.0 if stop_pct else None
-                tgt_pts, tgt = (first_target(structure, level, direction, stop_pts)
-                                if stop_pts else (None, None))
-                setups[setup] = {
-                    "direction": direction, "stop_pct": stop_pct,
-                    "verdict": g.plan_verdict(basis, tgt is not None),
-                    "planned_rr": round(tgt_pts / stop_pts, 2) if tgt else None,
-                    "basis": {k: basis.get(k) for k in
-                              ("n", "win", "exp", "measure")}}
-            walls.append({"side": side, "level": round(level, 2),
-                          "setups": setups})
-    return {"symbol": sym["symbol"],
-            "contract": (sym.get("contract") or {}).get("symbol"),
+            w = {"side": side, "level": round(level, 2)}
+            if pts:
+                w["setups"] = {}
+                for setup in SETUPS:
+                    base = rules.get(setup) or {}
+                    w["setups"][setup] = {
+                        "direction": ((-1 if up else +1) if setup == "fade"
+                                      else (+1 if up else -1)),
+                        "base": base,
+                        "verdict": rule_verdict(base.get(regime))}
+            walls.append(w)
+    return {"symbol": name, "mode": "rules" if pts else "awareness",
+            "points": pts, "contract": (sym.get("contract") or {}).get("symbol"),
             "multiplier": inst["multiplier"], "frozen_at": stamp,
-            "spot_at_map": sym.get("spot"), "flip": lv.get("flip"),
-            "structure": [round(k, 2) for k in structure], "walls": walls}
+            "regime": regime, "spot_at_map": sym.get("spot"),
+            "flip": lv.get("flip"), "walls": walls}
 
 
 # ----------------------------------------------------------------- events
 def evaluate(smap, bars, session_over):
-    """Every wall/setup in the frozen map, against the session's bars."""
+    """Every rule setup in the frozen map, against the session's bars.
+
+    Entry and the bar rules are the scorecard's; stop and target are the
+    rule's fixed points either side of the actual entry.
+    """
+    if smap.get("mode") != "rules":
+        return []
     last = bars[-1][3] if bars else None
+    open_px = bars[0][3] if bars else None
+    pts = smap["points"]
     out = []
     for w in smap["walls"]:
         level, side = w["level"], w["side"]
         up = side == "call"
         for setup in SETUPS:
             st = w["setups"][setup]
+            d = st["direction"]
             ev = {"side": side, "level": level, "setup": setup,
-                  "verdict": st["verdict"], "direction": st["direction"],
-                  "basis": st["basis"], "planned_rr": st["planned_rr"]}
-            if not st["stop_pct"]:
-                ev["status"] = "unmeasured"
+                  "verdict": st["verdict"], "regime": smap.get("regime"),
+                  "base": (st.get("base") or {}).get(smap.get("regime"))}
+            # The scorecard skips a wall price had already passed when the
+            # session's bars began - a call wall below price at 09:50 is not a
+            # cap being tested - so this does too, or the page fires trades
+            # nobody measured. Found replaying 2026-10-06: two extra NQ trades.
+            if open_px is not None and \
+                    ((level <= open_px) if up else (level >= open_px)):
+                ev["status"] = "passed at open"
                 out.append(ev)
                 continue
-            # Trigger: the scorecard's rules exactly. A fade fills at the wall
-            # on the first touch; a breakout on the first CLOSE through.
             trig = None
             for i, (_, hi, lo, cl) in enumerate(bars):
                 if setup == "fade" and ((hi >= level) if up else (lo <= level)):
-                    trig = (i, level, i)            # start on the fill bar
+                    trig = (i, level, i)            # fills at the wall
                     break
                 if setup == "breakout" and ((cl > level) if up else (cl < level)):
-                    trig = (i, cl, i + 1)           # start on the bar after
+                    trig = (i, cl, i + 1)           # fills on the close
                     break
             if trig is None:
-                stop_pts = level * st["stop_pct"] / 100.0
-                near = last is not None and abs(last - level) <= stop_pts
+                near = last is not None and abs(last - level) <= pts
                 ev["status"] = ("not triggered" if session_over
                                 else "armed" if near else "watching")
-                ev["dist_pct"] = (round(100 * (level - last) / last, 2)
-                                  if last else None)
+                ev["dist_pts"] = round(level - last, 2) if last else None
                 out.append(ev)
                 continue
             i, entry, start = trig
-            d = st["direction"]
-            stop_pts = entry * st["stop_pct"] / 100.0
-            tgt_pts, tgt = first_target(smap["structure"], entry, d, stop_pts)
+            flip = smap.get("flip")
             ev.update({"time": bars[i][0], "entry": round(entry, 2),
-                       "stop": round(entry - d * stop_pts, 2),
-                       "risk_usd": round(stop_pts * smap["multiplier"])})
-            if tgt is None:
-                # Nothing to target from where it actually filled: not a
-                # trade, as the scorecard would have skipped it.
-                ev["status"] = "no room"
-                out.append(ev)
-                continue
-            ev.update({"target": round(tgt, 2),
-                       "rr": round(tgt_pts / stop_pts, 2),
-                       "reward_usd": round(tgt_pts * smap["multiplier"])})
+                       "stop": round(entry - d * pts, 2),
+                       "target": round(entry + d * pts, 2),
+                       "flip_side": (("above" if entry > flip else "below")
+                                     if flip else None)})
             status, r, at = "open", 0.0, None
             for k, (t, hi, lo, cl) in enumerate(bars[start:]):
                 a = (entry - lo) if d > 0 else (hi - entry)
                 f = (hi - entry) if d > 0 else (entry - lo)
-                if a >= stop_pts:                   # both in one bar = stop
+                if a >= pts:                        # both in one bar = stop
                     status, r, at = "lost", -1.0, t
                     break
                 if k == 0 and setup == "fade":
                     continue                        # fill bar counts against only
-                if f >= tgt_pts:
-                    status, r, at = "won", tgt_pts / stop_pts, t
+                if f >= pts:
+                    status, r, at = "won", 1.0, t
                     break
             if status == "open" and last is not None:
-                r = (last - entry) * d / stop_pts
+                r = (last - entry) * d / pts
                 if session_over:
                     status = "closed"
-            ev.update({"status": status, "r": round(r, 2), "resolved_at": at})
+            ev.update({"status": status, "r": round(r, 2), "resolved_at": at,
+                       "pnl_usd": round(r * pts * smap["multiplier"])})
             out.append(ev)
     return out
 
@@ -199,25 +206,24 @@ FINAL = ("won", "lost", "closed")
 
 
 def summarise_record(history):
-    """Forward test: realized R by setup and verdict, against the backtest."""
+    """Forward test by symbol, setup and gamma regime, against the backtest."""
     groups = {}
     for h in history:
         if h.get("status") not in FINAL:
             continue
-        key = (h["setup"], "ok" if h.get("verdict") == "ok" else "other")
-        gr = groups.setdefault(key, {"n": 0, "won": 0, "r": 0.0, "bt": []})
+        key = (h["symbol"], h["setup"], h.get("regime") or "?")
+        gr = groups.setdefault(key, {"n": 0, "won": 0, "r": 0.0, "usd": 0,
+                                     "bt": None})
         gr["n"] += 1
         gr["won"] += h["status"] == "won"
         gr["r"] += h.get("r") or 0.0
-        if (h.get("basis") or {}).get("exp") is not None:
-            gr["bt"].append(h["basis"]["exp"])
-    out = []
-    for (setup, grp), v in sorted(groups.items()):
-        out.append({"setup": setup, "group": grp, "n": v["n"], "won": v["won"],
-                    "avg_r": round(v["r"] / v["n"], 2),
-                    "backtest_r": (round(sum(v["bt"]) / len(v["bt"]), 2)
-                                   if v["bt"] else None)})
-    return out
+        gr["usd"] += h.get("pnl_usd") or 0
+        if (h.get("base") or {}).get("exp") is not None:
+            gr["bt"] = h["base"]["exp"]
+    return [{"symbol": sym, "setup": setup, "regime": regime, "n": v["n"],
+             "won": v["won"], "avg_r": round(v["r"] / v["n"], 2),
+             "avg_usd": round(v["usd"] / v["n"]), "backtest_r": v["bt"]}
+            for (sym, setup, regime), v in sorted(groups.items())]
 
 
 def record_session(history, session, maps, now):
@@ -234,8 +240,9 @@ def record_session(history, session, maps, now):
             if ev.get("status") in FINAL:
                 keep.append({"date": session, "symbol": name, **{
                     k: ev.get(k) for k in ("side", "level", "setup", "verdict",
-                                           "basis", "time", "entry", "stop",
-                                           "target", "rr", "r", "status")}})
+                                           "regime", "flip_side", "base", "time",
+                                           "entry", "stop", "target", "r",
+                                           "pnl_usd", "status")}})
     return keep
 
 
@@ -360,6 +367,9 @@ td.num,th.num{text-align:right}
 .s-won{color:var(--jade);border-color:var(--jade)}
 .s-lost{color:var(--verm);border-color:var(--verm)}
 tr.dim td{opacity:.55}
+tr.hot td{background:rgba(217,164,65,.07)}
+.g-neg{color:#ffb38a;border-color:rgba(224,96,63,.5)}
+.g-pos{color:#9fd8bd;border-color:rgba(75,191,138,.5)}
 .empty{color:var(--muted);font-size:12px;padding:6px 0}
 .err{color:var(--stress);font-size:12px}
 .caveat{color:var(--muted);font-size:11px;line-height:1.55;max-width:80ch;margin-top:14px}
@@ -375,87 +385,120 @@ tr.dim td{opacity:.55}
 </div>
 <script>
 const SETUPS_DATA = null;
-const VERDICT = {"ok":"v-ok","thin":"v-thin","no edge":"v-noedge","no room":"v-room"};
+const VERDICT = {"ok":"v-ok","thin":"v-thin","no edge":"v-noedge"};
 const ACTION = {fade:{call:"sell call wall",put:"buy put wall"},
                 breakout:{call:"buy break above",put:"sell break below"}};
 const esc = v => String(v==null?"":v).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const fx = (v,d=2) => v==null ? "—" : (+v).toFixed(d);
 const rFmt = v => v==null ? "—" : `${v>0?"+":""}${(+v).toFixed(2)}R`;
+const usd = v => v==null ? "—" : `${v<0?"−":"+"}$${Math.abs(v).toLocaleString()}`;
 const chip = (t,c) => `<span class="chip ${c||""}">${esc(t)}</span>`;
+const regimeChip = r => r ? chip(`${r} gamma`, r==="negative"?"g-neg":"g-pos") : "";
+const baseTxt = b => b ? `${b.won}/${b.n} won ${rFmt(b.exp)}` : "no history";
+
+// One wall's rule in both regimes, today's first and bright, the other dim:
+// the regime is the call the trader makes, so both rates sit side by side.
+function ruleCell(st, regime){
+  const other = regime==="negative" ? "positive" : "negative";
+  const b = st.base||{};
+  return `${chip(st.verdict, VERDICT[st.verdict])} <span>${esc(regime||"?")}: ${baseTxt(b[regime])}</span>`
+    + `<div class="sub">${other}: ${baseTxt(b[other])} · all: ${baseTxt(b.all)}</div>`;
+}
 
 function mapTable(sm){
-  const rows = sm.walls.map(w=>{
-    const cell = s => { const x=w.setups[s]; return chip(x.verdict, VERDICT[x.verdict])
-      + (x.basis&&x.basis.exp!=null?` <span class="sub">${rFmt(x.basis.exp)}</span>`:""); };
-    return `<tr><td class="side-${w.side[0]}">${w.side.toUpperCase()}</td>`
-      +`<td class="num">${fx(w.level)}</td><td>${cell("fade")}</td><td>${cell("breakout")}</td></tr>`;
-  }).join("");
+  if(sm.mode==="awareness"){
+    return "";
+  }
+  const rows = sm.walls.map(w=>`<tr><td class="side-${w.side[0]}">${w.side.toUpperCase()}</td>`
+    +`<td class="num">${fx(w.level)}</td><td>${ruleCell(w.setups.fade, sm.regime)}</td>`
+    +`<td>${ruleCell(w.setups.breakout, sm.regime)}</td></tr>`).join("");
   return `<div class="scroll"><table><thead><tr><th>Wall</th><th class="num">Level</th>`
     +`<th>Fade it</th><th>Trade the break</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
-function eventRows(evs){
-  const live = evs.filter(e=>["armed","open","won","lost","closed","no room"].includes(e.status));
+function awareness(s){
+  const m=s.map||{}, last=s.last;
+  const rows=(m.walls||[]).slice().sort((a,b)=>b.level-a.level).map(w=>{
+    const d = last!=null ? w.level-last : null;
+    const near = d!=null && Math.abs(d) <= 0.0015*last;
+    return `<tr class="${near?"hot":""}"><td class="side-${w.side[0]}">${w.side.toUpperCase()}</td>`
+      +`<td class="num">${fx(w.level)}</td>`
+      +`<td class="num">${d==null?"—":(d>0?"+":"")+fx(d)} pts</td>`
+      +`<td>${near?chip("at a wall","s-armed"):""}</td></tr>`;
+  }).join("");
+  return `<div class="scroll"><table><thead><tr><th>Wall</th><th class="num">Level</th>`
+    +`<th class="num">From price</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function eventRows(evs, mult){
+  const live = evs.filter(e=>["armed","open","won","lost","closed"].includes(e.status));
   if(!live.length) return `<div class="empty">Nothing armed or triggered yet. Each wall fires once per setup per session.</div>`;
-  const order = {open:0,armed:1,won:2,lost:2,closed:2,"no room":3};
+  const order = {open:0,armed:1,won:2,lost:2,closed:2};
   live.sort((a,b)=>(order[a.status]-order[b.status]) || ((a.time||"")<(b.time||"")?-1:1));
   const rows = live.map(e=>{
-    const dim = e.verdict!=="ok";
     const st = {open:"s-open",armed:"s-armed",won:"s-won",lost:"s-lost"}[e.status]||"";
-    const res = e.status==="armed" ? `${e.dist_pct>0?"+":""}${fx(e.dist_pct)}% away`
-      : e.status==="no room" ? "no target"
-      : `<b class="${(e.r||0)>=0?"pos":"neg"}">${rFmt(e.r)}</b>${e.status==="open"?" now":""}`;
-    return `<tr class="${dim?"dim":""}"><td class="side-${e.side[0]}">${ACTION[e.setup][e.side]}</td>`
-      +`<td>${chip(e.status,st)}</td><td>${chip(e.verdict,VERDICT[e.verdict])}</td>`
-      +`<td class="num">${esc(e.time||"")}</td><td class="num">${fx(e.level)}</td>`
+    const res = e.status==="armed" ? `${e.dist_pts>0?"+":""}${fx(e.dist_pts)} pts away`
+      : `<b class="${(e.r||0)>=0?"pos":"neg"}">${usd(e.pnl_usd)}</b> <span class="sub">${rFmt(e.r)}${e.status==="open"?" now":""}</span>`;
+    const ctx = (e.flip_side?chip(`${e.flip_side} flip`, e.flip_side==="below"?"g-neg":"g-pos"):"");
+    return `<tr class="${e.verdict!=="ok"?"dim":""}"><td class="side-${e.side[0]}">${ACTION[e.setup][e.side]}</td>`
+      +`<td>${chip(e.status,st)}</td><td>${chip(e.verdict,VERDICT[e.verdict])} <span class="sub">${baseTxt(e.base)}</span></td>`
+      +`<td>${ctx}</td><td class="num">${esc(e.time||"")}</td><td class="num">${fx(e.level)}</td>`
       +`<td class="num">${fx(e.entry)}</td><td class="num">${fx(e.stop)}</td>`
-      +`<td class="num">${fx(e.target)}</td><td class="num">${e.rr!=null?fx(e.rr):"—"}</td>`
-      +`<td class="num">${res}</td></tr>`;
+      +`<td class="num">${fx(e.target)}</td><td class="num">${res}</td></tr>`;
   }).join("");
-  return `<div class="scroll"><table><thead><tr><th>Setup</th><th>Status</th><th>Verdict</th>`
-    +`<th class="num">Time</th><th class="num">Wall</th><th class="num">Entry</th>`
-    +`<th class="num">Stop</th><th class="num">Target</th><th class="num">R:R</th>`
-    +`<th class="num">Result</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="scroll"><table><thead><tr><th>Setup</th><th>Status</th>`
+    +`<th>Verdict, today's regime</th><th>At entry</th><th class="num">Time</th>`
+    +`<th class="num">Wall</th><th class="num">Entry</th><th class="num">Stop</th>`
+    +`<th class="num">Target</th><th class="num">Result</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function recordTable(rec){
   if(!rec||!rec.length) return `<div class="empty">No finished sessions yet. The record starts with the first session this page sees through to the close.</div>`;
-  const rows = rec.map(r=>`<tr><td>${esc(r.setup)}</td><td>${chip(r.group==="ok"?"ok":"other",r.group==="ok"?"v-ok":"")}</td>`
+  const rows = rec.map(r=>`<tr><td>${esc(r.symbol)}</td><td>${esc(r.setup)}</td><td>${regimeChip(r.regime)}</td>`
     +`<td class="num">${r.n}</td><td class="num">${r.won}</td>`
     +`<td class="num"><b class="${r.avg_r>=0?"pos":"neg"}">${rFmt(r.avg_r)}</b></td>`
-    +`<td class="num">${rFmt(r.backtest_r)}</td></tr>`).join("");
-  return `<div class="scroll"><table><thead><tr><th>Setup</th><th>Verdict</th><th class="num">Trades</th>`
-    +`<th class="num">Won</th><th class="num">Live avg</th><th class="num">Backtest</th></tr></thead>`
+    +`<td class="num">${usd(r.avg_usd)}</td><td class="num">${rFmt(r.backtest_r)}</td></tr>`).join("");
+  return `<div class="scroll"><table><thead><tr><th>Symbol</th><th>Setup</th><th>Regime</th>`
+    +`<th class="num">Trades</th><th class="num">Won</th><th class="num">Live avg</th>`
+    +`<th class="num">Per trade</th><th class="num">Backtest</th></tr></thead>`
     +`<tbody>${rows}</tbody></table></div>`;
 }
 
 function renderSetups(d){
   if(!d) return `<div class="panel empty">No setups data yet.</div>`;
-  const syms = d.symbols||[];
+  const syms = (d.symbols||[]).slice().sort((a,b)=>
+    ((a.map||{}).mode==="awareness") - ((b.map||{}).mode==="awareness"));
   let html = "";
   if(!d.session) html += `<div class="panel empty">The session map freezes at ${esc(d.map_at)} ET on trading days.</div>`;
   for(const s of syms){
     const m = s.map||{};
+    const aware = m.mode==="awareness";
     html += `<div class="panel"><div class="phead"><span class="sym">${esc(s.symbol)}</span>`
-      +`<span class="sub">map frozen ${esc(m.frozen_at)} ET · flip ${fx(m.flip)}`
-      +(s.last!=null?` · last ${fx(s.last)} (${esc(s.bars_to)} bar)`:"")+`</span></div>`
-      + (s.error?`<div class="err">${esc(s.error)}</div>`:"")
-      + `<div class="k">Setups today</div>` + eventRows(s.events||[])
-      + `<div class="k">Session map</div>` + mapTable(m) + `</div>`;
+      + (aware ? chip("awareness only") : chip(`rules: 1:1, ${fx(m.points,0)} pts`))
+      + ` ${regimeChip(m.regime)}`
+      + `<span class="sub">map frozen ${esc(m.frozen_at)} ET · flip ${fx(m.flip)}`
+      + (s.last!=null?` · last ${fx(s.last)} (${esc(s.bars_to)} bar)`:"")+`</span></div>`
+      + (s.error?`<div class="err">${esc(s.error)}</div>`:"");
+    if(aware){
+      html += `<div class="k">Walls, for context</div>` + awareness(s) + `</div>`;
+      continue;
+    }
+    html += `<div class="k">Setups today</div>` + eventRows(s.events||[], m.multiplier)
+      + `<div class="k">Session map: each rule's history in each gamma regime</div>` + mapTable(m) + `</div>`;
   }
   for(const n of (d.notes||[])) html += `<div class="sub">${esc(n)}</div>`;
   const c = d.calibration||{};
   html += `<div class="panel"><div class="phead"><span class="sym" style="font-size:16px">Forward test</span>`
-    + `<span class="sub">live results of setups this page fired, against the scorecard's backtest</span></div>`
+    + `<span class="sub">live results of these rules, by regime, against the backtest</span></div>`
     + recordTable(d.record)
-    + `<div class="caveat"><b>*</b> A setup here is exactly a trade the scorecard measured: one fade per `
-    + `wall per session on the first touch, one breakout on the first 5-minute close through, the `
-    + `nearest walls each side, frozen at ${esc(d.map_at)} ET. Stops are fitted to past trades and `
-    + `targets are the first wall or flip beyond a stop, as measured; a bar touching both counts as `
-    + `the stop. Verdicts come from ${esc(c.days)} sessions (${esc(c.from)} to ${esc(c.to)}), so they `
-    + `are provisional, and the forward test is the check on them. Bars are 5-minute and only `
-    + `completed ones are used, so a trigger shows up to one bar plus one publish late. `
-    + `Rows without a measured edge are dimmed. Not advice.</div></div>`;
+    + `<div class="caveat"><b>*</b> Rules: fixed 1:1 stop and target in points, fades on the first touch `
+    + `of a wall and breakouts on the first 5-minute close through, one of each per wall per session, `
+    + `the nearest walls each side, frozen at ${esc(d.map_at)} ET. "Regime" is the near book's net gamma `
+    + `in that 09:50 map; "above/below flip" is where the entry sat against its flip. Base rates come `
+    + `from ${esc(c.days)} sessions (${esc(c.from)} to ${esc(c.to)}) and many are a handful of trades, so `
+    + `read them as provisional; the forward test is the check. Only completed 5-minute bars are used, `
+    + `so a trigger shows up to one bar plus one publish late. A bar touching both stop and target `
+    + `counts as the stop. Rows without a measured edge in today's regime are dimmed. Not advice.</div></div>`;
   return html;
 }
 

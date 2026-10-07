@@ -817,5 +817,121 @@
         }
       }
     }
+  },
+  "rules": {
+    "NQ": {
+      "points": 40.0,
+      "fade": {
+        "all": {
+          "n": 13,
+          "won": 8,
+          "exp": 0.231
+        },
+        "positive": {
+          "n": 9,
+          "won": 4,
+          "exp": -0.111
+        },
+        "above": {
+          "n": 6,
+          "won": 2,
+          "exp": -0.333
+        },
+        "below": {
+          "n": 7,
+          "won": 6,
+          "exp": 0.714
+        },
+        "negative": {
+          "n": 4,
+          "won": 4,
+          "exp": 1.0
+        }
+      },
+      "breakout": {
+        "all": {
+          "n": 11,
+          "won": 5,
+          "exp": -0.091
+        },
+        "positive": {
+          "n": 8,
+          "won": 4,
+          "exp": 0.0
+        },
+        "above": {
+          "n": 6,
+          "won": 2,
+          "exp": -0.333
+        },
+        "below": {
+          "n": 5,
+          "won": 3,
+          "exp": 0.2
+        },
+        "negative": {
+          "n": 3,
+          "won": 1,
+          "exp": -0.333
+        }
+      }
+    },
+    "GC": {
+      "points": 10.0,
+      "fade": {
+        "all": {
+          "n": 14,
+          "won": 9,
+          "exp": 0.355
+        },
+        "positive": {
+          "n": 3,
+          "won": 1,
+          "exp": -0.009
+        },
+        "above": {
+          "n": 3,
+          "won": 2,
+          "exp": 0.658
+        },
+        "below": {
+          "n": 11,
+          "won": 7,
+          "exp": 0.273
+        },
+        "negative": {
+          "n": 11,
+          "won": 8,
+          "exp": 0.455
+        }
+      },
+      "breakout": {
+        "all": {
+          "n": 12,
+          "won": 3,
+          "exp": -0.43
+        },
+        "positive": {
+          "n": 3,
+          "won": 0,
+          "exp": -0.877
+        },
+        "above": {
+          "n": 3,
+          "won": 0,
+          "exp": -0.877
+        },
+        "below": {
+          "n": 9,
+          "won": 3,
+          "exp": -0.281
+        },
+        "negative": {
+          "n": 9,
+          "won": 3,
+          "exp": -0.281
+        }
+      }
+    }
   }
 }
