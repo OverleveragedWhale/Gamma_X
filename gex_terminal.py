@@ -1151,8 +1151,18 @@ def zero_recent(syms, previous, previous_generated):
 def _plan_basis(calib, cal, setup):
     """What a plan's verdict rests on, carried so the page can show it."""
     r = cal.get(setup) or {}
-    return {"n": r.get("n"), "levels": cal.get("n_levels"), "rate": r.get("rate"),
-            "exp": r.get("exp_plan"), "win": r.get("win_plan"),
+    # Wall-to-wall: the same trade the R:R column describes - the first wall
+    # or flip in the trade's direction - replayed over the history. The
+    # fixed-1.5R figure measured an exit the plan never takes, so a 4.4 R:R
+    # sat beside a base rate for a 1.5R trade. Falls back to it only for a
+    # calibration written before the wall-to-wall measure existed.
+    w = r.get("wall") or {}
+    return {"n": w.get("n", r.get("n")), "levels": cal.get("n_levels"),
+            "rate": r.get("rate"),
+            "exp": w.get("exp", r.get("exp_plan")),
+            "win": w.get("win", r.get("win_plan")),
+            "measure": "wall" if w else "fixed",
+            "avg_target_r": w.get("avg_target_r"),
             "plan_r": calib.get("plan_r"), "stop_pct": r.get("stop_pct"),
             "scored": calib.get("scored_at"), "sessions": calib.get("sessions"),
             # The sample, so the page states it rather than letting "measured"
@@ -1252,7 +1262,10 @@ def trade_plans(ladder, regimes, spot, inst, calib):
                 verdict = "thin"
             elif exp is None or exp <= PLAN_MIN_EXP:
                 verdict = "no edge"
-            elif rr < (calib.get("plan_r") or PLAN_MIN_RR):
+            elif basis.get("measure") == "fixed" and \
+                    rr < (calib.get("plan_r") or PLAN_MIN_RR):
+                # Only meaningful against a fixed-R base rate: a wall-to-wall
+                # base rate already averages over targets of every distance.
                 verdict = "poor today"
             else:
                 verdict = "ok"
@@ -3299,7 +3312,8 @@ function planRow(p){
       +`<span class="chip ${cls}">${p.verdict}</span> `
       +(b.n!=null?`${b.n} trades`:"")
       +(b.win!=null?` · ${Math.round(b.win*100)}% win`:"")
-      +(b.exp!=null?` · ${b.exp>0?"+":""}${(+b.exp).toFixed(2)}R at ${r}R`:"")
+      +(b.exp!=null?` · ${b.exp>0?"+":""}${(+b.exp).toFixed(2)}R`
+        +(b.measure==="wall"?` wall to wall`:` at ${r}R`):"")
       +(p.note?` · ${p.note}`:"")
     +`</td></tr>`;
 }
@@ -3321,10 +3335,18 @@ function tradePlans(s){
     + (b.sym_sessions?` — ${b.sym_sessions} sessions of this symbol`:"")
     + (span?` (${span})`:"")
     + (trades?`, ${trades} trades per setup`:"")
-    + `. Each trade was walked bar by bar from its real entry to a ${r}R target `
-    + `or its stop, whichever came first, and the stop was fitted to those same `
-    + `trades, which flatters every figure somewhat. Targets here come from `
-    + `today's structure and are not measured.`
+    + (b.measure==="wall"
+       ? `. Each base rate replays the same trade the table shows: entered at `
+         + `the wall, stopped at the fitted distance, and targeting the first `
+         + `wall or flip on that morning's ladder in the trade's direction, `
+         + `walked bar by bar to whichever came first. R:R is today's version of `
+         + `that target; the base rate is how such trades actually ended, `
+         + `winners and losers averaged. The stop was fitted to those same `
+         + `trades, which flatters every figure somewhat.`
+       : `. Each trade was walked bar by bar from its real entry to a ${r}R `
+         + `target or its stop, whichever came first, and the stop was fitted to `
+         + `those same trades, which flatters every figure somewhat. Targets `
+         + `here come from today's structure and are not measured.`)
     + (b.shaky?` At this sample a verdict can flip on a single session, so `
       + `read every base rate here as provisional.`:"")
     + `</div>`;
