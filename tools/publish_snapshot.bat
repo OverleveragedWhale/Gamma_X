@@ -155,6 +155,28 @@ rem A run that got as far as a clean exit. tools\alert.ps1 judges staleness
 rem from this.
 :ok
 > "%ROOT%\last_ok.txt" echo %NOW%
+call :archive
+exit /b 0
+
+rem Second collector for the private archive (Gamma_X-archive, cloned beside
+rem the other two). A scheduled workflow in that repo collects too; either
+rem alone keeps it complete, so this one never fails a run: a problem here is
+rem logged and left for the next run or the other collector. Runs after a
+rem successful publish only, so it cannot delay or block the page.
+:archive
+if not exist "%ROOT%\Gamma_X-archive\collect.py" exit /b 0
+pushd "%ROOT%\Gamma_X-archive"
+git pull -q --rebase origin main >> "%LOG%" 2>&1
+%PY% collect.py --terminal "%REPO%" --bars-once-daily >> "%LOG%" 2>&1
+git add chains bars >> "%LOG%" 2>&1
+git diff --cached --quiet
+if errorlevel 1 (
+  git commit -q -m "Collect %NOW% (PC)" >> "%LOG%" 2>&1
+  git pull -q --rebase -X theirs origin main >> "%LOG%" 2>&1
+  git push -q origin HEAD:main >> "%LOG%" 2>&1
+  if errorlevel 1 echo [%NOW%] WARN: archive push failed, left for the next run >> "%LOG%"
+)
+popd
 exit /b 0
 
 rem Log a failure and raise a desktop notification. This task runs in a
