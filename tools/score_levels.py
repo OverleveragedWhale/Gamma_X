@@ -133,6 +133,23 @@ def generated_et(payload):
         return None
 
 
+def structure_of(sym, book):
+    """Every level the terminal could have targeted: all ladder rows, both
+    sides, plus the book's flip - the same set trade_plans() chooses from."""
+    out = []
+    ladder = sym.get("ladder")
+    if ladder:
+        out = [float(w["strike"]) for w in ladder if w.get("strike") is not None]
+    else:                                   # pre-2026-09-29 shape
+        walls = (((sym.get("regimes") or {}).get(book) or {}).get("walls")) or {}
+        out = [float(w["strike"]) for side in ("call", "put")
+               for w in walls.get(side) or []]
+    flip = ((sym.get("regimes") or {}).get(book) or {}).get("flip")
+    if flip:
+        out.append(float(flip))
+    return out
+
+
 def levels_of(sym, book, top, select="net"):
     """Top `top` call and put levels for one symbol, newest payload shape or old.
 
@@ -217,6 +234,7 @@ def sessions(book, top, since=None, until=None, select="net"):
                 "spot": float(sym["spot"]), "regime": regime,
                 "contract": (sym.get("contract") or {}).get("symbol"),
                 "levels": lv,
+                "structure": structure_of(sym, book),
                 # Which option-chain era built these levels: ES and NQ moved
                 # from one chain to two on 2026-10-06, and the two eras are
                 # not the same levels.
@@ -405,6 +423,31 @@ def summarise(evs):
         out["win"][f"{mult:g}"] = round(wins / len(rs), 3)
     out["exp_plan"] = out["exp"][f"{PLAN_R:g}"]
     out["win_plan"] = out["win"][f"{PLAN_R:g}"]
+
+    # The trade the terminal actually proposes: the same fitted stop, but the
+    # target is the first wall or flip on THAT morning's published ladder in
+    # the trade's direction at least a stop away - exactly the rule in
+    # gex_terminal.trade_plans(). The fixed-R figures above measure an exit
+    # nobody takes; this is what the page's R:R column was shown beside, so
+    # it is what the verdict reads. A trade with nothing to target is
+    # skipped, as the page would have shown it "no room".
+    sr, swins, tgt_r = [], 0, []
+    for e in evs:
+        stop_pts = e["entry"] * stop_pct / 100.0
+        ahead = sorted(abs(k - e["entry"]) for k in e.get("structure") or ()
+                       if (k - e["entry"]) * e["dir"] >= stop_pts)
+        if not ahead:
+            continue
+        r, how = simulate(e["rows"], e["start"], e["entry"], e["dir"],
+                          stop_pts, ahead[0], e["fill"])
+        e["r_wall"] = r
+        sr.append(r)
+        swins += how == "target"
+        tgt_r.append(ahead[0] / stop_pts)
+    out["wall"] = ({"n": len(sr), "exp": round(sum(sr) / len(sr), 3),
+                    "win": round(swins / len(sr), 3),
+                    "avg_target_r": round(sum(tgt_r) / len(tgt_r), 2)}
+                   if sr else None)
     eras = defaultdict(list)
     for e in evs:
         eras[e["era"]].append(e["r"][PLAN_R])
@@ -614,7 +657,8 @@ def score(book, top, since=None, until=None, select="net", era="all",
                         "best": ex[1], "era": s["era"], "date": day,
                         # Only once the open is known: a trade entered before
                         # 09:30 could not have been filtered on it.
-                        "loc": s["loc"] if rb[start][0] >= "09:30" else None})
+                        "loc": s["loc"] if rb[start][0] >= "09:30" else None,
+                        "structure": s["structure"]})
                     if verbose:
                         print(f"  {day} {sym} {side} {name:<8} {level:,.2f} "
                               f"entry {entry:,.2f} heat {ex[0]:.2f} "
@@ -629,7 +673,8 @@ def score(book, top, since=None, until=None, select="net", era="all",
           f"the best point (floor {MIN_STOP_PCT}%), bar touching both = stop.")
     print()
     hdr = (f"{'sym':<4} {'side':<5} {'setup':<9} {'n':>3} {'rate':>5} "
-           f"{'stop':>6} {'exp@1R':>7} {'@1.5R':>7} {'@2R':>7} {'win@1.5':>8}")
+           f"{'stop':>6} {'exp@1R':>7} {'@1.5R':>7} {'@2R':>7} {'win@1.5':>8}"
+           f"   {'to wall':>8} {'n':>3} {'win':>5} {'avg tgt':>8}")
     print(hdr)
     print("-" * len(hdr))
 
@@ -649,10 +694,14 @@ def score(book, top, since=None, until=None, select="net", era="all",
                     res["rate"] = round(rate, 3)
                     entry[name] = res
                     e = res["exp"]
+                    w = res.get("wall") or {}
+                    wall = (f"   {fmt_r(w['exp']):>8} {w['n']:>3} "
+                            f"{w['win']:>5.0%} {w['avg_target_r']:>7.1f}R"
+                            if w else f"   {'-':>8}")
                     print(f"{sym:<4} {side:<5} {name:<9} {len(evs):>3} "
                           f"{rate:>5.0%} {res['stop_pct']:>5.2f}% "
                           f"{fmt_r(e['1']):>7} {fmt_r(e['1.5']):>7} "
-                          f"{fmt_r(e['2']):>7} {res['win_plan']:>8.0%}")
+                          f"{fmt_r(e['2']):>7} {res['win_plan']:>8.0%}" + wall)
                 else:
                     print(f"{sym:<4} {side:<5} {name:<9} {len(evs):>3} "
                           f"{rate:>5.0%}      -       -       -       -        -")
@@ -728,7 +777,8 @@ def score(book, top, since=None, until=None, select="net", era="all",
 
 
 LOG_HEADER = ["scored_at", "days", "from", "to", "symbol", "side", "setup",
-              "n", "rate", "stop_pct", f"exp_{PLAN_R:g}R", f"win_{PLAN_R:g}R"]
+              "n", "rate", "stop_pct", f"exp_{PLAN_R:g}R", f"win_{PLAN_R:g}R",
+              "n_wall", "exp_wall", "win_wall", "avg_target_r"]
 
 
 SPLIT_HEADER = ["scored_at", "days", "from", "to", "symbol", "side", "setup",
@@ -787,9 +837,12 @@ def append_log(path, out):
             for name in APPROACHES:
                 r = v.get(name)
                 if r:
+                    w = r.get("wall") or {}
                     rows.append([out["scored_at"], out["days"], out["from"],
                                  out["to"], sym, side, name, r["n"], r["rate"],
-                                 r["stop_pct"], r["exp_plan"], r["win_plan"]])
+                                 r["stop_pct"], r["exp_plan"], r["win_plan"],
+                                 w.get("n", ""), w.get("exp", ""),
+                                 w.get("win", ""), w.get("avg_target_r", "")])
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(LOG_HEADER)
