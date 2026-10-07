@@ -431,5 +431,319 @@
         }
       }
     }
+  },
+  "orb": {
+    "ES": {
+      "range": {
+        "all": {
+          "all": {
+            "n": 12,
+            "exp_plan": 0.246
+          }
+        },
+        "open_vs_flip": {
+          "above": {
+            "n": 9,
+            "exp_plan": 0.662
+          },
+          "below": {
+            "n": 3,
+            "exp_plan": -1.0
+          }
+        },
+        "regime": {
+          "positive": {
+            "n": 10,
+            "exp_plan": 0.38
+          },
+          "negative": {
+            "n": 2,
+            "exp_plan": -0.421
+          }
+        },
+        "wall_in_path": {
+          "clear": {
+            "n": 5,
+            "exp_plan": 1.0
+          },
+          "blocked": {
+            "n": 7,
+            "exp_plan": -0.292
+          }
+        }
+      },
+      "mid": {
+        "all": {
+          "all": {
+            "n": 12,
+            "exp_plan": 0.667
+          }
+        },
+        "open_vs_flip": {
+          "above": {
+            "n": 9,
+            "exp_plan": 0.667
+          },
+          "below": {
+            "n": 3,
+            "exp_plan": 0.667
+          }
+        },
+        "regime": {
+          "positive": {
+            "n": 10,
+            "exp_plan": 0.5
+          },
+          "negative": {
+            "n": 2,
+            "exp_plan": 1.5
+          }
+        },
+        "wall_in_path": {
+          "clear": {
+            "n": 5,
+            "exp_plan": 1.5
+          },
+          "blocked": {
+            "n": 7,
+            "exp_plan": 0.071
+          }
+        }
+      }
+    },
+    "GC": {
+      "range": {
+        "all": {
+          "all": {
+            "n": 12,
+            "exp_plan": -0.022
+          }
+        },
+        "open_vs_flip": {
+          "above": {
+            "n": 2,
+            "exp_plan": 0.25
+          },
+          "below": {
+            "n": 10,
+            "exp_plan": -0.076
+          }
+        },
+        "regime": {
+          "positive": {
+            "n": 5,
+            "exp_plan": 0.204
+          },
+          "negative": {
+            "n": 7,
+            "exp_plan": -0.183
+          }
+        },
+        "wall_in_path": {
+          "clear": {
+            "n": 4,
+            "exp_plan": -0.375
+          },
+          "blocked": {
+            "n": 8,
+            "exp_plan": 0.155
+          }
+        }
+      },
+      "mid": {
+        "all": {
+          "all": {
+            "n": 12,
+            "exp_plan": -0.08
+          }
+        },
+        "open_vs_flip": {
+          "above": {
+            "n": 2,
+            "exp_plan": 0.25
+          },
+          "below": {
+            "n": 10,
+            "exp_plan": -0.146
+          }
+        },
+        "regime": {
+          "positive": {
+            "n": 5,
+            "exp_plan": -0.292
+          },
+          "negative": {
+            "n": 7,
+            "exp_plan": 0.071
+          }
+        },
+        "wall_in_path": {
+          "clear": {
+            "n": 4,
+            "exp_plan": 0.25
+          },
+          "blocked": {
+            "n": 8,
+            "exp_plan": -0.245
+          }
+        }
+      }
+    },
+    "NQ": {
+      "range": {
+        "all": {
+          "all": {
+            "n": 12,
+            "exp_plan": 0.04
+          }
+        },
+        "open_vs_flip": {
+          "above": {
+            "n": 5,
+            "exp_plan": 0.655
+          },
+          "below": {
+            "n": 7,
+            "exp_plan": -0.399
+          }
+        },
+        "regime": {
+          "positive": {
+            "n": 8,
+            "exp_plan": 0.495
+          },
+          "negative": {
+            "n": 4,
+            "exp_plan": -0.869
+          }
+        },
+        "wall_in_path": {
+          "blocked": {
+            "n": 9,
+            "exp_plan": -0.079
+          },
+          "clear": {
+            "n": 3,
+            "exp_plan": 0.398
+          }
+        }
+      },
+      "mid": {
+        "all": {
+          "all": {
+            "n": 12,
+            "exp_plan": -0.043
+          }
+        },
+        "open_vs_flip": {
+          "above": {
+            "n": 5,
+            "exp_plan": 0.797
+          },
+          "below": {
+            "n": 7,
+            "exp_plan": -0.643
+          }
+        },
+        "regime": {
+          "positive": {
+            "n": 8,
+            "exp_plan": 0.436
+          },
+          "negative": {
+            "n": 4,
+            "exp_plan": -1.0
+          }
+        },
+        "wall_in_path": {
+          "blocked": {
+            "n": 9,
+            "exp_plan": -0.216
+          },
+          "clear": {
+            "n": 3,
+            "exp_plan": 0.477
+          }
+        }
+      }
+    },
+    "ALL": {
+      "range": {
+        "all": {
+          "all": {
+            "n": 36,
+            "exp_plan": 0.088
+          }
+        },
+        "open_vs_flip": {
+          "above": {
+            "n": 16,
+            "exp_plan": 0.608
+          },
+          "below": {
+            "n": 20,
+            "exp_plan": -0.328
+          }
+        },
+        "regime": {
+          "positive": {
+            "n": 23,
+            "exp_plan": 0.382
+          },
+          "negative": {
+            "n": 13,
+            "exp_plan": -0.431
+          }
+        },
+        "wall_in_path": {
+          "clear": {
+            "n": 12,
+            "exp_plan": 0.391
+          },
+          "blocked": {
+            "n": 24,
+            "exp_plan": -0.063
+          }
+        }
+      },
+      "mid": {
+        "all": {
+          "all": {
+            "n": 36,
+            "exp_plan": 0.181
+          }
+        },
+        "open_vs_flip": {
+          "above": {
+            "n": 16,
+            "exp_plan": 0.655
+          },
+          "below": {
+            "n": 20,
+            "exp_plan": -0.198
+          }
+        },
+        "regime": {
+          "positive": {
+            "n": 23,
+            "exp_plan": 0.305
+          },
+          "negative": {
+            "n": 13,
+            "exp_plan": -0.038
+          }
+        },
+        "wall_in_path": {
+          "clear": {
+            "n": 12,
+            "exp_plan": 0.828
+          },
+          "blocked": {
+            "n": 24,
+            "exp_plan": -0.142
+          }
+        }
+      }
+    }
   }
 }
