@@ -7,15 +7,15 @@
   "stop_pctile": 75,
   "entry": "09:50",
   "close": "16:00",
-  "sessions": 36,
-  "days": 11,
+  "sessions": 39,
+  "days": 12,
   "from": "2026-09-21",
-  "to": "2026-10-05",
-  "scored_at": "2026-10-06",
+  "to": "2026-10-06",
+  "scored_at": "2026-10-07",
   "symbols": {
     "ES": {
       "call": {
-        "sessions": 11,
+        "sessions": 12,
         "n_levels": 16,
         "fade": {
           "n": 5,
@@ -38,6 +38,16 @@
           },
           "exp_plan": -0.304,
           "win_plan": 0.2,
+          "by_open": {
+            "out": {
+              "n": 2,
+              "exp_plan": -1.0
+            },
+            "in": {
+              "n": 2,
+              "exp_plan": -0.509
+            }
+          },
           "rate": 0.312
         },
         "breakout": {
@@ -61,12 +71,22 @@
           },
           "exp_plan": 0.5,
           "win_plan": 0.6,
+          "by_open": {
+            "out": {
+              "n": 2,
+              "exp_plan": 1.5
+            },
+            "in": {
+              "n": 3,
+              "exp_plan": -0.167
+            }
+          },
           "rate": 0.312
         }
       },
       "put": {
-        "sessions": 11,
-        "n_levels": 20,
+        "sessions": 12,
+        "n_levels": 22,
         "fade": {
           "n": 8,
           "stop_pct": 0.152,
@@ -88,67 +108,89 @@
           },
           "exp_plan": -0.062,
           "win_plan": 0.375,
-          "rate": 0.4
+          "by_open": {
+            "in": {
+              "n": 8,
+              "exp_plan": -0.062
+            }
+          },
+          "rate": 0.364
         },
         "breakout": {
           "n": 7,
           "stop_pct": 0.1,
           "exp": {
-            "1": 0.005,
-            "1.5": 0.219,
-            "2": 0.433
+            "1": 0.143,
+            "1.5": 0.224,
+            "2": 0.438
           },
           "win": {
-            "1": 0.429,
+            "1": 0.571,
             "1.5": 0.429,
             "2": 0.429
           },
           "by_era": {
             "single": {
               "n": 7,
-              "exp_plan": 0.219
+              "exp_plan": 0.224
             }
           },
-          "exp_plan": 0.219,
+          "exp_plan": 0.224,
           "win_plan": 0.429,
-          "rate": 0.35
+          "by_open": {
+            "in": {
+              "n": 7,
+              "exp_plan": 0.224
+            }
+          },
+          "rate": 0.318
         }
       }
     },
     "GC": {
       "call": {
-        "sessions": 11,
-        "n_levels": 21,
+        "sessions": 12,
+        "n_levels": 23,
         "fade": {
-          "n": 2,
-          "stop_pct": 0.179,
+          "n": 4,
+          "stop_pct": 0.172,
           "exp": {
             "1": 0.0,
             "1.5": 0.25,
-            "2": 0.5
+            "2": -0.25
           },
           "win": {
             "1": 0.5,
             "1.5": 0.5,
-            "2": 0.5
+            "2": 0.25
           },
           "by_era": {
             "single": {
-              "n": 2,
+              "n": 4,
               "exp_plan": 0.25
             }
           },
           "exp_plan": 0.25,
           "win_plan": 0.5,
-          "rate": 0.095
+          "by_open": {
+            "in": {
+              "n": 2,
+              "exp_plan": 0.25
+            },
+            "out": {
+              "n": 2,
+              "exp_plan": 0.25
+            }
+          },
+          "rate": 0.174
         },
         "breakout": {
-          "n": 2,
+          "n": 4,
           "stop_pct": 0.321,
           "exp": {
-            "1": -0.776,
-            "1.5": -0.776,
-            "2": -0.776
+            "1": -0.81,
+            "1.5": -0.81,
+            "2": -0.81
           },
           "win": {
             "1": 0.0,
@@ -157,18 +199,28 @@
           },
           "by_era": {
             "single": {
-              "n": 2,
-              "exp_plan": -0.776
+              "n": 4,
+              "exp_plan": -0.81
             }
           },
-          "exp_plan": -0.776,
+          "exp_plan": -0.81,
           "win_plan": 0.0,
-          "rate": 0.095
+          "by_open": {
+            "in": {
+              "n": 2,
+              "exp_plan": -0.776
+            },
+            "out": {
+              "n": 2,
+              "exp_plan": -0.844
+            }
+          },
+          "rate": 0.174
         }
       },
       "put": {
-        "sessions": 11,
-        "n_levels": 18,
+        "sessions": 12,
+        "n_levels": 20,
         "fade": {
           "n": 10,
           "stop_pct": 0.268,
@@ -190,7 +242,17 @@
           },
           "exp_plan": 0.276,
           "win_plan": 0.4,
-          "rate": 0.556
+          "by_open": {
+            "in": {
+              "n": 6,
+              "exp_plan": 0.492
+            },
+            "out": {
+              "n": 4,
+              "exp_plan": -0.047
+            }
+          },
+          "rate": 0.5
         },
         "breakout": {
           "n": 8,
@@ -213,64 +275,102 @@
           },
           "exp_plan": -0.063,
           "win_plan": 0.375,
-          "rate": 0.444
+          "by_open": {
+            "in": {
+              "n": 4,
+              "exp_plan": -0.375
+            },
+            "out": {
+              "n": 4,
+              "exp_plan": 0.25
+            }
+          },
+          "rate": 0.4
         }
       }
     },
     "NQ": {
       "call": {
-        "sessions": 11,
-        "n_levels": 18,
+        "sessions": 12,
+        "n_levels": 19,
         "fade": {
-          "n": 8,
-          "stop_pct": 0.214,
+          "n": 9,
+          "stop_pct": 0.25,
           "exp": {
-            "1": 0.25,
-            "1.5": -0.062,
-            "2": 0.125
+            "1": -0.111,
+            "1.5": -0.167,
+            "2": 0.0
           },
           "win": {
-            "1": 0.625,
-            "1.5": 0.375,
-            "2": 0.375
+            "1": 0.444,
+            "1.5": 0.333,
+            "2": 0.333
           },
           "by_era": {
             "single": {
               "n": 8,
               "exp_plan": -0.062
+            },
+            "multi": {
+              "n": 1,
+              "exp_plan": -1.0
             }
           },
-          "exp_plan": -0.062,
-          "win_plan": 0.375,
-          "rate": 0.444
+          "exp_plan": -0.167,
+          "win_plan": 0.333,
+          "by_open": {
+            "out": {
+              "n": 4,
+              "exp_plan": -1.0
+            },
+            "in": {
+              "n": 4,
+              "exp_plan": 0.25
+            }
+          },
+          "rate": 0.474
         },
         "breakout": {
-          "n": 7,
-          "stop_pct": 0.179,
+          "n": 8,
+          "stop_pct": 0.218,
           "exp": {
-            "1": 0.429,
-            "1.5": 0.071,
-            "2": -0.143
+            "1": 0.25,
+            "1.5": -0.062,
+            "2": 0.029
           },
           "win": {
-            "1": 0.714,
-            "1.5": 0.429,
-            "2": 0.286
+            "1": 0.625,
+            "1.5": 0.375,
+            "2": 0.25
           },
           "by_era": {
             "single": {
               "n": 7,
               "exp_plan": 0.071
+            },
+            "multi": {
+              "n": 1,
+              "exp_plan": -1.0
             }
           },
-          "exp_plan": 0.071,
-          "win_plan": 0.429,
-          "rate": 0.389
+          "exp_plan": -0.062,
+          "win_plan": 0.375,
+          "by_open": {
+            "out": {
+              "n": 4,
+              "exp_plan": -0.375
+            },
+            "in": {
+              "n": 4,
+              "exp_plan": 0.25
+            }
+          },
+          "rate": 0.421
         }
       },
       "put": {
-        "sessions": 11,
-        "n_levels": 21,
+        "sessions": 12,
+        "n_levels": 23,
         "fade": {
           "n": 4,
           "stop_pct": 0.131,
@@ -292,11 +392,17 @@
           },
           "exp_plan": 0.875,
           "win_plan": 0.75,
-          "rate": 0.19
+          "by_open": {
+            "in": {
+              "n": 4,
+              "exp_plan": 0.875
+            }
+          },
+          "rate": 0.174
         },
         "breakout": {
           "n": 3,
-          "stop_pct": 0.202,
+          "stop_pct": 0.205,
           "exp": {
             "1": -0.333,
             "1.5": -0.167,
@@ -315,7 +421,13 @@
           },
           "exp_plan": -0.167,
           "win_plan": 0.333,
-          "rate": 0.143
+          "by_open": {
+            "in": {
+              "n": 3,
+              "exp_plan": -0.167
+            }
+          },
+          "rate": 0.13
         }
       }
     }
