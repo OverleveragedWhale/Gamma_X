@@ -29,6 +29,10 @@ So this page does exactly that and no more:
   record  every resolved setup is appended to a forward-test history, so the
           page's live record can be set against the scorecard's backtest.
 
+Two sessions run side by side, as tabs: the DAY above, and the EVENING - a
+map frozen from the first clean snapshot after the 18:00 Globex roll, setups
+run to 03:00 ET, base rates from the scorecard's evening trades.
+
 Entry and the bar rules are the scorecard's own (tools/score_levels.py), and
 the base rates are its score_rules() - the same trades, measured - so the page
 never shows a trade nobody measured.
@@ -53,14 +57,56 @@ BARS_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
             "{sym}?range=5d&interval=5m&includePrePost=true")
 SETUPS = ("fade", "breakout")
 
+# Two sessions, each with its own frozen map, events and record. The evening
+# is the scorecard's evening window (tools/score_levels.py): its map is the
+# first clean snapshot after the 18:00 Globex roll, its bars run from that
+# snapshot to London's open, and its base rates are rules_evening. Sunday to
+# Thursday evenings; Friday and Saturday have no session.
+WINDOWS = {
+    "evening": {"label": "Evening", "map_from": sl.EVENING_MAP_FROM,
+                "map_to": sl.EVENING_MAP_TO, "end": sl.EVENING_END,
+                "overnight": True, "rules": "rules_evening"},
+    "day": {"label": "Day", "map_from": MAP_AT, "map_to": CLOSE, "end": CLOSE,
+            "overnight": False, "rules": "rules"},
+}
+
+
+def hm(hhmm):
+    return datetime.strptime(hhmm, "%H:%M").time()
+
+
+def session_due(win, now):
+    """The session whose map time has come by `now`, or None."""
+    spec, day = WINDOWS[win], now.date()
+    if now.strftime("%H:%M") < spec["map_from"]:
+        return None
+    if win == "day":
+        return day if g.is_trading_day(day) else None
+    return day if day.weekday() not in (4, 5) else None
+
+
+def session_end(win, session):
+    spec = WINDOWS[win]
+    day = datetime.fromisoformat(session).date()
+    return datetime.combine(day + timedelta(days=1 if spec["overnight"] else 0),
+                            hm(spec["end"]))
+
+
+def map_start(win, smap):
+    """Where a map's bars begin: 09:50 for the day, as the scorecard; the
+    evening snapshot's own time, as the scorecard's evening."""
+    return MAP_AT if win == "day" else (smap.get("frozen_at") or WINDOWS[win]["map_from"])
+
 
 # ---------------------------------------------------------------- inputs
-def session_bars(series, day, now):
-    """Completed 5-minute bars of `day`, MAP_AT to the close, ET.
+def session_bars(series, day, now, start=MAP_AT, win="day"):
+    """Completed 5-minute bars of one session, `start` to its end, ET.
 
     A bar still forming is left out: its high and low can still change, and a
     setup must not trigger on a print the next run would take back.
     """
+    begin = datetime.combine(day, hm(start))
+    end = session_end(win, day.isoformat())
     res = json.loads(g.http_get(BARS_URL.format(sym=series)))["chart"]["result"][0]
     q = res["indicators"]["quote"][0]
     off = (res.get("meta") or {}).get("gmtoffset") or 0
@@ -70,14 +116,11 @@ def session_bars(series, day, now):
         if hi is None or lo is None or cl is None:
             continue
         t = datetime.fromtimestamp(ts + off, timezone.utc).replace(tzinfo=None)
-        if t.date() != day:
-            continue
-        hhmm = t.strftime("%H:%M")
-        if not (MAP_AT <= hhmm < CLOSE):
+        if not begin <= t < end:
             continue
         if t + timedelta(minutes=BAR_MIN) > now:
             continue                       # still forming
-        rows.append((hhmm, float(hi), float(lo), float(cl)))
+        rows.append((t.strftime("%H:%M"), float(hi), float(lo), float(cl)))
     return rows
 
 
@@ -90,20 +133,20 @@ def rule_verdict(stats):
     return "ok"
 
 
-def build_symbol_map(sym, inst, calib, stamp):
-    """The 09:50 map for one symbol.
+def build_symbol_map(sym, inst, calib, stamp, win="day"):
+    """The session map for one symbol.
 
     Traded symbols (sl.RULE_POINTS) get both setups as rules - fixed 1:1 in
-    points - each carrying its base rate in every gamma context, and a verdict
-    for TODAY's regime. Symbols watched rather than traded (ES) get walls only:
-    their levels are context for the others, not trades.
+    points - each carrying its base rate in every gamma context, measured in
+    THIS window, and a verdict for the session's regime. Symbols watched
+    rather than traded (ES) get walls only: context for the others.
     """
     top = calib.get("top") or 2
     lv = sl.levels_of(sym, g.PLAN_BOOK, top, "nearest")
     regime = ((sym.get("regimes") or {}).get(g.PLAN_BOOK) or {}).get("regime")
     name = sym["symbol"]
     pts = sl.RULE_POINTS.get(name)
-    rules = ((calib.get("rules") or {}).get(name) or {})
+    rules = ((calib.get(WINDOWS[win]["rules"]) or {}).get(name) or {})
     walls = []
     for side in ("call", "put"):
         up = side == "call"
@@ -123,6 +166,7 @@ def build_symbol_map(sym, inst, calib, stamp):
             "points": pts, "contract": (sym.get("contract") or {}).get("symbol"),
             "multiplier": inst["multiplier"], "frozen_at": stamp,
             "regime": regime, "spot_at_map": sym.get("spot"),
+            "basis": sym.get("gamma_basis"),
             "flip": lv.get("flip"), "walls": walls}
 
 
@@ -206,12 +250,14 @@ FINAL = ("won", "lost", "closed")
 
 
 def summarise_record(history):
-    """Forward test by symbol, setup and gamma regime, against the backtest."""
+    """Forward test by session, symbol, setup and gamma regime, against the
+    backtest."""
     groups = {}
     for h in history:
         if h.get("status") not in FINAL:
             continue
-        key = (h["symbol"], h["setup"], h.get("regime") or "?")
+        key = (h.get("window") or "day", h["symbol"], h["setup"],
+               h.get("regime") or "?")
         gr = groups.setdefault(key, {"n": 0, "won": 0, "r": 0.0, "usd": 0,
                                      "bt": None})
         gr["n"] += 1
@@ -220,25 +266,27 @@ def summarise_record(history):
         gr["usd"] += h.get("pnl_usd") or 0
         if (h.get("base") or {}).get("exp") is not None:
             gr["bt"] = h["base"]["exp"]
-    return [{"symbol": sym, "setup": setup, "regime": regime, "n": v["n"],
-             "won": v["won"], "avg_r": round(v["r"] / v["n"], 2),
+    return [{"window": win, "symbol": sym, "setup": setup, "regime": regime,
+             "n": v["n"], "won": v["won"], "avg_r": round(v["r"] / v["n"], 2),
              "avg_usd": round(v["usd"] / v["n"]), "backtest_r": v["bt"]}
-            for (sym, setup, regime), v in sorted(groups.items())]
+            for (win, sym, setup, regime), v in sorted(groups.items())]
 
 
-def record_session(history, session, maps, now):
-    """Evaluate a session to its close and put its resolved setups in the
+def record_session(history, session, maps, now, win="day"):
+    """Evaluate a session to its end and put its resolved setups in the
     record, replacing any earlier pass over the same session."""
     day = datetime.fromisoformat(session).date()
-    keep = [h for h in history if h.get("date") != session]
+    keep = [h for h in history
+            if not (h.get("date") == session and (h.get("window") or "day") == win)]
     for name, smap in maps.items():
         try:
-            evs = evaluate(smap, session_bars(smap["contract"], day, now), True)
+            bars = session_bars(smap["contract"], day, now, map_start(win, smap), win)
+            evs = evaluate(smap, bars, True)
         except Exception:
             continue
         for ev in evs:
             if ev.get("status") in FINAL:
-                keep.append({"date": session, "symbol": name, **{
+                keep.append({"date": session, "window": win, "symbol": name, **{
                     k: ev.get(k) for k in ("side", "level", "setup", "verdict",
                                            "regime", "flip_side", "base", "time",
                                            "entry", "stop", "target", "r",
@@ -247,36 +295,24 @@ def record_session(history, session, maps, now):
 
 
 # ------------------------------------------------------------------ run
-def run(pub, now=None, payload_path=None):
-    pub = Path(pub)
-    state_path = pub / "setups.json"
-    try:
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        state = {}
-    history = state.get("history") or []
-    now = now or g.now_et().replace(tzinfo=None)
-    today = now.date()
-    hhmm = now.strftime("%H:%M")
-    calib = g.load_calibration()
-    payload = json.loads(Path(payload_path or pub / "data.json")
-                         .read_text(encoding="utf-8"))
-    insts = {i["future"]: i for i in g.INSTRUMENTS}
+def step_window(win, ws, history, payload, calib, insts, now):
+    """Advance one session window by one run. Returns (window, history)."""
+    spec = WINDOWS[win]
+    due = session_due(win, now)
+    session, maps = ws.get("session"), ws.get("maps") or {}
+    # A new session replaces the old one when its map time comes; one left
+    # unfinished - the PC off at its end, say - is finished first so its
+    # setups still reach the record. Yahoo keeps the bars for days.
+    if due and (session or "") < due.isoformat():
+        if session and not ws.get("session_over"):
+            history = record_session(history, session, maps, now, win)
+        session, maps = due.isoformat(), {}
 
-    # A session left open - the PC was off at the close, say - is finished
-    # now, before today's map replaces it, so its setups still reach the
-    # record. Yahoo keeps the bars for days, so a late finish is exact.
-    prev = state.get("session")
-    if prev and prev != today.isoformat() and not state.get("session_over"):
-        history = record_session(history, prev, state.get("maps") or {}, now)
-
-    session = prev if prev == today.isoformat() else None
-    maps = (state.get("maps") or {}) if session else {}
     notes = []
-    if g.is_trading_day(today) and hhmm >= MAP_AT:
-        session = today.isoformat()
+    if due and session == due.isoformat():
         stamp = (payload.get("generated") or "").replace(" ET", "")
-        fresh = stamp[:10] == session and stamp[11:16] >= MAP_AT
+        fresh = (stamp[:10] == session
+                 and spec["map_from"] <= stamp[11:16] < spec["map_to"])
         for sym in payload.get("symbols") or []:
             name = sym.get("symbol")
             if name in maps or name not in insts:
@@ -284,17 +320,20 @@ def run(pub, now=None, payload_path=None):
             # Freeze only from a clean read of THIS session: a held panel is
             # an earlier run's ladder, and a pre-09:50 one is pre-outage.
             if fresh and sym.get("ok") and not sym.get("regimes_from"):
-                maps[name] = build_symbol_map(sym, insts[name], calib, stamp[11:16])
-            else:
+                maps[name] = build_symbol_map(sym, insts[name], calib,
+                                              stamp[11:16], win)
+            elif now.strftime("%H:%M") < spec["map_to"] or win == "day":
                 notes.append(f"{name}: map waiting for a clean snapshot")
 
-    session_over = bool(session) and (today.isoformat() > session or hhmm >= CLOSE)
+    session_over = bool(session) and now >= session_end(win, session)
     symbols = []
     if session:
+        day = datetime.fromisoformat(session).date()
         for name, smap in maps.items():
             entry = {"symbol": name, "map": smap, "events": []}
             try:
-                bars = session_bars(smap["contract"], datetime.fromisoformat(session).date(), now)
+                bars = session_bars(smap["contract"], day, now,
+                                    map_start(win, smap), win)
                 entry["events"] = evaluate(smap, bars, session_over)
                 entry["last"] = bars[-1][3] if bars else None
                 entry["bars_to"] = bars[-1][0] if bars else None
@@ -304,14 +343,53 @@ def run(pub, now=None, payload_path=None):
 
     # The finished session goes into the record; a re-run replaces it.
     if session and session_over:
-        history = record_session(history, session, maps, now)
+        history = record_session(history, session, maps, now, win)
+
+    return ({"name": win, "label": spec["label"], "session": session,
+             "session_over": session_over, "map_from": spec["map_from"],
+             "map_to": spec["map_to"], "end": spec["end"],
+             "symbols": symbols, "notes": notes, "maps": maps}, history)
+
+
+def default_window(windows, now):
+    """The tab a visitor lands on: a day session still trading, else the
+    evening from the cash close until the next morning's map."""
+    day = windows.get("day") or {}
+    if day.get("session") == now.date().isoformat() and not day.get("session_over"):
+        return "day"
+    return "evening" if not (MAP_AT <= now.strftime("%H:%M") < CLOSE) else "day"
+
+
+def run(pub, now=None, payload_path=None):
+    pub = Path(pub)
+    state_path = pub / "setups.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    history = state.get("history") or []
+    for h in history:
+        h.setdefault("window", "day")
+    prior = {w["name"]: w for w in state.get("windows") or []}
+    if not prior and state.get("session"):            # the one-session format
+        prior["day"] = {"session": state["session"], "maps": state.get("maps"),
+                        "session_over": state.get("session_over")}
+    now = now or g.now_et().replace(tzinfo=None)
+    calib = g.load_calibration()
+    payload = json.loads(Path(payload_path or pub / "data.json")
+                         .read_text(encoding="utf-8"))
+    insts = {i["future"]: i for i in g.INSTRUMENTS}
+
+    windows = {}
+    for win in WINDOWS:
+        windows[win], history = step_window(win, prior.get(win) or {}, history,
+                                            payload, calib, insts, now)
 
     data = {"generated": now.strftime("%Y-%m-%d %H:%M ET"), "epoch": time.time(),
-            "session": session, "session_over": session_over,
-            "map_at": MAP_AT, "symbols": symbols, "notes": notes,
+            "default_window": default_window(windows, now),
+            "windows": list(windows.values()),
             "calibration": {k: calib.get(k) for k in ("from", "to", "days")},
-            "record": summarise_record(history), "history": history,
-            "maps": maps}
+            "record": summarise_record(history), "history": history}
     blob = json.dumps(data, separators=(",", ":"))
     state_path.write_text(blob, encoding="utf-8")
     (pub / "setups.html").write_text(
@@ -374,6 +452,11 @@ tr.hot td{background:rgba(217,164,65,.07)}
 .err{color:var(--stress);font-size:12px}
 .caveat{color:var(--muted);font-size:11px;line-height:1.55;max-width:80ch;margin-top:14px}
 .caveat b{color:var(--brass);font-weight:500}
+.tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+.tab{background:none;border:1px solid var(--line);color:var(--muted);border-radius:6px;
+  padding:8px 14px;font:inherit;cursor:pointer;text-align:left}
+.tab.on{color:var(--ink);border-color:var(--brass);background:rgba(217,164,65,.08)}
+.tab small{display:block;font-size:10.5px;color:var(--muted)}
 </style></head>
 <body><div class="wrap">
 <header>
@@ -464,18 +547,33 @@ function recordTable(rec){
     +`<tbody>${rows}</tbody></table></div>`;
 }
 
-function renderSetups(d){
+function windowTabs(d, cur){
+  return `<div class="tabs">` + d.windows.map(w=>{
+    const st = !w.session ? "no map yet" : `${w.session} · ${w.session_over?"closed":"live"}`;
+    return `<button class="tab ${w.name===cur?"on":""}" onclick="pickWin('${w.name}')">`
+      + `${esc(w.label)} <span class="sub">${esc(w.map_from)}–${esc(w.end)} ET</span><small>${esc(st)}</small></button>`;
+  }).join("") + `</div>`;
+}
+
+function renderSetups(d, win){
   if(!d) return `<div class="panel empty">No setups data yet.</div>`;
-  const syms = (d.symbols||[]).slice().sort((a,b)=>
+  if(!d.windows) return `<div class="panel empty">Updating to the new format…</div>`;
+  win = win || d.default_window || "day";
+  const w = d.windows.find(x=>x.name===win) || d.windows[0];
+  const evening = w.name==="evening";
+  const syms = (w.symbols||[]).slice().sort((a,b)=>
     ((a.map||{}).mode==="awareness") - ((b.map||{}).mode==="awareness"));
-  let html = "";
-  if(!d.session) html += `<div class="panel empty">The session map freezes at ${esc(d.map_at)} ET on trading days.</div>`;
+  let html = windowTabs(d, w.name);
+  if(!w.session) html += `<div class="panel empty">` + (evening
+    ? `The evening map freezes at the first clean snapshot after ${esc(w.map_from)} ET, Sunday to Thursday, and its setups run to ${esc(w.end)} ET.`
+    : `The session map freezes at ${esc(w.map_from)} ET on trading days.`) + `</div>`;
   for(const s of syms){
     const m = s.map||{};
     const aware = m.mode==="awareness";
     html += `<div class="panel"><div class="phead"><span class="sym">${esc(s.symbol)}</span>`
       + (aware ? chip("awareness only") : chip(`rules: 1:1, ${fx(m.points,0)} pts`))
       + ` ${regimeChip(m.regime)}`
+      + (m.basis==="live" ? ` ${chip("gamma at live price")}` : "")
       + `<span class="sub">map frozen ${esc(m.frozen_at)} ET · flip ${fx(m.flip)}`
       + (s.last!=null?` · last ${fx(s.last)} (${esc(s.bars_to)} bar)`:"")+`</span></div>`
       + (s.error?`<div class="err">${esc(s.error)}</div>`:"");
@@ -483,30 +581,38 @@ function renderSetups(d){
       html += `<div class="k">Walls, for context</div>` + awareness(s) + `</div>`;
       continue;
     }
-    html += `<div class="k">Setups today</div>` + eventRows(s.events||[], m.multiplier)
-      + `<div class="k">Session map: each rule's history in each gamma regime</div>` + mapTable(m) + `</div>`;
+    html += `<div class="k">Setups ${evening?"tonight":"today"}</div>` + eventRows(s.events||[], m.multiplier)
+      + `<div class="k">Session map: each rule's ${evening?"evening ":""}history in each gamma regime</div>` + mapTable(m) + `</div>`;
   }
-  for(const n of (d.notes||[])) html += `<div class="sub">${esc(n)}</div>`;
+  for(const n of (w.notes||[])) html += `<div class="sub">${esc(n)}</div>`;
   const c = d.calibration||{};
-  html += `<div class="panel"><div class="phead"><span class="sym" style="font-size:16px">Forward test</span>`
+  const rec = (d.record||[]).filter(r=>(r.window||"day")===w.name);
+  html += `<div class="panel"><div class="phead"><span class="sym" style="font-size:16px">Forward test, ${esc(w.label.toLowerCase())}</span>`
     + `<span class="sub">live results of these rules, by regime, against the backtest</span></div>`
-    + recordTable(d.record)
+    + recordTable(rec)
     + `<div class="caveat"><b>*</b> Rules: fixed 1:1 stop and target in points, fades on the first touch `
     + `of a wall and breakouts on the first 5-minute close through, one of each per wall per session, `
-    + `the nearest walls each side, frozen at ${esc(d.map_at)} ET. "Regime" is the near book's net gamma `
-    + `in that 09:50 map; "above/below flip" is where the entry sat against its flip. Base rates come `
-    + `from ${esc(c.days)} sessions (${esc(c.from)} to ${esc(c.to)}) and many are a handful of trades, so `
-    + `read them as provisional; the forward test is the check. Only completed 5-minute bars are used, `
-    + `so a trigger shows up to one bar plus one publish late. A bar touching both stop and target `
-    + `counts as the stop. Rows without a measured edge in today's regime are dimmed. Not advice.</div></div>`;
+    + `the nearest walls each side, frozen ` + (evening
+      ? `from the first clean snapshot after the ${esc(w.map_from)} Globex roll and run to ${esc(w.end)} ET. `
+        + `After the cash close the chain stops printing, so evening maps read gamma repriced to the live `
+        + `future (tagged on the panel); earlier evening sessions read it at the 4pm close. `
+      : `at ${esc(w.map_from)} ET and run to the ${esc(w.end)} close. `)
+    + `"Regime" is the near book's net gamma in that map; "above/below flip" is where the entry sat `
+    + `against its flip. Base rates come from the scorecard's ${evening?"evening":"day"} trades over `
+    + `${esc(c.days)} sessions (${esc(c.from)} to ${esc(c.to)}) and many are a handful of trades, so read `
+    + `them as provisional; the forward test is the check. Only completed 5-minute bars are used, so a `
+    + `trigger shows up to one bar plus one publish late. A bar touching both stop and target counts as `
+    + `the stop. Rows without a measured edge in the session's regime are dimmed. Not advice.</div></div>`;
   return html;
 }
 
+let CUR = SETUPS_DATA, WIN = null;
+function pickWin(w){ WIN = w; paint(CUR); }
 function paint(d){
-  document.getElementById("root").innerHTML = renderSetups(d);
+  CUR = d;
+  document.getElementById("root").innerHTML = renderSetups(d, WIN);
   document.getElementById("meta").innerHTML = d
-    ? `<span>session <b>${esc(d.session||"—")}</b></span><span>updated <b>${esc(d.generated)}</b></span>`
-      + (d.session_over?`<span>session closed</span>`:"") : "";
+    ? `<span>updated <b>${esc(d.generated)}</b></span>` : "";
 }
 
 async function poll(){
@@ -516,8 +622,8 @@ async function poll(){
   const got=(await Promise.all([get("setups.json?t="+t),
     (m&&repo)?get(`https://raw.githubusercontent.com/${m[1]}/${repo}/snapshot/setups.json?t=${t}`):null]))
     .filter(Boolean);
-  const best=got.reduce((a,b)=>((b.epoch||0)>(a.epoch||0)?b:a), SETUPS_DATA||{epoch:0});
-  if(best && best!==SETUPS_DATA) paint(best);
+  const best=got.reduce((a,b)=>((b.epoch||0)>(a.epoch||0)?b:a), CUR||{epoch:0});
+  if(best && best!==CUR) paint(best);
 }
 paint(SETUPS_DATA);
 setInterval(poll, 60000);
@@ -533,12 +639,14 @@ def main():
     a = ap.parse_args()
     now = datetime.strptime(a.now, "%Y-%m-%d %H:%M") if a.now else None
     d = run(a.pub, now, a.payload)
-    live = sum(1 for s in d["symbols"] for e in s["events"]
-               if e.get("status") in ("armed", "open"))
-    done = sum(1 for s in d["symbols"] for e in s["events"]
-               if e.get("status") in FINAL)
-    print(f"setups: session {d['session']}, {len(d['symbols'])} maps, "
-          f"{live} live, {done} resolved, {len(d['history'])} in the record")
+    for w in d["windows"]:
+        live = sum(1 for s in w["symbols"] for e in s["events"]
+                   if e.get("status") in ("armed", "open"))
+        done = sum(1 for s in w["symbols"] for e in s["events"]
+                   if e.get("status") in FINAL)
+        print(f"setups {w['name']}: session {w['session']}, "
+              f"{len(w['symbols'])} maps, {live} live, {done} resolved")
+    print(f"setups: {len(d['history'])} in the record")
     return 0
 
 

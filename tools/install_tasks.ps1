@@ -38,6 +38,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $tasks = @(
     @{ File = "GammaX-Snapshot.xml";       Name = "Gamma_X Snapshot";       NeedsPassword = $true },
     @{ File = "GammaX-Snapshot-Close.xml"; Name = "Gamma_X Snapshot Close"; NeedsPassword = $true },
+    @{ File = "GammaX-Snapshot-Evening.xml"; Name = "Gamma_X Snapshot Evening"; NeedsPassword = $true },
     # Desktop notifications. InteractiveToken, so no password: the snapshot
     # tasks cannot show a toast from their session and start this one instead.
     @{ File = "GammaX-Alert.xml";          Name = "Gamma_X Alert";          NeedsPassword = $false }

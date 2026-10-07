@@ -67,6 +67,24 @@ CLOSE = [
      "15:00", "16:45", 5, WEEKDAYS),
 ]
 
+# The evening session (setups.py's evening tab, 18:00 map to 03:00 ET) needs
+# runs while it trades, or its setups only move at 20:00 and 00:00. Every 15
+# minutes, around the times the main task already holds - two tasks firing at
+# one minute would race each other's push - and in a third task, because the
+# 33 runs do not fit beside either other one under MAX_TRIGGERS.
+EVENINGS = ("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday")
+MORNINGS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
+EVENING = [
+    ("Evening session opens Sunday (weekdays are the main task's 18:20)",
+     "18:20", "18:20", 0, ("Sunday",)),
+    ("Evening session: every 15 minutes, 18:35 through 19:50, Sun-Thu",
+     "18:35", "19:50", 15, EVENINGS),
+    ("Evening session: every 15 minutes, 20:15 through 23:45, Sun-Thu",
+     "20:15", "23:45", 15, EVENINGS),
+    ("Evening session after midnight: every 15 minutes, 00:15 through 02:45",
+     "00:15", "02:45", 15, MORNINGS),
+]
+
 # (output file, task name/URI, one-line role, schedule)
 TASKS = [
     (TEMPLATE, "Gamma_X Snapshot",
@@ -75,6 +93,10 @@ TASKS = [
     (HERE / "GammaX-Snapshot-Close.xml", "Gamma_X Snapshot Close",
      "Weekdays every 5 minutes from 15:00 to 16:45, the cash close and the "
      "hour after it.", CLOSE),
+    (HERE / "GammaX-Snapshot-Evening.xml", "Gamma_X Snapshot Evening",
+     "Every 15 minutes through the evening session, 18:20 to 02:45, Sunday "
+     "evening to Friday morning, around the main task's 18:20, 20:00 and "
+     "00:00.", EVENING),
 ]
 
 DESCRIPTION = (

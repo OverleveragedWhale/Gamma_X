@@ -246,6 +246,11 @@ def session_entry(sym, day, stamp, book, top, select):
         # Which option-chain era built these levels: ES and NQ moved from one
         # chain to two on 2026-10-06, and the two eras are not the same levels.
         "era": "multi" if len(sym.get("chains") or []) > 1 else "single",
+        # Which gamma the walls were read from: the chain's own ("chain"), or
+        # repriced to the live future after the close ("live", from
+        # 2026-10-07). Snapshots before the tag read the close's, overnight.
+        "basis": sym.get("gamma_basis") or (
+            "chain" if g.chain_greeks_live(stamp) else "close"),
     }
 
 
@@ -519,7 +524,8 @@ def rule_trades(since=None, until=None):
                             "level": round(level, 2), "regime": s["regime"],
                             "flip_side": (("above" if entry > flip else "below")
                                           if flip else None),
-                            "era": s["era"], "map_at": s["at"].strftime("%H:%M"),
+                            "era": s["era"], "basis": s["basis"],
+                            "map_at": s["at"].strftime("%H:%M"),
                             "time": rb[start if fill else start - 1][0],
                             "entry": round(entry, 2),
                             "adv": adv, "fav": fav, "marks": marks})

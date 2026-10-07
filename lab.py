@@ -169,7 +169,7 @@ function defaultState(d){
   const pts = (d&&d.points)||{};
   const sym = "NQ";
   return {win: windowsOf(d)[0]||"evening", sym, setup:"all", regime:"all", flip:"all",
-          side:"all", from:"", to:"", enter_from:"", enter_to:"", flat:"",
+          side:"all", basis:"all", from:"", to:"", enter_from:"", enter_to:"", flat:"",
           stop: pts[sym]||40, target: pts[sym]||40, link:true};
 }
 
@@ -198,6 +198,7 @@ function filtered(d, S){
     && (S.regime==="all" || t.regime===S.regime)
     && (S.flip==="all" || t.flip_side===S.flip)
     && (S.side==="all" || t.side===S.side)
+    && (S.basis==="all" || (t.basis||"close")===S.basis)
     && (!S.from || t.date>=S.from) && (!S.to || t.date<=S.to)
     && (!S.enter_from || ord(t.time,win) >= ord(S.enter_from,win))
     && (!S.enter_to || ord(t.time,win) <= ord(S.enter_to,win))
@@ -357,6 +358,7 @@ function controls(d){
     + sel("regime","Gamma regime", [["all","Any"],["negative","Negative"],["positive","Positive"]])
     + sel("flip","Entry vs flip", [["all","Any"],["below","Below flip"],["above","Above flip"]])
     + sel("side","Wall", [["all","Both"],["call","Call walls"],["put","Put walls"]])
+    + sel("basis","Gamma read at", [["all","Any"],["close","4pm close (old)"],["live","Live future"],["chain","Chain, cash hours"]])
     + num("stop","Stop, pts") + num("target","Target, pts")
     + `<label class="chk"><input type="checkbox" ${S.link?"checked":""} onchange="set('link',this.checked)">Keep 1:1</label>`
     + sel("enter_from","Enter from", [["","Map time"], ...hh])

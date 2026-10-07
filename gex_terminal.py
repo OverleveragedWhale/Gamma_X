@@ -1306,6 +1306,53 @@ def build_regime(contracts, spot, today, prior, disp, ref_spot=None,
 _EXP_MAX = 700.0     # math.exp raises OverflowError past ~709
 
 
+# The chain's underlying stops printing at the cash close and Cboe's greeks
+# stay where the close left them, while the future trades all night. Walls and
+# regime were therefore read off the book at the 16:00 price however far the
+# future had gone since - the flip alone already modelled the move. Outside
+# the cash session the book is repriced to the live future instead.
+CASH_OPEN_ET, CASH_CLOSE_ET = "09:30", "16:15"   # chain greeks are live inside
+
+
+def chain_greeks_live(now):
+    """True while the chain's own greeks track price: a trading day's cash
+    session, plus the quarter hour Cboe's delayed feed runs behind."""
+    return (is_trading_day(now.date())
+            and CASH_OPEN_ET <= now.strftime("%H:%M") < CASH_CLOSE_ET)
+
+
+def reprice_gamma(contracts, spot, S, today):
+    """Each contract's chain gamma moved from the chain's price to S.
+
+    The same scaling find_flip uses - chain gamma x bs_gamma(S)/bs_gamma(spot),
+    keeping Cboe's own gamma as the anchor rather than a from-scratch one - so
+    the walls and regime read the book at S and agree with the flip's curve
+    there. The flip itself cannot move: rescaling every anchor by the same BS
+    ratio leaves its curve exactly as it was.
+
+    Volatility is held at the close's implied vol and time at whole days, both
+    as find_flip has them; the overnight vol move is not observable on a free
+    feed, and the day count matches the flip's.
+    """
+    if not S or not spot or S <= 0 or spot <= 0 or abs(S / spot - 1) < 1e-9:
+        return contracts
+    ln_S, ln_spot = math.log(S), math.log(spot)
+    out = []
+    for c in contracts:
+        gamma, iv, K = c["gamma"], c["iv"], c["strike"]
+        if gamma > 0 and iv > 0 and K > 0:
+            T = max((c["exp"] - today).days / 365.0, 0.5 / 365.0)
+            vt = iv * math.sqrt(T)
+            a = math.log(K) - 0.5 * vt * vt
+            A, d1 = (ln_spot - a) / vt, (ln_S - a) / vt
+            # In logs: an anchor gamma near underflow times a large ratio is a
+            # fine number, and neither factor alone may be representable.
+            x = math.log(gamma) + 0.5 * (A * A - d1 * d1) + ln_spot - ln_S
+            c = dict(c, gamma=math.exp(min(x, _EXP_MAX)))
+        out.append(c)
+    return out
+
+
 def find_flip(spot, contracts, today, span=0.07, steps=71):
     """Price nearest spot where net GEX changes sign, or None.
 
@@ -2442,6 +2489,18 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
     prior_lv = ({k: (prior[k] * m if k in ("h", "l", "c") else prior[k])
                  for k in prior} if prior else None)
 
+    # The book the walls and regime are read from: the chain's own greeks in
+    # the cash session, repriced to the live future outside it (see
+    # reprice_gamma). gspot is the price that book is evaluated at.
+    book, gspot = contracts, spot
+    out["gamma_basis"] = "chain"
+    if contracts and has_gamma and live and not chain_greeks_live(now):
+        book, gspot = reprice_gamma(contracts, spot, ref_spot, today), ref_spot
+        out["gamma_basis"] = "live"
+        out["gamma_at"] = round(ref_spot, 2)
+        out["scale_note"] += (f" · chain closed: gamma repriced from "
+                              f"{spot:.2f} to live {ref_spot:.2f}")
+
     if contracts and has_gamma:
         fut_exp = active["expiry"]
         near_cutoff = min(fut_exp, book_date + timedelta(days=NEAR_MAX_DTE))
@@ -2452,9 +2511,9 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
         # narrowing costs nothing.
         week_cutoff = min(next_friday(book_date), near_cutoff)
         buckets = {
-            "week": [c for c in contracts if c["exp"] <= week_cutoff],
-            "near": [c for c in contracts if c["exp"] <= near_cutoff],
-            "full": contracts,
+            "week": [c for c in book if c["exp"] <= week_cutoff],
+            "near": [c for c in book if c["exp"] <= near_cutoff],
+            "full": book,
         }
         label_contract = (active["chosen"] or {}).get("label") or "fut"
         labels = {
@@ -2466,7 +2525,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
             "full": f"Full book (thru {MAX_DTE}d)",
         }
         for key, sub in buckets.items():
-            out["regimes"][key] = build_regime(sub, spot, today, prior_lv,
+            out["regimes"][key] = build_regime(sub, gspot, today, prior_lv,
                                                disp, ref_spot,
                                                book_date=book_date)
             out["regimes"][key]["label"] = labels[key]
@@ -2480,11 +2539,11 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
         out["books"] = list(buckets)
         # wall_sep is quoted in chain points; the ladder wants a fraction.
         sep = inst.get("wall_sep")
-        per_by_book = {k: gex_by_strike(v, spot, book_date)
+        per_by_book = {k: gex_by_strike(v, gspot, book_date)
                        for k, v in buckets.items()}
         out["ladder"] = build_ladder(
             per_by_book,
-            list(buckets), spot, ref_spot, prior_lv, disp,
+            list(buckets), gspot, ref_spot, prior_lv, disp,
             n=inst.get("wall_count"),
             # wall_sep is quoted in PRIMARY chain points and min_sep wants a
             # fraction of spot, and that fraction is the same number before and
@@ -2517,7 +2576,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
                 r["src"] = "+".join(src)
                 r["both"] = len(src) > 1
 
-        out["zero"] = zero_dte(contracts, spot, ref_spot, book_date)
+        out["zero"] = zero_dte(book, gspot, ref_spot, book_date)
         zs = out["zero"].get("strikes") or {}
         for r in out["ladder"]:
             d = zs.get(f"{r['strike_pre']:.2f}")
