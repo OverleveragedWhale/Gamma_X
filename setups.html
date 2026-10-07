@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Gamma Setups</title>
+<style>
+:root{
+  --bg:#0b0f17; --panel:#131b28; --raised:#1a2434; --line:rgba(255,255,255,.08);
+  --ink:#e7ecf4; --muted:#7f8da0;
+  --brass:#d9a441; --jade:#4bbf8a; --verm:#e0603f; --stress:#ff5d63;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;font-size:13px}
+.wrap{max-width:1180px;margin:0 auto;padding:22px 16px 48px}
+header{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px 18px;margin-bottom:18px}
+h1{font-family:system-ui,sans-serif;font-weight:800;font-size:19px;letter-spacing:.04em;margin:0}
+h1 .g{color:var(--brass)}
+.meta{color:var(--muted);font-size:12px;display:flex;flex-wrap:wrap;gap:6px 16px}
+.meta b{color:var(--ink);font-weight:500}
+.navlink{color:var(--brass);text-decoration:none;border:1px solid var(--brass);
+  border-radius:4px;padding:5px 10px;font-size:12px;letter-spacing:.06em;margin-left:auto}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+  padding:16px;margin-bottom:16px;min-width:0}
+.phead{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 16px;margin-bottom:10px}
+.sym{font-family:system-ui,sans-serif;font-weight:800;font-size:22px;letter-spacing:.06em}
+.sub{color:var(--muted);font-size:11.5px}
+.k{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);
+  margin:14px 0 5px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;font-size:12.5px;min-width:560px;width:100%}
+th{text-align:left;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--muted);font-weight:500;padding:4px 10px 4px 0;border-bottom:1px solid var(--line)}
+td{padding:5px 10px 5px 0;border-bottom:1px solid rgba(255,255,255,.04);font-variant-numeric:tabular-nums}
+td.num,th.num{text-align:right}
+.side-c{color:var(--jade)}.side-p{color:var(--verm)}
+.pos{color:var(--jade)}.neg{color:var(--verm)}
+.chip{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;
+  border:1px solid var(--line);border-radius:3px;color:var(--muted);white-space:nowrap}
+.v-ok{color:var(--jade);border-color:rgba(75,191,138,.45)}
+.v-thin,.v-room{color:var(--brass);border-color:rgba(217,164,65,.45)}
+.v-noedge{color:var(--stress);border-color:rgba(255,93,99,.4)}
+.s-armed{color:var(--brass);border-color:var(--brass)}
+.s-open{color:var(--ink);border-color:var(--ink)}
+.s-won{color:var(--jade);border-color:var(--jade)}
+.s-lost{color:var(--verm);border-color:var(--verm)}
+tr.dim td{opacity:.55}
+.empty{color:var(--muted);font-size:12px;padding:6px 0}
+.err{color:var(--stress);font-size:12px}
+.caveat{color:var(--muted);font-size:11px;line-height:1.55;max-width:80ch;margin-top:14px}
+.caveat b{color:var(--brass);font-weight:500}
+</style></head>
+<body><div class="wrap">
+<header>
+  <h1>Gamma<span class="g">/</span>Setups<b style="color:var(--brass)">*</b></h1>
+  <div class="meta" id="meta"></div>
+  <a class="navlink" href="./">&larr; Dashboard</a>
+</header>
+<div id="root"></div>
+</div>
+<script>
+const SETUPS_DATA = {"generated":"2026-10-07 14:03 ET","epoch":1791396220.0178654,"session":"2026-10-07","session_over":false,"map_at":"09:50","symbols":[{"symbol":"ES","map":{"symbol":"ES","contract":"ESZ26.CME","multiplier":50,"frozen_at":"09:50","spot_at_map":7824.0,"flip":7822.0,"structure":[8113.3,8062.74,8012.18,7961.62,7939.5,7931.6,7911.06,7901.58,7892.1,7862.08,7811.52,7800.46,7781.5,7760.96,7710.4,7700.92,7685.12,7659.84,7609.28,7558.72,7822.0],"walls":[{"side":"call","level":7862.08,"setups":{"fade":{"direction":-1,"stop_pct":0.217,"verdict":"thin","planned_rr":2.35,"basis":{"n":5,"win":0.2,"exp":0.128,"measure":"wall"}},"breakout":{"direction":1,"stop_pct":0.1,"verdict":"thin","planned_rr":3.82,"basis":{"n":5,"win":0.0,"exp":-0.14,"measure":"wall"}}}},{"side":"call","level":7892.1,"setups":{"fade":{"direction":-1,"stop_pct":0.217,"verdict":"thin","planned_rr":1.75,"basis":{"n":5,"win":0.2,"exp":0.128,"measure":"wall"}},"breakout":{"direction":1,"stop_pct":0.1,"verdict":"thin","planned_rr":1.2,"basis":{"n":5,"win":0.0,"exp":-0.14,"measure":"wall"}}}},{"side":"put","level":7811.52,"setups":{"fade":{"direction":1,"stop_pct":0.131,"verdict":"no edge","planned_rr":1.02,"basis":{"n":8,"win":0.125,"exp":0.082,"measure":"wall"}},"breakout":{"direction":-1,"stop_pct":0.133,"verdict":"ok","planned_rr":1.06,"basis":{"n":6,"win":0.333,"exp":0.326,"measure":"wall"}}}},{"side":"put","level":7800.46,"setups":{"fade":{"direction":1,"stop_pct":0.131,"verdict":"no edge","planned_rr":1.08,"basis":{"n":8,"win":0.125,"exp":0.082,"measure":"wall"}},"breakout":{"direction":-1,"stop_pct":0.133,"verdict":"ok","planned_rr":1.83,"basis":{"n":6,"win":0.333,"exp":0.326,"measure":"wall"}}}}]},"events":[{"side":"call","level":7862.08,"setup":"fade","verdict":"thin","direction":-1,"basis":{"n":5,"win":0.2,"exp":0.128,"measure":"wall"},"planned_rr":2.35,"status":"armed","dist_pct":0.11},{"side":"call","level":7862.08,"setup":"breakout","verdict":"thin","direction":1,"basis":{"n":5,"win":0.0,"exp":-0.14,"measure":"wall"},"planned_rr":3.82,"status":"watching","dist_pct":0.11},{"side":"call","level":7892.1,"setup":"fade","verdict":"thin","direction":-1,"basis":{"n":5,"win":0.2,"exp":0.128,"measure":"wall"},"planned_rr":1.75,"status":"watching","dist_pct":0.49},{"side":"call","level":7892.1,"setup":"breakout","verdict":"thin","direction":1,"basis":{"n":5,"win":0.0,"exp":-0.14,"measure":"wall"},"planned_rr":1.2,"status":"watching","dist_pct":0.49},{"side":"put","level":7811.52,"setup":"fade","verdict":"no edge","direction":1,"basis":{"n":8,"win":0.125,"exp":0.082,"measure":"wall"},"planned_rr":1.02,"status":"watching","dist_pct":-0.53},{"side":"put","level":7811.52,"setup":"breakout","verdict":"ok","direction":-1,"basis":{"n":6,"win":0.333,"exp":0.326,"measure":"wall"},"planned_rr":1.06,"status":"watching","dist_pct":-0.53},{"side":"put","level":7800.46,"setup":"fade","verdict":"no edge","direction":1,"basis":{"n":8,"win":0.125,"exp":0.082,"measure":"wall"},"planned_rr":1.08,"status":"watching","dist_pct":-0.67},{"side":"put","level":7800.46,"setup":"breakout","verdict":"ok","direction":-1,"basis":{"n":6,"win":0.333,"exp":0.326,"measure":"wall"},"planned_rr":1.83,"status":"watching","dist_pct":-0.67}],"last":7853.25,"bars_to":"13:53"},{"symbol":"NQ","map":{"symbol":"NQ","contract":"NQZ26.CME","multiplier":20,"frozen_at":"09:50","spot_at_map":31177.25,"flip":30862.51,"structure":[32281.2,31978.8,31878.0,31777.2,31676.4,31575.6,31474.8,31355.1,31273.2,31222.8,31122.0,31021.2,30920.4,30819.6,30567.6,30466.8,30164.4,30063.6,30013.2,29736.0,30862.51],"walls":[{"side":"call","level":31273.2,"setups":{"fade":{"direction":-1,"stop_pct":0.25,"verdict":"ok","planned_rr":1.93,"basis":{"n":9,"win":0.333,"exp":0.211,"measure":"wall"}},"breakout":{"direction":1,"stop_pct":0.218,"verdict":"no edge","planned_rr":1.2,"basis":{"n":7,"win":0.286,"exp":-0.034,"measure":"wall"}}}},{"side":"call","level":31355.1,"setups":{"fade":{"direction":-1,"stop_pct":0.25,"verdict":"ok","planned_rr":1.04,"basis":{"n":9,"win":0.333,"exp":0.211,"measure":"wall"}},"breakout":{"direction":1,"stop_pct":0.218,"verdict":"no edge","planned_rr":1.75,"basis":{"n":7,"win":0.286,"exp":-0.034,"measure":"wall"}}}},{"side":"put","level":31222.8,"setups":{"fade":{"direction":1,"stop_pct":0.131,"verdict":"thin","planned_rr":1.23,"basis":{"n":4,"win":0.25,"exp":1.041,"measure":"wall"}},"breakout":{"direction":-1,"stop_pct":0.205,"verdict":"thin","planned_rr":1.57,"basis":{"n":3,"win":0.0,"exp":-1.0,"measure":"wall"}}}},{"side":"put","level":31122.0,"setups":{"fade":{"direction":1,"stop_pct":0.131,"verdict":"thin","planned_rr":2.47,"basis":{"n":4,"win":0.25,"exp":1.041,"measure":"wall"}},"breakout":{"direction":-1,"stop_pct":0.205,"verdict":"thin","planned_rr":1.58,"basis":{"n":3,"win":0.0,"exp":-1.0,"measure":"wall"}}}}]},"events":[{"side":"call","level":31273.2,"setup":"fade","verdict":"ok","direction":-1,"basis":{"n":9,"win":0.333,"exp":0.211,"measure":"wall"},"planned_rr":1.93,"time":"10:25","entry":31273.2,"stop":31351.38,"risk_usd":1564,"target":31122.0,"rr":1.93,"reward_usd":3024,"status":"lost","r":-1.0,"resolved_at":"11:40"},{"side":"call","level":31273.2,"setup":"breakout","verdict":"no edge","direction":1,"basis":{"n":7,"win":0.286,"exp":-0.034,"measure":"wall"},"planned_rr":1.2,"time":"11:10","entry":31286.75,"stop":31218.54,"risk_usd":1364,"target":31355.1,"rr":1.0,"reward_usd":1367,"status":"won","r":1.0,"resolved_at":"11:45"},{"side":"call","level":31355.1,"setup":"fade","verdict":"ok","direction":-1,"basis":{"n":9,"win":0.333,"exp":0.211,"measure":"wall"},"planned_rr":1.04,"time":"11:45","entry":31355.1,"stop":31433.49,"risk_usd":1568,"target":31273.2,"rr":1.04,"reward_usd":1638,"status":"open","r":-0.02,"resolved_at":null},{"side":"call","level":31355.1,"setup":"breakout","verdict":"no edge","direction":1,"basis":{"n":7,"win":0.286,"exp":-0.034,"measure":"wall"},"planned_rr":1.75,"time":"13:05","entry":31376.25,"stop":31307.85,"risk_usd":1368,"target":31474.8,"rr":1.44,"reward_usd":1971,"status":"open","r":-0.28,"resolved_at":null},{"side":"put","level":31222.8,"setup":"fade","verdict":"thin","direction":1,"basis":{"n":4,"win":0.25,"exp":1.041,"measure":"wall"},"planned_rr":1.23,"time":"09:50","entry":31222.8,"stop":31181.9,"risk_usd":818,"target":31273.2,"rr":1.23,"reward_usd":1008,"status":"lost","r":-1.0,"resolved_at":"09:50"},{"side":"put","level":31222.8,"setup":"breakout","verdict":"thin","direction":-1,"basis":{"n":3,"win":0.0,"exp":-1.0,"measure":"wall"},"planned_rr":1.57,"time":"09:50","entry":31213.75,"stop":31277.74,"risk_usd":1280,"target":31122.0,"rr":1.43,"reward_usd":1835,"status":"lost","r":-1.0,"resolved_at":"10:25"},{"side":"put","level":31122.0,"setup":"fade","verdict":"thin","direction":1,"basis":{"n":4,"win":0.25,"exp":1.041,"measure":"wall"},"planned_rr":2.47,"status":"watching","dist_pct":-0.75},{"side":"put","level":31122.0,"setup":"breakout","verdict":"thin","direction":-1,"basis":{"n":3,"win":0.0,"exp":-1.0,"measure":"wall"},"planned_rr":1.58,"status":"watching","dist_pct":-0.75}],"last":31357.0,"bars_to":"13:53"},{"symbol":"GC","map":{"symbol":"GC","contract":"GCZ26.CMX","multiplier":100,"frozen_at":"09:50","spot_at_map":4108.3,"flip":4156.07,"structure":[4189.74,4167.8,4145.87,4134.9,4123.93,4112.96,4091.03,4058.12,4036.19,4014.25,4003.28,3948.45,4156.07],"walls":[{"side":"call","level":4189.74,"setups":{"fade":{"direction":-1,"stop_pct":0.172,"verdict":"thin","planned_rr":3.04,"basis":{"n":4,"win":0.25,"exp":-0.368,"measure":"wall"}},"breakout":{"direction":1,"stop_pct":0.321,"verdict":"thin","planned_rr":null,"basis":{"n":4,"win":0.0,"exp":-0.772,"measure":"wall"}}}},{"side":"put","level":4112.96,"setups":{"fade":{"direction":1,"stop_pct":0.268,"verdict":"ok","planned_rr":1.99,"basis":{"n":10,"win":0.2,"exp":0.585,"measure":"wall"}},"breakout":{"direction":-1,"stop_pct":0.134,"verdict":"no edge","planned_rr":3.98,"basis":{"n":8,"win":0.25,"exp":0.061,"measure":"wall"}}}},{"side":"put","level":4123.93,"setups":{"fade":{"direction":1,"stop_pct":0.268,"verdict":"ok","planned_rr":1.99,"basis":{"n":10,"win":0.2,"exp":0.585,"measure":"wall"}},"breakout":{"direction":-1,"stop_pct":0.134,"verdict":"no edge","planned_rr":1.99,"basis":{"n":8,"win":0.25,"exp":0.061,"measure":"wall"}}}}]},"events":[{"side":"call","level":4189.74,"setup":"fade","verdict":"thin","direction":-1,"basis":{"n":4,"win":0.25,"exp":-0.368,"measure":"wall"},"planned_rr":3.04,"status":"watching","dist_pct":1.29},{"side":"call","level":4189.74,"setup":"breakout","verdict":"thin","direction":1,"basis":{"n":4,"win":0.0,"exp":-0.772,"measure":"wall"},"planned_rr":null,"status":"watching","dist_pct":1.29},{"side":"put","level":4112.96,"setup":"fade","verdict":"ok","direction":1,"basis":{"n":10,"win":0.2,"exp":0.585,"measure":"wall"},"planned_rr":1.99,"status":"watching","dist_pct":-0.56},{"side":"put","level":4112.96,"setup":"breakout","verdict":"no edge","direction":-1,"basis":{"n":8,"win":0.25,"exp":0.061,"measure":"wall"},"planned_rr":3.98,"status":"watching","dist_pct":-0.56},{"side":"put","level":4123.93,"setup":"fade","verdict":"ok","direction":1,"basis":{"n":10,"win":0.2,"exp":0.585,"measure":"wall"},"planned_rr":1.99,"time":"09:50","entry":4123.93,"stop":4112.88,"risk_usd":1105,"target":4145.87,"rr":1.99,"reward_usd":2194,"status":"won","r":1.99,"resolved_at":"13:10"},{"side":"put","level":4123.93,"setup":"breakout","verdict":"no edge","direction":-1,"basis":{"n":8,"win":0.25,"exp":0.061,"measure":"wall"},"planned_rr":1.99,"time":"09:50","entry":4122.7,"stop":4128.22,"risk_usd":552,"target":4112.96,"rr":1.76,"reward_usd":974,"status":"lost","r":-1.0,"resolved_at":"10:15"}],"last":4136.2998046875,"bars_to":"13:53"}],"notes":[],"calibration":{"from":"2026-09-21","to":"2026-10-06","days":12},"record":[],"history":[],"maps":{"ES":{"symbol":"ES","contract":"ESZ26.CME","multiplier":50,"frozen_at":"09:50","spot_at_map":7824.0,"flip":7822.0,"structure":[8113.3,8062.74,8012.18,7961.62,7939.5,7931.6,7911.06,7901.58,7892.1,7862.08,7811.52,7800.46,7781.5,7760.96,7710.4,7700.92,7685.12,7659.84,7609.28,7558.72,7822.0],"walls":[{"side":"call","level":7862.08,"setups":{"fade":{"direction":-1,"stop_pct":0.217,"verdict":"thin","planned_rr":2.35,"basis":{"n":5,"win":0.2,"exp":0.128,"measure":"wall"}},"breakout":{"direction":1,"stop_pct":0.1,"verdict":"thin","planned_rr":3.82,"basis":{"n":5,"win":0.0,"exp":-0.14,"measure":"wall"}}}},{"side":"call","level":7892.1,"setups":{"fade":{"direction":-1,"stop_pct":0.217,"verdict":"thin","planned_rr":1.75,"basis":{"n":5,"win":0.2,"exp":0.128,"measure":"wall"}},"breakout":{"direction":1,"stop_pct":0.1,"verdict":"thin","planned_rr":1.2,"basis":{"n":5,"win":0.0,"exp":-0.14,"measure":"wall"}}}},{"side":"put","level":7811.52,"setups":{"fade":{"direction":1,"stop_pct":0.131,"verdict":"no edge","planned_rr":1.02,"basis":{"n":8,"win":0.125,"exp":0.082,"measure":"wall"}},"breakout":{"direction":-1,"stop_pct":0.133,"verdict":"ok","planned_rr":1.06,"basis":{"n":6,"win":0.333,"exp":0.326,"measure":"wall"}}}},{"side":"put","level":7800.46,"setups":{"fade":{"direction":1,"stop_pct":0.131,"verdict":"no edge","planned_rr":1.08,"basis":{"n":8,"win":0.125,"exp":0.082,"measure":"wall"}},"breakout":{"direction":-1,"stop_pct":0.133,"verdict":"ok","planned_rr":1.83,"basis":{"n":6,"win":0.333,"exp":0.326,"measure":"wall"}}}}]},"NQ":{"symbol":"NQ","contract":"NQZ26.CME","multiplier":20,"frozen_at":"09:50","spot_at_map":31177.25,"flip":30862.51,"structure":[32281.2,31978.8,31878.0,31777.2,31676.4,31575.6,31474.8,31355.1,31273.2,31222.8,31122.0,31021.2,30920.4,30819.6,30567.6,30466.8,30164.4,30063.6,30013.2,29736.0,30862.51],"walls":[{"side":"call","level":31273.2,"setups":{"fade":{"direction":-1,"stop_pct":0.25,"verdict":"ok","planned_rr":1.93,"basis":{"n":9,"win":0.333,"exp":0.211,"measure":"wall"}},"breakout":{"direction":1,"stop_pct":0.218,"verdict":"no edge","planned_rr":1.2,"basis":{"n":7,"win":0.286,"exp":-0.034,"measure":"wall"}}}},{"side":"call","level":31355.1,"setups":{"fade":{"direction":-1,"stop_pct":0.25,"verdict":"ok","planned_rr":1.04,"basis":{"n":9,"win":0.333,"exp":0.211,"measure":"wall"}},"breakout":{"direction":1,"stop_pct":0.218,"verdict":"no edge","planned_rr":1.75,"basis":{"n":7,"win":0.286,"exp":-0.034,"measure":"wall"}}}},{"side":"put","level":31222.8,"setups":{"fade":{"direction":1,"stop_pct":0.131,"verdict":"thin","planned_rr":1.23,"basis":{"n":4,"win":0.25,"exp":1.041,"measure":"wall"}},"breakout":{"direction":-1,"stop_pct":0.205,"verdict":"thin","planned_rr":1.57,"basis":{"n":3,"win":0.0,"exp":-1.0,"measure":"wall"}}}},{"side":"put","level":31122.0,"setups":{"fade":{"direction":1,"stop_pct":0.131,"verdict":"thin","planned_rr":2.47,"basis":{"n":4,"win":0.25,"exp":1.041,"measure":"wall"}},"breakout":{"direction":-1,"stop_pct":0.205,"verdict":"thin","planned_rr":1.58,"basis":{"n":3,"win":0.0,"exp":-1.0,"measure":"wall"}}}}]},"GC":{"symbol":"GC","contract":"GCZ26.CMX","multiplier":100,"frozen_at":"09:50","spot_at_map":4108.3,"flip":4156.07,"structure":[4189.74,4167.8,4145.87,4134.9,4123.93,4112.96,4091.03,4058.12,4036.19,4014.25,4003.28,3948.45,4156.07],"walls":[{"side":"call","level":4189.74,"setups":{"fade":{"direction":-1,"stop_pct":0.172,"verdict":"thin","planned_rr":3.04,"basis":{"n":4,"win":0.25,"exp":-0.368,"measure":"wall"}},"breakout":{"direction":1,"stop_pct":0.321,"verdict":"thin","planned_rr":null,"basis":{"n":4,"win":0.0,"exp":-0.772,"measure":"wall"}}}},{"side":"put","level":4112.96,"setups":{"fade":{"direction":1,"stop_pct":0.268,"verdict":"ok","planned_rr":1.99,"basis":{"n":10,"win":0.2,"exp":0.585,"measure":"wall"}},"breakout":{"direction":-1,"stop_pct":0.134,"verdict":"no edge","planned_rr":3.98,"basis":{"n":8,"win":0.25,"exp":0.061,"measure":"wall"}}}},{"side":"put","level":4123.93,"setups":{"fade":{"direction":1,"stop_pct":0.268,"verdict":"ok","planned_rr":1.99,"basis":{"n":10,"win":0.2,"exp":0.585,"measure":"wall"}},"breakout":{"direction":-1,"stop_pct":0.134,"verdict":"no edge","planned_rr":1.99,"basis":{"n":8,"win":0.25,"exp":0.061,"measure":"wall"}}}}]}}};
+const VERDICT = {"ok":"v-ok","thin":"v-thin","no edge":"v-noedge","no room":"v-room"};
+const ACTION = {fade:{call:"sell call wall",put:"buy put wall"},
+                breakout:{call:"buy break above",put:"sell break below"}};
+const esc = v => String(v==null?"":v).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fx = (v,d=2) => v==null ? "—" : (+v).toFixed(d);
+const rFmt = v => v==null ? "—" : `${v>0?"+":""}${(+v).toFixed(2)}R`;
+const chip = (t,c) => `<span class="chip ${c||""}">${esc(t)}</span>`;
+
+function mapTable(sm){
+  const rows = sm.walls.map(w=>{
+    const cell = s => { const x=w.setups[s]; return chip(x.verdict, VERDICT[x.verdict])
+      + (x.basis&&x.basis.exp!=null?` <span class="sub">${rFmt(x.basis.exp)}</span>`:""); };
+    return `<tr><td class="side-${w.side[0]}">${w.side.toUpperCase()}</td>`
+      +`<td class="num">${fx(w.level)}</td><td>${cell("fade")}</td><td>${cell("breakout")}</td></tr>`;
+  }).join("");
+  return `<div class="scroll"><table><thead><tr><th>Wall</th><th class="num">Level</th>`
+    +`<th>Fade it</th><th>Trade the break</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function eventRows(evs){
+  const live = evs.filter(e=>["armed","open","won","lost","closed","no room"].includes(e.status));
+  if(!live.length) return `<div class="empty">Nothing armed or triggered yet. Each wall fires once per setup per session.</div>`;
+  const order = {open:0,armed:1,won:2,lost:2,closed:2,"no room":3};
+  live.sort((a,b)=>(order[a.status]-order[b.status]) || ((a.time||"")<(b.time||"")?-1:1));
+  const rows = live.map(e=>{
+    const dim = e.verdict!=="ok";
+    const st = {open:"s-open",armed:"s-armed",won:"s-won",lost:"s-lost"}[e.status]||"";
+    const res = e.status==="armed" ? `${e.dist_pct>0?"+":""}${fx(e.dist_pct)}% away`
+      : e.status==="no room" ? "no target"
+      : `<b class="${(e.r||0)>=0?"pos":"neg"}">${rFmt(e.r)}</b>${e.status==="open"?" now":""}`;
+    return `<tr class="${dim?"dim":""}"><td class="side-${e.side[0]}">${ACTION[e.setup][e.side]}</td>`
+      +`<td>${chip(e.status,st)}</td><td>${chip(e.verdict,VERDICT[e.verdict])}</td>`
+      +`<td class="num">${esc(e.time||"")}</td><td class="num">${fx(e.level)}</td>`
+      +`<td class="num">${fx(e.entry)}</td><td class="num">${fx(e.stop)}</td>`
+      +`<td class="num">${fx(e.target)}</td><td class="num">${e.rr!=null?fx(e.rr):"—"}</td>`
+      +`<td class="num">${res}</td></tr>`;
+  }).join("");
+  return `<div class="scroll"><table><thead><tr><th>Setup</th><th>Status</th><th>Verdict</th>`
+    +`<th class="num">Time</th><th class="num">Wall</th><th class="num">Entry</th>`
+    +`<th class="num">Stop</th><th class="num">Target</th><th class="num">R:R</th>`
+    +`<th class="num">Result</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function recordTable(rec){
+  if(!rec||!rec.length) return `<div class="empty">No finished sessions yet. The record starts with the first session this page sees through to the close.</div>`;
+  const rows = rec.map(r=>`<tr><td>${esc(r.setup)}</td><td>${chip(r.group==="ok"?"ok":"other",r.group==="ok"?"v-ok":"")}</td>`
+    +`<td class="num">${r.n}</td><td class="num">${r.won}</td>`
+    +`<td class="num"><b class="${r.avg_r>=0?"pos":"neg"}">${rFmt(r.avg_r)}</b></td>`
+    +`<td class="num">${rFmt(r.backtest_r)}</td></tr>`).join("");
+  return `<div class="scroll"><table><thead><tr><th>Setup</th><th>Verdict</th><th class="num">Trades</th>`
+    +`<th class="num">Won</th><th class="num">Live avg</th><th class="num">Backtest</th></tr></thead>`
+    +`<tbody>${rows}</tbody></table></div>`;
+}
+
+function renderSetups(d){
+  if(!d) return `<div class="panel empty">No setups data yet.</div>`;
+  const syms = d.symbols||[];
+  let html = "";
+  if(!d.session) html += `<div class="panel empty">The session map freezes at ${esc(d.map_at)} ET on trading days.</div>`;
+  for(const s of syms){
+    const m = s.map||{};
+    html += `<div class="panel"><div class="phead"><span class="sym">${esc(s.symbol)}</span>`
+      +`<span class="sub">map frozen ${esc(m.frozen_at)} ET · flip ${fx(m.flip)}`
+      +(s.last!=null?` · last ${fx(s.last)} (${esc(s.bars_to)} bar)`:"")+`</span></div>`
+      + (s.error?`<div class="err">${esc(s.error)}</div>`:"")
+      + `<div class="k">Setups today</div>` + eventRows(s.events||[])
+      + `<div class="k">Session map</div>` + mapTable(m) + `</div>`;
+  }
+  for(const n of (d.notes||[])) html += `<div class="sub">${esc(n)}</div>`;
+  const c = d.calibration||{};
+  html += `<div class="panel"><div class="phead"><span class="sym" style="font-size:16px">Forward test</span>`
+    + `<span class="sub">live results of setups this page fired, against the scorecard's backtest</span></div>`
+    + recordTable(d.record)
+    + `<div class="caveat"><b>*</b> A setup here is exactly a trade the scorecard measured: one fade per `
+    + `wall per session on the first touch, one breakout on the first 5-minute close through, the `
+    + `nearest walls each side, frozen at ${esc(d.map_at)} ET. Stops are fitted to past trades and `
+    + `targets are the first wall or flip beyond a stop, as measured; a bar touching both counts as `
+    + `the stop. Verdicts come from ${esc(c.days)} sessions (${esc(c.from)} to ${esc(c.to)}), so they `
+    + `are provisional, and the forward test is the check on them. Bars are 5-minute and only `
+    + `completed ones are used, so a trigger shows up to one bar plus one publish late. `
+    + `Rows without a measured edge are dimmed. Not advice.</div></div>`;
+  return html;
+}
+
+function paint(d){
+  document.getElementById("root").innerHTML = renderSetups(d);
+  document.getElementById("meta").innerHTML = d
+    ? `<span>session <b>${esc(d.session||"—")}</b></span><span>updated <b>${esc(d.generated)}</b></span>`
+      + (d.session_over?`<span>session closed</span>`:"") : "";
+}
+
+async function poll(){
+  const get = async u => { try{ const r=await fetch(u,{cache:"no-store"}); if(r.ok) return await r.json(); }catch(e){} return null; };
+  const t=Date.now(), m=location.hostname.match(/^([^.]+)\.github\.io$/);
+  const repo=location.pathname.split("/").filter(Boolean)[0];
+  const got=(await Promise.all([get("setups.json?t="+t),
+    (m&&repo)?get(`https://raw.githubusercontent.com/${m[1]}/${repo}/snapshot/setups.json?t=${t}`):null]))
+    .filter(Boolean);
+  const best=got.reduce((a,b)=>((b.epoch||0)>(a.epoch||0)?b:a), SETUPS_DATA||{epoch:0});
+  if(best && best!==SETUPS_DATA) paint(best);
+}
+paint(SETUPS_DATA);
+setInterval(poll, 60000);
+</script></body></html>
