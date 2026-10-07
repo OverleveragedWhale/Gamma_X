@@ -52,13 +52,19 @@ jobs:
 
           python gex_terminal.py --snapshot pub/index.html --skip-unchanged
           python tools/check_page.py pub/index.html
+          # The setups page never blocks the dashboard: on failure the
+          # previous one is restored and the dashboard publishes anyway.
+          if ! { python setups.py --pub pub && python tools/check_page.py pub/setups.html; }; then
+            echo "setups page failed; previous one kept"
+            git -C pub checkout -q -- setups.html setups.json 2>/dev/null || true
+          fi
 
           cd pub
           # oi/ as well, as the PC's publisher does: the session's open-interest
           # fingerprint is written once, by its first run, and if that run is
           # this one and the file stays behind, the next day's OI change column
           # has nothing to compare against.
-          git add index.html data.json oi
+          git add index.html data.json oi setups.html setups.json
           if git diff --cached --quiet; then
             echo "figures match the live page; nothing to publish"
             echo "published=false" >> "$GITHUB_OUTPUT"
