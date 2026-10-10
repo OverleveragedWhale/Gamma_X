@@ -7,81 +7,89 @@
   "stop_pctile": 75,
   "entry": "09:50",
   "close": "16:00",
-  "sessions": 39,
-  "days": 12,
+  "sessions": 45,
+  "days": 15,
   "from": "2026-09-21",
-  "to": "2026-10-06",
-  "scored_at": "2026-10-07",
+  "to": "2026-10-09",
+  "scored_at": "2026-10-10",
   "symbols": {
     "ES": {
       "call": {
-        "sessions": 12,
-        "n_levels": 16,
+        "sessions": 15,
+        "n_levels": 22,
         "fade": {
-          "n": 5,
-          "stop_pct": 0.217,
+          "n": 8,
+          "stop_pct": 0.1,
           "exp": {
-            "1": 0.014,
-            "1.5": -0.069,
-            "2": 0.031
+            "1": 0.0,
+            "1.5": -0.062,
+            "2": -0.25
           },
           "win": {
-            "1": 0.4,
-            "1.5": 0.2,
-            "2": 0.2
+            "1": 0.5,
+            "1.5": 0.375,
+            "2": 0.25
           },
           "by_era": {
             "single": {
               "n": 5,
-              "exp_plan": -0.069
+              "exp_plan": 0.0
+            },
+            "multi": {
+              "n": 3,
+              "exp_plan": -0.167
             }
           },
-          "exp_plan": -0.069,
-          "win_plan": 0.2,
+          "exp_plan": -0.062,
+          "win_plan": 0.375,
           "wall": {
-            "n": 5,
-            "exp": 0.344,
-            "win": 0.2,
-            "avg_target_r": 2.84
+            "n": 8,
+            "exp": -0.114,
+            "win": 0.25,
+            "avg_target_r": 3.54
           },
           "by_open": {
             "out": {
               "n": 2,
-              "exp_plan": -0.458
+              "exp_plan": -1.0
             },
             "in": {
-              "n": 2,
-              "exp_plan": -0.465
+              "n": 5,
+              "exp_plan": 0.0
             }
           },
-          "rate": 0.312
+          "rate": 0.364
         },
         "breakout": {
-          "n": 5,
+          "n": 7,
           "stop_pct": 0.1,
           "exp": {
-            "1": 0.2,
-            "1.5": 0.5,
-            "2": 0.2
+            "1": 0.429,
+            "1.5": 0.786,
+            "2": 0.714
           },
           "win": {
-            "1": 0.6,
-            "1.5": 0.6,
-            "2": 0.4
+            "1": 0.714,
+            "1.5": 0.714,
+            "2": 0.571
           },
           "by_era": {
             "single": {
               "n": 5,
               "exp_plan": 0.5
+            },
+            "multi": {
+              "n": 2,
+              "exp_plan": 1.5
             }
           },
-          "exp_plan": 0.5,
-          "win_plan": 0.6,
+          "exp_plan": 0.786,
+          "win_plan": 0.714,
           "wall": {
-            "n": 5,
-            "exp": -0.14,
-            "win": 0.0,
-            "avg_target_r": 6.25
+            "n": 7,
+            "exp": 0.228,
+            "win": 0.286,
+            "avg_target_r": 4.79
           },
           "by_open": {
             "out": {
@@ -89,53 +97,57 @@
               "exp_plan": 1.5
             },
             "in": {
-              "n": 3,
-              "exp_plan": -0.167
+              "n": 5,
+              "exp_plan": 0.5
             }
           },
-          "rate": 0.312
+          "rate": 0.318
         }
       },
       "put": {
-        "sessions": 12,
-        "n_levels": 22,
+        "sessions": 15,
+        "n_levels": 28,
         "fade": {
-          "n": 8,
-          "stop_pct": 0.131,
+          "n": 10,
+          "stop_pct": 0.438,
           "exp": {
-            "1": -0.174,
-            "1.5": -0.299,
-            "2": -0.174
+            "1": -0.32,
+            "1.5": -0.27,
+            "2": -0.275
           },
           "win": {
-            "1": 0.375,
-            "1.5": 0.25,
-            "2": 0.25
+            "1": 0.1,
+            "1.5": 0.1,
+            "2": 0.0
           },
           "by_era": {
             "single": {
               "n": 8,
-              "exp_plan": -0.299
+              "exp_plan": -0.248
+            },
+            "multi": {
+              "n": 2,
+              "exp_plan": -0.359
             }
           },
-          "exp_plan": -0.299,
-          "win_plan": 0.25,
+          "exp_plan": -0.27,
+          "win_plan": 0.1,
           "wall": {
-            "n": 8,
-            "exp": 0.083,
-            "win": 0.125,
-            "avg_target_r": 3.73
+            "n": 10,
+            "exp": -0.272,
+            "win": 0.1,
+            "avg_target_r": 1.45
           },
           "by_open": {
             "in": {
-              "n": 8,
-              "exp_plan": -0.299
+              "n": 10,
+              "exp_plan": -0.27
             }
           },
-          "rate": 0.364
+          "rate": 0.357
         },
         "breakout": {
-          "n": 6,
+          "n": 8,
           "stop_pct": 0.133,
           "exp": {
             "1": 0.0,
@@ -151,30 +163,34 @@
             "single": {
               "n": 6,
               "exp_plan": 0.25
+            },
+            "multi": {
+              "n": 2,
+              "exp_plan": 0.25
             }
           },
           "exp_plan": 0.25,
           "win_plan": 0.5,
           "wall": {
-            "n": 6,
-            "exp": 0.324,
-            "win": 0.333,
-            "avg_target_r": 3.1
+            "n": 8,
+            "exp": 0.278,
+            "win": 0.375,
+            "avg_target_r": 2.76
           },
           "by_open": {
             "in": {
-              "n": 6,
+              "n": 8,
               "exp_plan": 0.25
             }
           },
-          "rate": 0.273
+          "rate": 0.286
         }
       }
     },
     "GC": {
       "call": {
-        "sessions": 12,
-        "n_levels": 23,
+        "sessions": 15,
+        "n_levels": 27,
         "fade": {
           "n": 4,
           "stop_pct": 0.172,
@@ -212,7 +228,7 @@
               "exp_plan": 1.295
             }
           },
-          "rate": 0.174
+          "rate": 0.148
         },
         "breakout": {
           "n": 4,
@@ -251,12 +267,12 @@
               "exp_plan": -0.822
             }
           },
-          "rate": 0.174
+          "rate": 0.148
         }
       },
       "put": {
-        "sessions": 12,
-        "n_levels": 20,
+        "sessions": 15,
+        "n_levels": 24,
         "fade": {
           "n": 10,
           "stop_pct": 0.268,
@@ -294,7 +310,7 @@
               "exp_plan": -0.02
             }
           },
-          "rate": 0.5
+          "rate": 0.417
         },
         "breakout": {
           "n": 8,
@@ -333,26 +349,26 @@
               "exp_plan": 0.25
             }
           },
-          "rate": 0.4
+          "rate": 0.333
         }
       }
     },
     "NQ": {
       "call": {
-        "sessions": 12,
-        "n_levels": 19,
+        "sessions": 15,
+        "n_levels": 25,
         "fade": {
-          "n": 9,
-          "stop_pct": 0.25,
+          "n": 12,
+          "stop_pct": 0.214,
           "exp": {
-            "1": 0.08,
-            "1.5": 0.025,
-            "2": 0.192
+            "1": 0.098,
+            "1.5": -0.277,
+            "2": -0.152
           },
           "win": {
-            "1": 0.444,
-            "1.5": 0.333,
-            "2": 0.333
+            "1": 0.5,
+            "1.5": 0.25,
+            "2": 0.25
           },
           "by_era": {
             "single": {
@@ -360,42 +376,42 @@
               "exp_plan": -0.062
             },
             "multi": {
-              "n": 1,
-              "exp_plan": 0.724
+              "n": 4,
+              "exp_plan": -0.706
             }
           },
-          "exp_plan": 0.025,
-          "win_plan": 0.333,
+          "exp_plan": -0.277,
+          "win_plan": 0.25,
           "wall": {
-            "n": 9,
-            "exp": 0.401,
-            "win": 0.333,
-            "avg_target_r": 2.49
+            "n": 12,
+            "exp": 0.116,
+            "win": 0.25,
+            "avg_target_r": 2.55
           },
           "by_open": {
             "out": {
-              "n": 4,
-              "exp_plan": -0.569
+              "n": 6,
+              "exp_plan": -1.0
             },
             "in": {
-              "n": 4,
-              "exp_plan": 0.25
+              "n": 5,
+              "exp_plan": 0.235
             }
           },
-          "rate": 0.474
+          "rate": 0.48
         },
         "breakout": {
-          "n": 8,
+          "n": 11,
           "stop_pct": 0.218,
           "exp": {
-            "1": 0.25,
-            "1.5": -0.062,
-            "2": 0.04
+            "1": 0.282,
+            "1.5": 0.1,
+            "2": 0.183
           },
           "win": {
-            "1": 0.625,
-            "1.5": 0.375,
-            "2": 0.25
+            "1": 0.545,
+            "1.5": 0.364,
+            "2": 0.182
           },
           "by_era": {
             "single": {
@@ -403,103 +419,111 @@
               "exp_plan": 0.071
             },
             "multi": {
-              "n": 1,
-              "exp_plan": -1.0
+              "n": 4,
+              "exp_plan": 0.149
             }
           },
-          "exp_plan": -0.062,
-          "win_plan": 0.375,
+          "exp_plan": 0.1,
+          "win_plan": 0.364,
           "wall": {
-            "n": 7,
-            "exp": -0.034,
-            "win": 0.286,
-            "avg_target_r": 2.11
+            "n": 10,
+            "exp": 0.086,
+            "win": 0.3,
+            "avg_target_r": 1.92
           },
           "by_open": {
             "out": {
-              "n": 4,
-              "exp_plan": -0.375
+              "n": 6,
+              "exp_plan": 0.046
             },
+            "in": {
+              "n": 5,
+              "exp_plan": 0.164
+            }
+          },
+          "rate": 0.44
+        }
+      },
+      "put": {
+        "sessions": 15,
+        "n_levels": 27,
+        "fade": {
+          "n": 5,
+          "stop_pct": 0.131,
+          "exp": {
+            "1": 0.6,
+            "1.5": 1.0,
+            "2": 1.4
+          },
+          "win": {
+            "1": 0.8,
+            "1.5": 0.8,
+            "2": 0.8
+          },
+          "by_era": {
+            "single": {
+              "n": 4,
+              "exp_plan": 0.875
+            },
+            "multi": {
+              "n": 1,
+              "exp_plan": 1.5
+            }
+          },
+          "exp_plan": 1.0,
+          "win_plan": 0.8,
+          "wall": {
+            "n": 5,
+            "exp": 2.258,
+            "win": 0.6,
+            "avg_target_r": 3.64
+          },
+          "by_open": {
+            "in": {
+              "n": 5,
+              "exp_plan": 1.0
+            }
+          },
+          "rate": 0.185
+        },
+        "breakout": {
+          "n": 4,
+          "stop_pct": 0.12,
+          "exp": {
+            "1": 0.0,
+            "1.5": 0.25,
+            "2": 0.5
+          },
+          "win": {
+            "1": 0.5,
+            "1.5": 0.5,
+            "2": 0.5
+          },
+          "by_era": {
+            "single": {
+              "n": 3,
+              "exp_plan": -0.167
+            },
+            "multi": {
+              "n": 1,
+              "exp_plan": 1.5
+            }
+          },
+          "exp_plan": 0.25,
+          "win_plan": 0.5,
+          "wall": {
+            "n": 4,
+            "exp": 0.529,
+            "win": 0.25,
+            "avg_target_r": 4.46
+          },
+          "by_open": {
             "in": {
               "n": 4,
               "exp_plan": 0.25
             }
           },
-          "rate": 0.421
-        }
-      },
-      "put": {
-        "sessions": 12,
-        "n_levels": 23,
-        "fade": {
-          "n": 4,
-          "stop_pct": 0.131,
-          "exp": {
-            "1": 0.5,
-            "1.5": 0.875,
-            "2": 1.25
-          },
-          "win": {
-            "1": 0.75,
-            "1.5": 0.75,
-            "2": 0.75
-          },
-          "by_era": {
-            "single": {
-              "n": 4,
-              "exp_plan": 0.875
-            }
-          },
-          "exp_plan": 0.875,
-          "win_plan": 0.75,
-          "wall": {
-            "n": 4,
-            "exp": 2.323,
-            "win": 0.5,
-            "avg_target_r": 4.05
-          },
-          "by_open": {
-            "in": {
-              "n": 4,
-              "exp_plan": 0.875
-            }
-          },
-          "rate": 0.174
-        },
-        "breakout": {
-          "n": 3,
-          "stop_pct": 0.205,
-          "exp": {
-            "1": -0.333,
-            "1.5": -0.167,
-            "2": 0.0
-          },
-          "win": {
-            "1": 0.333,
-            "1.5": 0.333,
-            "2": 0.333
-          },
-          "by_era": {
-            "single": {
-              "n": 3,
-              "exp_plan": -0.167
-            }
-          },
-          "exp_plan": -0.167,
-          "win_plan": 0.333,
-          "wall": {
-            "n": 3,
-            "exp": -1.0,
-            "win": 0.0,
-            "avg_target_r": 2.48
-          },
-          "by_open": {
-            "in": {
-              "n": 3,
-              "exp_plan": -0.167
-            }
-          },
-          "rate": 0.13
+          "rate": 0.148
         }
       }
     }
@@ -509,76 +533,76 @@
       "range": {
         "all": {
           "all": {
-            "n": 12,
-            "exp_plan": 0.246
+            "n": 15,
+            "exp_plan": 0.117
           }
         },
         "open_vs_flip": {
           "above": {
-            "n": 9,
-            "exp_plan": 0.662
+            "n": 10,
+            "exp_plan": 0.675
           },
           "below": {
-            "n": 3,
+            "n": 5,
             "exp_plan": -1.0
           }
         },
         "regime": {
           "positive": {
-            "n": 10,
-            "exp_plan": 0.38
+            "n": 12,
+            "exp_plan": 0.3
           },
           "negative": {
-            "n": 2,
-            "exp_plan": -0.421
+            "n": 3,
+            "exp_plan": -0.614
           }
         },
         "wall_in_path": {
           "clear": {
-            "n": 5,
-            "exp_plan": 1.0
+            "n": 6,
+            "exp_plan": 0.667
           },
           "blocked": {
-            "n": 7,
-            "exp_plan": -0.292
+            "n": 9,
+            "exp_plan": -0.25
           }
         }
       },
       "mid": {
         "all": {
           "all": {
-            "n": 12,
-            "exp_plan": 0.667
+            "n": 15,
+            "exp_plan": 0.5
           }
         },
         "open_vs_flip": {
           "above": {
-            "n": 9,
-            "exp_plan": 0.667
+            "n": 10,
+            "exp_plan": 0.75
           },
           "below": {
-            "n": 3,
-            "exp_plan": 0.667
+            "n": 5,
+            "exp_plan": 0.0
           }
         },
         "regime": {
           "positive": {
-            "n": 10,
-            "exp_plan": 0.5
+            "n": 12,
+            "exp_plan": 0.458
           },
           "negative": {
-            "n": 2,
-            "exp_plan": 1.5
+            "n": 3,
+            "exp_plan": 0.667
           }
         },
         "wall_in_path": {
           "clear": {
-            "n": 5,
-            "exp_plan": 1.5
+            "n": 6,
+            "exp_plan": 1.083
           },
           "blocked": {
-            "n": 7,
-            "exp_plan": 0.071
+            "n": 9,
+            "exp_plan": 0.111
           }
         }
       }
@@ -587,8 +611,8 @@
       "range": {
         "all": {
           "all": {
-            "n": 12,
-            "exp_plan": -0.022
+            "n": 15,
+            "exp_plan": -0.051
           }
         },
         "open_vs_flip": {
@@ -597,18 +621,18 @@
             "exp_plan": 0.25
           },
           "below": {
-            "n": 10,
-            "exp_plan": -0.076
+            "n": 13,
+            "exp_plan": -0.097
           }
         },
         "regime": {
           "positive": {
-            "n": 5,
-            "exp_plan": 0.204
+            "n": 6,
+            "exp_plan": 0.42
           },
           "negative": {
-            "n": 7,
-            "exp_plan": -0.183
+            "n": 9,
+            "exp_plan": -0.364
           }
         },
         "wall_in_path": {
@@ -617,16 +641,16 @@
             "exp_plan": -0.375
           },
           "blocked": {
-            "n": 8,
-            "exp_plan": 0.155
+            "n": 11,
+            "exp_plan": 0.067
           }
         }
       },
       "mid": {
         "all": {
           "all": {
-            "n": 12,
-            "exp_plan": -0.08
+            "n": 15,
+            "exp_plan": -0.097
           }
         },
         "open_vs_flip": {
@@ -635,18 +659,18 @@
             "exp_plan": 0.25
           },
           "below": {
-            "n": 10,
-            "exp_plan": -0.146
+            "n": 13,
+            "exp_plan": -0.151
           }
         },
         "regime": {
           "positive": {
-            "n": 5,
-            "exp_plan": -0.292
+            "n": 6,
+            "exp_plan": 0.006
           },
           "negative": {
-            "n": 7,
-            "exp_plan": 0.071
+            "n": 9,
+            "exp_plan": -0.167
           }
         },
         "wall_in_path": {
@@ -655,8 +679,8 @@
             "exp_plan": 0.25
           },
           "blocked": {
-            "n": 8,
-            "exp_plan": -0.245
+            "n": 11,
+            "exp_plan": -0.224
           }
         }
       }
@@ -665,34 +689,34 @@
       "range": {
         "all": {
           "all": {
-            "n": 12,
-            "exp_plan": 0.04
+            "n": 15,
+            "exp_plan": -0.022
           }
         },
         "open_vs_flip": {
           "above": {
-            "n": 5,
-            "exp_plan": 0.655
+            "n": 6,
+            "exp_plan": 0.379
           },
           "below": {
-            "n": 7,
-            "exp_plan": -0.399
+            "n": 9,
+            "exp_plan": -0.289
           }
         },
         "regime": {
           "positive": {
-            "n": 8,
-            "exp_plan": 0.495
+            "n": 10,
+            "exp_plan": 0.375
           },
           "negative": {
-            "n": 4,
-            "exp_plan": -0.869
+            "n": 5,
+            "exp_plan": -0.816
           }
         },
         "wall_in_path": {
           "blocked": {
-            "n": 9,
-            "exp_plan": -0.079
+            "n": 12,
+            "exp_plan": -0.127
           },
           "clear": {
             "n": 3,
@@ -703,34 +727,34 @@
       "mid": {
         "all": {
           "all": {
-            "n": 12,
-            "exp_plan": -0.043
+            "n": 15,
+            "exp_plan": -0.068
           }
         },
         "open_vs_flip": {
           "above": {
-            "n": 5,
-            "exp_plan": 0.797
+            "n": 6,
+            "exp_plan": 0.497
           },
           "below": {
-            "n": 7,
-            "exp_plan": -0.643
+            "n": 9,
+            "exp_plan": -0.444
           }
         },
         "regime": {
           "positive": {
-            "n": 8,
-            "exp_plan": 0.436
+            "n": 10,
+            "exp_plan": 0.398
           },
           "negative": {
-            "n": 4,
+            "n": 5,
             "exp_plan": -1.0
           }
         },
         "wall_in_path": {
           "blocked": {
-            "n": 9,
-            "exp_plan": -0.216
+            "n": 12,
+            "exp_plan": -0.204
           },
           "clear": {
             "n": 3,
@@ -743,76 +767,76 @@
       "range": {
         "all": {
           "all": {
-            "n": 36,
-            "exp_plan": 0.088
+            "n": 45,
+            "exp_plan": 0.015
           }
         },
         "open_vs_flip": {
           "above": {
-            "n": 16,
-            "exp_plan": 0.608
+            "n": 18,
+            "exp_plan": 0.529
           },
           "below": {
-            "n": 20,
+            "n": 27,
             "exp_plan": -0.328
           }
         },
         "regime": {
           "positive": {
-            "n": 23,
-            "exp_plan": 0.382
+            "n": 28,
+            "exp_plan": 0.352
           },
           "negative": {
-            "n": 13,
-            "exp_plan": -0.431
+            "n": 17,
+            "exp_plan": -0.541
           }
         },
         "wall_in_path": {
           "clear": {
-            "n": 12,
-            "exp_plan": 0.391
+            "n": 13,
+            "exp_plan": 0.284
           },
           "blocked": {
-            "n": 24,
-            "exp_plan": -0.063
+            "n": 32,
+            "exp_plan": -0.095
           }
         }
       },
       "mid": {
         "all": {
           "all": {
-            "n": 36,
-            "exp_plan": 0.181
+            "n": 45,
+            "exp_plan": 0.112
           }
         },
         "open_vs_flip": {
           "above": {
-            "n": 16,
-            "exp_plan": 0.655
+            "n": 18,
+            "exp_plan": 0.61
           },
           "below": {
-            "n": 20,
-            "exp_plan": -0.198
+            "n": 27,
+            "exp_plan": -0.221
           }
         },
         "regime": {
           "positive": {
-            "n": 23,
-            "exp_plan": 0.305
+            "n": 28,
+            "exp_plan": 0.34
           },
           "negative": {
-            "n": 13,
-            "exp_plan": -0.038
+            "n": 17,
+            "exp_plan": -0.265
           }
         },
         "wall_in_path": {
           "clear": {
-            "n": 12,
-            "exp_plan": 0.828
+            "n": 13,
+            "exp_plan": 0.687
           },
           "blocked": {
-            "n": 24,
-            "exp_plan": -0.142
+            "n": 32,
+            "exp_plan": -0.122
           }
         }
       }
@@ -823,24 +847,24 @@
       "points": 10.0,
       "fade": {
         "all": {
-          "n": 13,
-          "won": 5,
-          "exp": -0.184
+          "n": 18,
+          "won": 6,
+          "exp": -0.3
         },
         "positive": {
-          "n": 11,
-          "won": 5,
-          "exp": -0.036
+          "n": 16,
+          "won": 6,
+          "exp": -0.212
         },
         "above": {
-          "n": 8,
-          "won": 4,
-          "exp": 0.0
+          "n": 12,
+          "won": 5,
+          "exp": -0.167
         },
         "below": {
-          "n": 5,
+          "n": 6,
           "won": 1,
-          "exp": -0.48
+          "exp": -0.566
         },
         "negative": {
           "n": 2,
@@ -850,23 +874,23 @@
       },
       "breakout": {
         "all": {
-          "n": 11,
-          "won": 6,
-          "exp": 0.091
+          "n": 15,
+          "won": 9,
+          "exp": 0.2
         },
         "positive": {
+          "n": 13,
+          "won": 9,
+          "exp": 0.385
+        },
+        "above": {
           "n": 9,
           "won": 6,
           "exp": 0.333
         },
-        "above": {
-          "n": 7,
-          "won": 4,
-          "exp": 0.143
-        },
         "below": {
-          "n": 4,
-          "won": 2,
+          "n": 6,
+          "won": 3,
           "exp": 0.0
         },
         "negative": {
@@ -880,24 +904,24 @@
       "points": 40.0,
       "fade": {
         "all": {
-          "n": 13,
-          "won": 8,
-          "exp": 0.231
+          "n": 17,
+          "won": 11,
+          "exp": 0.37
         },
         "positive": {
-          "n": 9,
-          "won": 4,
-          "exp": -0.111
+          "n": 13,
+          "won": 7,
+          "exp": 0.176
         },
         "above": {
-          "n": 6,
-          "won": 2,
-          "exp": -0.333
+          "n": 9,
+          "won": 4,
+          "exp": 0.033
         },
         "below": {
-          "n": 7,
-          "won": 6,
-          "exp": 0.714
+          "n": 8,
+          "won": 7,
+          "exp": 0.75
         },
         "negative": {
           "n": 4,
@@ -907,24 +931,24 @@
       },
       "breakout": {
         "all": {
-          "n": 11,
-          "won": 5,
-          "exp": -0.091
+          "n": 15,
+          "won": 7,
+          "exp": -0.02
         },
         "positive": {
-          "n": 8,
-          "won": 4,
-          "exp": 0.0
+          "n": 12,
+          "won": 6,
+          "exp": 0.058
         },
         "above": {
-          "n": 6,
-          "won": 2,
-          "exp": -0.333
+          "n": 9,
+          "won": 3,
+          "exp": -0.256
         },
         "below": {
-          "n": 5,
-          "won": 3,
-          "exp": 0.2
+          "n": 6,
+          "won": 4,
+          "exp": 0.333
         },
         "negative": {
           "n": 3,
@@ -996,14 +1020,14 @@
       "points": 10.0,
       "fade": {
         "all": {
-          "n": 12,
-          "won": 5,
-          "exp": -0.065
+          "n": 14,
+          "won": 6,
+          "exp": -0.056
         },
         "negative": {
-          "n": 11,
-          "won": 5,
-          "exp": 0.02
+          "n": 13,
+          "won": 6,
+          "exp": 0.017
         },
         "below": {
           "n": 11,
@@ -1016,21 +1040,21 @@
           "exp": -1.0
         },
         "above": {
-          "n": 1,
-          "won": 0,
-          "exp": -1.0
+          "n": 3,
+          "won": 1,
+          "exp": -0.333
         }
       },
       "breakout": {
         "all": {
-          "n": 11,
-          "won": 7,
-          "exp": 0.333
+          "n": 13,
+          "won": 8,
+          "exp": 0.282
         },
         "negative": {
-          "n": 10,
-          "won": 6,
-          "exp": 0.266
+          "n": 12,
+          "won": 7,
+          "exp": 0.222
         },
         "below": {
           "n": 10,
@@ -1043,9 +1067,9 @@
           "exp": 1.0
         },
         "above": {
-          "n": 1,
-          "won": 1,
-          "exp": 1.0
+          "n": 3,
+          "won": 2,
+          "exp": 0.333
         }
       }
     },
@@ -1110,19 +1134,19 @@
       "points": 40.0,
       "fade": {
         "all": {
+          "n": 7,
+          "won": 1,
+          "exp": -0.714
+        },
+        "positive": {
           "n": 6,
           "won": 1,
           "exp": -0.667
         },
-        "positive": {
+        "above": {
           "n": 5,
           "won": 1,
           "exp": -0.6
-        },
-        "above": {
-          "n": 4,
-          "won": 1,
-          "exp": -0.5
         },
         "below": {
           "n": 2,
@@ -1137,19 +1161,19 @@
       },
       "breakout": {
         "all": {
+          "n": 7,
+          "won": 6,
+          "exp": 0.714
+        },
+        "positive": {
           "n": 6,
           "won": 5,
           "exp": 0.667
         },
-        "positive": {
+        "above": {
           "n": 5,
           "won": 4,
           "exp": 0.6
-        },
-        "above": {
-          "n": 4,
-          "won": 3,
-          "exp": 0.5
         },
         "below": {
           "n": 2,
