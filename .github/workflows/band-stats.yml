@@ -1,0 +1,25 @@
+name: Band statistics
+
+# Walk-forward hit rates of the liquidation bands (old vs new) on real ES/NQ
+# history. Read-only: prints to the job summary and uploads a JSON artifact.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fat-tail-bands]
+    paths: [tools/band_stats.py, .github/workflows/band-stats.yml]
+
+jobs:
+  stats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run backtest
+        run: python tools/band_stats.py --json band_stats.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: band-stats
+          path: band_stats.json

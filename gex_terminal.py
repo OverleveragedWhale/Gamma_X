@@ -118,7 +118,14 @@ VOL_LOOKBACK = 20             # daily bars behind the realized-vol estimate
 # A normal model puts the 99.9% band only 1.33x the 99% one; equity index
 # tails are fatter than that. Quantiles are floored at the normal value, so a
 # calm sample can never draw a band narrower than the textbook one.
-BAND_LEVELS = (("99%", 0.99), ("99.9%", 0.999))   # label -> confidence
+BAND_LEVELS = (("90%", 0.90), ("95%", 0.95),      # label -> confidence
+               ("99%", 0.99), ("99.9%", 0.999))
+# The TradingView paste string carries exactly these, in this order - its
+# parser reads anchor,99%,99.9%. 90% / 95% go to the page and the manual list.
+PINE_LEVELS = ("99%", "99.9%")
+# The normal floor guards the deep tails only. Fat-tailed returns have THINNER
+# shoulders than a normal, so flooring 90% / 95% would bias those bands wide.
+TAIL_FLOOR_FROM = 0.99
 EWMA_LAMBDA = 0.94            # RiskMetrics daily decay
 TAIL_HISTORY_ROWS = 5000      # ~20y of sessions: includes 2008, 2020, 2022
 TAIL_MIN_ROWS = 1000          # fewer and the 99.9% quantile is a guess; fall
@@ -2073,11 +2080,13 @@ def tail_model(closes):
     for label, p in BAND_LEVELS:
         z1, z2 = norm_z(p, 1), norm_z(p, 2)
         e_dn, e_up, e_abs = -quantile(srt, 1 - p), quantile(srt, p), quantile(srt_abs, p)
+        floor = p >= TAIL_FLOOR_FROM
         for name, e, z in (("dn", e_dn, z1), ("up", e_up, z1), ("abs", e_abs, z2)):
-            if e < z:
+            if floor and e < z:
                 floored.append(f"{label} {name}")
-        levels[label] = {"dn": max(e_dn, z1), "up": max(e_up, z1),
-                         "abs": max(e_abs, z2), "z1": z1, "z2": z2,
+        f1, f2 = (z1, z2) if floor else (0.0, 0.0)
+        levels[label] = {"dn": max(e_dn, f1), "up": max(e_up, f1),
+                         "abs": max(e_abs, f2), "z1": z1, "z2": z2,
                          "emp_dn": e_dn, "emp_up": e_up, "emp_abs": e_abs}
     return {"sigma": sigma, "n": len(resid), "levels": levels,
             "floored": floored, "method": "fhs"}
@@ -2887,7 +2896,8 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
             # wants, in the order its paste field parses them. Unchanged
             # format; each number is the larger of the down/up distances.
             "pine": (",".join([f"{pine_anchor:.2f}"]
-                              + [f"{x['points']:.2f}" for x in pine_bands])
+                              + [f"{x['points']:.2f}" for x in pine_bands
+                                 if x["label"] in PINE_LEVELS])
                      if pine_bands else None),
             # Surfaced because it deliberately differs from anchor: two
             # numbers that look like the same thing quietly disagreeing is
