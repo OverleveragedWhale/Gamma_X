@@ -9,6 +9,9 @@ on:
     branches: [fat-tail-bands]
     paths: [tools/band_stats.py, .github/workflows/band-stats.yml]
 
+permissions:
+  contents: write
+
 jobs:
   stats:
     runs-on: ubuntu-latest
@@ -18,7 +21,17 @@ jobs:
         with:
           python-version: "3.11"
       - name: Run backtest
-        run: python tools/band_stats.py --json band_stats.json
+        run: python tools/band_stats.py --json band_stats.json | tee band_stats.md
+      # Results also go to a side branch so they can be read without the
+      # Actions UI. Never touches main or the PR branch.
+      - name: Publish results to band-stats branch
+        run: |
+          mkdir out && cp band_stats.md band_stats.json out/
+          cd out && git init -q -b band-stats
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add . && git commit -qm "Band stats from ${GITHUB_SHA::7}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" band-stats
       - uses: actions/upload-artifact@v4
         with:
           name: band-stats
