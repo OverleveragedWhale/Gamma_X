@@ -216,9 +216,11 @@ registration leaves the old task running.
 ## Things that will bite
 
 - **The margins are per-account and are not set by bootstrap.** Until you set
-  them from the Actions tab → *Set margins*, those panels show no liquidation
-  bands. Do not guess values: a plausible-but-wrong margin distorts position
-  sizing and is worse than a visibly missing one.
+  them from the Actions tab → *Set margins*, those panels show no margin
+  cross-check. The liquidation and range bands no longer depend on margin -
+  they come from the tail model (EWMA vol + fat-tail quantiles of ~20 years of
+  ^GSPC / ^NDX / GLD history) - so they appear either way. Do not guess margin
+  values: a plausible-but-wrong margin is worse than a visibly missing one.
 - **Editing `GammaX-Snapshot.xml` by hand** means editing 50 triggers. Change
   `tools/make_schedule.py` and regenerate instead.
 - **The XML is stored UTF-8 so it diffs sensibly, but the task API is handed a
