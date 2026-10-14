@@ -548,6 +548,15 @@ def fetch_chain(sym):
     payload = json.loads(http_get(CBOE_URL.format(sym=sym)))
     data = payload["data"]
     spot = data.get("current_price") or data.get("close")
+    # Kept untouched for the raw chain archive (see archive_chains): every row
+    # exactly as Cboe sent it, before load_contracts filters or converts.
+    _CHAIN_RAW[sym] = {
+        "fetched_at": now_et().isoformat(timespec="seconds"),
+        "feed_timestamp": payload.get("timestamp"),
+        "spot": spot,
+        "quote": {k: v for k, v in data.items() if k != "options"},
+        "options": data.get("options", []),
+    }
     return float(spot), data.get("options", [])
 
 
@@ -1664,6 +1673,137 @@ def _newest_cash_close_once(sym, today):
 
 _OI_DIR = None
 _OI_PENDING = {}
+_CHAIN_RAW = {}     # chain symbol -> last raw Cboe payload this run
+
+
+# ---------------- raw chain archive ----------------
+# Every contract row Cboe sends - expiry, strike, call/put, open interest,
+# volume, IV, every Greek it carries, bid/ask - stored per chain as gzip CSV,
+# unfiltered and per expiry, so any GEX level can be recomputed later from the
+# archive alone. The oi/ fingerprint beside the page is a different thing: one
+# summed OI pair per strike, trimmed and pruned, for the OI-change column.
+#
+# Written LOCALLY and never pushed. The repo is public, so a data branch would
+# republish Cboe's chain to anyone; and the snapshot clone is reset to origin
+# every run, so nothing inside it survives. Default is a folder beside the
+# repo; set [archive] dir in config.ini, or GAMMAX_ARCHIVE_DIR, or "off".
+#
+# Two snapshots a session: OI is T-1 and fixed all day, but gamma and IV move,
+# so one capture near the open (the levels you trade the morning against) and
+# one near the close (end-of-day state). The first run at or after each time
+# writes that slot; later runs leave it alone. Nothing is ever pruned.
+#
+# Layout:  <dir>/YYYY-MM-DD/<slot>/<CHAIN>.csv.gz  +  <slot>/meta.json
+ARCHIVE_SLOTS = (("open", "09:50"), ("close", "16:05"))   # ET, data ~15m delayed
+ARCHIVE_DEFAULT = BASE_DIR.parent / "gammax-chain-archive"
+ARCHIVE_LEAD = ("option", "expiry", "cp", "strike")
+
+
+def archive_dir():
+    """Archive root, or None when disabled."""
+    raw = os.environ.get("GAMMAX_ARCHIVE_DIR")
+    if raw is None:
+        parser = configparser.ConfigParser()
+        try:
+            if parser.read(CONFIG_PATH) and parser.has_option("archive", "dir"):
+                raw = parser.get("archive", "dir")
+        except configparser.Error:
+            logging.exception("could not read [archive] from config.ini")
+    raw = (raw or "").strip()
+    if raw.lower() in ("off", "none", "0", "false"):
+        return None
+    return Path(raw).expanduser() if raw else ARCHIVE_DEFAULT
+
+
+def archive_slot(now):
+    """The slot this run would fill, or None before the first slot / off-days."""
+    if not is_trading_day(now.date()):
+        return None
+    hhmm, slot = now.strftime("%H:%M"), None
+    for name, start in ARCHIVE_SLOTS:
+        if hhmm >= start:
+            slot = name
+    return slot
+
+
+def _chain_rows_csv(options):
+    """Raw Cboe rows to gzip CSV bytes: every field Cboe sent, plus the
+    expiry / cp / strike decoded from the OCC symbol up front."""
+    import csv, gzip, io
+    keys = []
+    for o in options:
+        for k in o:
+            if k not in keys:
+                keys.append(k)
+    cols = list(ARCHIVE_LEAD) + [k for k in keys if k not in ARCHIVE_LEAD]
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(cols)
+    for o in options:
+        try:
+            exp, cp, strike = parse_occ(o["option"])
+            lead = [o["option"], exp.isoformat(), cp, f"{strike:g}"]
+        except (KeyError, ValueError, TypeError):
+            lead = [o.get("option"), "", "", ""]
+        w.writerow(lead + ["" if o.get(k) is None else o.get(k) for k in cols[4:]])
+    return gzip.compress(buf.getvalue().encode("utf-8"), mtime=0)
+
+
+def archive_chains(snapshot_payload, now=None):
+    """Store this run's raw chains in the session slot, once. Returns the slot
+    folder written to, or None. Never raises: the archive must not cost a
+    snapshot."""
+    try:
+        root = archive_dir()
+        now = now or now_et()
+        slot = archive_slot(now)
+        if not root or not slot or not _CHAIN_RAW:
+            return None
+        folder = root / now.date().isoformat() / slot
+        folder.mkdir(parents=True, exist_ok=True)
+        meta_path = folder / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            meta = {"format": "cboe-raw-1", "date": now.date().isoformat(),
+                    "slot": slot, "chains": {}, "symbols": {}}
+        wrote = []
+        for sym, raw in sorted(_CHAIN_RAW.items()):
+            path = folder / f"{sym}.csv.gz"
+            if path.exists() or not raw.get("options"):
+                continue          # slot already holds this chain
+            tmp = path.with_suffix(".tmp")
+            tmp.write_bytes(_chain_rows_csv(raw["options"]))
+            tmp.replace(path)
+            meta["chains"][sym] = {
+                "rows": len(raw["options"]), "spot": raw["spot"],
+                "fetched_at": raw["fetched_at"],
+                "feed_timestamp": raw["feed_timestamp"], "quote": raw["quote"]}
+            wrote.append(sym)
+        if not wrote:
+            return None
+        # What the live pipeline did with these chains, so a recomputation
+        # can be checked against the levels actually published at the time.
+        for s in (snapshot_payload or {}).get("symbols") or []:
+            if not s.get("ok"):
+                continue
+            meta["symbols"][s["symbol"]] = {
+                k: s.get(k) for k in ("future", "chain", "chains", "ratio",
+                                      "ratio_date", "fut_close", "spot",
+                                      "chain_spot", "zero", "regimes")}
+            meta["symbols"][s["symbol"]]["ladder"] = [
+                {k: r.get(k) for k in ("side", "strike", "strike_pre",
+                                       "call_gex", "put_gex", "src")}
+                for r in (s.get("ladder") or [])]
+        meta["generated"] = (snapshot_payload or {}).get("generated")
+        tmp = meta_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(meta, indent=1, default=str), encoding="utf-8")
+        tmp.replace(meta_path)
+        logging.info("chain archive: %s %s <- %s", now.date(), slot, ", ".join(wrote))
+        return folder
+    except Exception:
+        logging.exception("chain archive write failed")
+        return None
 
 
 def set_oi_dir(path):
@@ -3644,6 +3784,9 @@ def render_snapshot(path, skip_unchanged=False):
     recompute(previous, previous_generated)
     data = snapshot_json()
     digest = payload_digest(json.loads(data))
+    # Before the unchanged check: the chains were fetched either way, and an
+    # unchanged page is no reason to miss the session's archive slot.
+    archive_chains(json.loads(data))
 
     # Require the sidecar too, or the first run after it was introduced would
     # match on digest and never create it.

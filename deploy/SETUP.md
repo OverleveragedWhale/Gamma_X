@@ -219,6 +219,12 @@ registration leaves the old task running.
   them from the Actions tab → *Set margins*, those panels show no liquidation
   bands. Do not guess values: a plausible-but-wrong margin distorts position
   sizing and is worse than a visibly missing one.
+- **The raw chain archive lives on this machine only.** Each trading day the
+  snapshot run stores the full Cboe chains twice (near 09:50 and 16:05 ET) in
+  `gammax-chain-archive/` beside the repo (or `[archive] dir` in config.ini).
+  It is never pushed - the repo is public - and never pruned, so back it up
+  yourself; budget a few MB a day. `python tools/chain_archive.py verify`
+  shows what the newest slot holds and rebuilds its walls from it.
 - **Editing `GammaX-Snapshot.xml` by hand** means editing 50 triggers. Change
   `tools/make_schedule.py` and regenerate instead.
 - **The XML is stored UTF-8 so it diffs sensibly, but the task API is handed a
