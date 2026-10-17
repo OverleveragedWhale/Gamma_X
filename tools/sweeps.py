@@ -68,6 +68,26 @@ TIME_EXIT = "12:00"       # second exit reported: flat at noon if still open
 LEVELS = (("PDH", "high"), ("PDL", "low"), ("ONH", "high"), ("ONL", "low"),
           ("AH", "high"), ("AL", "low"), ("LH", "high"), ("LL", "low"))
 
+# Three versions of the same rule, differing only in which levels, when, and
+# which snapshot is the gamma map (the last one published at or before
+# map_by, so nothing is seen early). `spent_from` is where the "already taken
+# out before the window" check starts; None means the window starts the
+# moment the level is formed, so nothing can have spent it.
+VARIANTS = {
+    "day":    {"label": "Any prior level, 09:50-11:30",
+               "levels": tuple(n for n, _ in LEVELS), "map_by": "09:50",
+               "first": "09:50", "last": "11:30", "end": "16:00",
+               "spent_from": "09:30", "time_exit": "12:00"},
+    "london": {"label": "Asia range swept in London, 03:00-08:00",
+               "levels": ("AH", "AL"), "map_by": "03:00",
+               "first": "03:00", "last": "08:00", "end": "09:30",
+               "spent_from": None, "time_exit": "08:00"},
+    "nyopen": {"label": "London range swept at the NY open, 09:30-11:30",
+               "levels": ("LH", "LL"), "map_by": "09:30",
+               "first": "09:30", "last": "11:30", "end": "16:00",
+               "spent_from": None, "time_exit": "12:00"},
+}
+
 
 # ------------------------------------------------------------------ levels
 def _hi(rows):
@@ -135,25 +155,27 @@ def gex_context(level, gmap, sym):
 
 
 # ------------------------------------------------------------------ signal
-def find_sweeps(rows, levels, sym):
-    """Every sweep-and-reclaim in today's cash bars, in time order, before any
-    daily limit. rows are today's bars from 09:30. Returns dicts with index
-    of the entry bar (`i`), entry, stop, direction, level name and price."""
-    first = next((k for k, r in enumerate(rows) if r[0] >= FIRST), None)
+def find_sweeps(rows, levels, sym, v=None):
+    """Every sweep-and-reclaim in the window, in time order, before any daily
+    limit. rows run from the variant's spent_from (or first) to its end.
+    Returns dicts with index of the entry bar (`i`), entry, stop, direction,
+    level name and price."""
+    v = v or VARIANTS["day"]
+    first = next((k for k, r in enumerate(rows) if r[0] >= v["first"]), None)
     if first is None:
         return []
     pre = rows[:first]
     out = []
     for name, kind in LEVELS:
         lv = levels.get(name)
-        if lv is None:
+        if lv is None or name not in v["levels"]:
             continue
         up = kind == "high"
         # Spent before the map: traded through between 09:30 and 09:50.
         if pre and ((_hi(pre) > lv) if up else (_lo(pre) < lv)):
             continue
         k = first
-        while k < len(rows) and rows[k][0] < LAST:
+        while k < len(rows) and rows[k][0] < v["last"]:
             t, hi, lo, cl = rows[k]
             swept = (hi >= lv + TICK) if up else (lo <= lv - TICK)
             if not swept:
@@ -199,7 +221,7 @@ def find_sweeps(rows, levels, sym):
     return uniq
 
 
-def resolve(rows, s, end="16:00"):
+def resolve(rows, s, end="16:00", time_exit=TIME_EXIT):
     """Walk one trade from its start bar: (status, r, exit time, noon r)."""
     d, entry, risk = s["direction"], s["entry"], s["risk"]
     tgt = abs(s["target"] - entry)
@@ -209,7 +231,7 @@ def resolve(rows, s, end="16:00"):
     for t, hi, lo, cl in rows[s["i"]:]:
         if t >= end:
             break
-        if noon is None and t >= TIME_EXIT:
+        if noon is None and t >= time_exit:
             noon = mark
         a = (entry - lo) if d > 0 else (hi - entry)
         f = (hi - entry) if d > 0 else (entry - lo)
@@ -224,15 +246,16 @@ def resolve(rows, s, end="16:00"):
     return "closed", r, end, r if noon is None else noon
 
 
-def day_trades(rows, levels, gmap, sym):
+def day_trades(rows, levels, gmap, sym, v=None):
     """Today's trades after the limits: one at a time, at most MAX_TRADES."""
+    v = v or VARIANTS["day"]
     out, free_from = [], None
-    for s in find_sweeps(rows, levels, sym):
+    for s in find_sweeps(rows, levels, sym, v):
         if len(out) >= MAX_TRADES:
             break
         if free_from is not None and s["time"] < free_from:
             continue                        # still in the previous trade
-        status, r, at, noon_r = resolve(rows, s)
+        status, r, at, noon_r = resolve(rows, s, v["end"], v["time_exit"])
         tag, near, dist = gex_context(s["level"], gmap, sym)
         flip = gmap.get("flip")
         s.update({"status": status, "r": round(r, 2), "noon_r": round(noon_r, 2),
@@ -246,35 +269,73 @@ def day_trades(rows, levels, gmap, sym):
 
 
 # ---------------------------------------------------------------- backtest
-def backtest(since=None, until=None):
+def map_sessions(cutoffs, since=None, until=None):
+    """{cutoff: {(date, symbol): entry}}: for each cutoff, the LAST clean
+    snapshot published at or before it on that date - one pass over history."""
     import gex_terminal as g          # noqa: E402
     import score_levels as sl         # noqa: E402
+    chosen = {c: {} for c in cutoffs}
+    for sha, _ in sl.snapshot_commits():
+        payload = sl.payload_at(sha)
+        if not payload:
+            continue
+        stamp = sl.generated_et(payload)
+        if not stamp:
+            continue
+        day, hhmm = stamp.date(), stamp.strftime("%H:%M")
+        if (since and day < since) or (until and day > until) \
+                or not g.is_trading_day(day):
+            continue
+        for c in cutoffs:
+            if hhmm > c:
+                continue
+            for sym in payload.get("symbols") or []:
+                if sym.get("symbol") not in SYMBOLS:
+                    continue
+                entry = sl.session_entry(sym, day, stamp, "near", 2, "nearest")
+                key = (day, sym["symbol"])
+                if entry and (key not in chosen[c] or chosen[c][key]["at"] <= stamp):
+                    chosen[c][key] = entry
+    return chosen
+
+
+def backtest(since=None, until=None, variants=None):
+    """{variant: (trades, sessions scored)}."""
+    import gex_terminal as g          # noqa: E402
+    import score_levels as sl         # noqa: E402
+    variants = variants or list(VARIANTS)
     now = g.now_et().replace(tzinfo=None)
-    trades, sessions_seen = [], 0
-    for s in sl.sessions("near", 2, since, until, "nearest"):
-        sym = s["symbol"]
-        if sym not in SYMBOLS or not s["contract"]:
-            continue
-        if datetime.combine(s["date"], datetime.strptime("16:00", "%H:%M").time()) > now:
-            continue
-        try:
-            by_day = sl.bars(s["contract"])
-        except Exception:
-            continue
-        rows = [r for r in by_day.get(s["date"]) or [] if RTH_OPEN <= r[0] < RTH_CLOSE]
-        levels = liquidity_levels(by_day, s["date"])
-        if len(rows) < 30 or not levels:
-            continue
-        sessions_seen += 1
-        gmap = dict(s["levels"], regime=s["regime"])
-        for t in day_trades(rows, levels, gmap, sym):
-            t.update({"date": s["date"].isoformat(), "symbol": sym,
-                      "era": s["era"], "map_at": s["at"].strftime("%H:%M")})
-            adv, fav, marks = sl.trade_path(rows, t["i"], t["entry"],
-                                            t["direction"], False)
-            t.update({"adv": adv, "fav": fav, "marks": marks})
-            trades.append(t)
-    return trades, sessions_seen
+    maps = map_sessions(sorted({VARIANTS[v]["map_by"] for v in variants}),
+                        since, until)
+    out = {}
+    for name in variants:
+        v = VARIANTS[name]
+        trades, seen = [], 0
+        for (day, sym), s in sorted(maps[v["map_by"]].items()):
+            if not s["contract"]:
+                continue
+            if datetime.combine(day, datetime.strptime(v["end"], "%H:%M").time()) > now:
+                continue
+            try:
+                by_day = sl.bars(s["contract"])
+            except Exception:
+                continue
+            start = v["spent_from"] or v["first"]
+            rows = [r for r in by_day.get(day) or [] if start <= r[0] < v["end"]]
+            levels = liquidity_levels(by_day, day)
+            if len(rows) < 12 or not any(levels.get(n) for n in v["levels"]):
+                continue
+            seen += 1
+            gmap = dict(s["levels"], regime=s["regime"])
+            for t in day_trades(rows, levels, gmap, sym, v):
+                t.update({"variant": name, "date": day.isoformat(), "symbol": sym,
+                          "era": s["era"], "map_at": s["at"].strftime("%H:%M")})
+                adv, fav, marks = sl.trade_path(rows, t["i"], t["entry"],
+                                                t["direction"], False)
+                t.update({"adv": adv, "fav": fav, "marks": marks})
+                trades.append(t)
+        out[name] = (trades, seen)
+    return out
 
 
 def stats(ts, key="r", mult=None):
@@ -310,39 +371,44 @@ GATES = {
 }
 
 
-def report(trades, sessions_seen):
+def report_one(trades, sessions_seen):
     mult = {"ES": 50, "NQ": 20}
-    out = {"generated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-           "rules": {"target": TARGET, "min_stop": MIN_STOP, "max_stop": MAX_STOP,
-                     "gex_tol": GEX_TOL, "window": [FIRST, LAST],
-                     "max_trades": MAX_TRADES, "reclaim_bars": RECLAIM_BARS},
-           "sessions": sessions_seen, "symbols": {}}
+    out = {"sessions": sessions_seen, "symbols": {}}
     for sym in SYMBOLS:
         ts = [t for t in trades if t["symbol"] == sym]
-        days = sorted({t["date"] for t in ts})
         out["symbols"][sym] = {
-            "trades": len(ts), "days_with_trade": len(days),
+            "trades": len(ts), "days_with_trade": len({t["date"] for t in ts}),
             "gates": {name: {"held": stats([t for t in ts if f(t)], "r", mult),
-                             "noon": stats([t for t in ts if f(t)], "noon_r", mult)}
+                             "time_exit": stats([t for t in ts if f(t)], "noon_r", mult)}
                       for name, f in GATES.items()}}
     return out
 
 
+def report(results):
+    return {"generated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            "rules": {"target": TARGET, "min_stop": MIN_STOP, "max_stop": MAX_STOP,
+                      "gex_tol": GEX_TOL, "max_trades": MAX_TRADES,
+                      "reclaim_bars": RECLAIM_BARS},
+            "variants": {name: dict(VARIANTS[name], **report_one(*res))
+                         for name, res in results.items()}}
+
+
 def print_report(rep):
-    print(f"sweeps: {rep['sessions']} symbol-sessions scored")
-    for sym, s in rep["symbols"].items():
-        print(f"\n{sym}  {s['trades']} trades on {s['days_with_trade']} days"
-              f"  (target {TARGET[sym]:g}, stop {MIN_STOP[sym]:g}-{MAX_STOP[sym]:g})")
-        print(f"  {'gate':26}{'n':>4}{'won':>5}{'win%':>6}{'exp R':>7}{'$ total':>9}"
-              f"{'max DD':>8}  | noon exit: exp R, $")
-        for name, v in s["gates"].items():
-            h, nn = v["held"], v["noon"]
-            if not h["n"]:
-                print(f"  {name:26}{0:>4}")
-                continue
-            print(f"  {name:26}{h['n']:>4}{h['won']:>5}{h['win_rate']*100:>5.0f}%"
-                  f"{h['exp_r']:>7.2f}{h['sum_usd']:>9,}{h['max_dd_usd']:>8,}"
-                  f"  | {nn['exp_r']:>5.2f} {nn['sum_usd']:>8,}")
+    for vname, vr in rep["variants"].items():
+        print(f"\n=== {vname}: {vr['label']}  (map at or before {vr['map_by']}, "
+              f"{vr['sessions']} symbol-sessions)")
+        for sym, s in vr["symbols"].items():
+            print(f"\n{sym}  {s['trades']} trades on {s['days_with_trade']} days"
+                  f"  (target {TARGET[sym]:g}, stop {MIN_STOP[sym]:g}-{MAX_STOP[sym]:g})")
+            print(f"  {'gate':26}{'n':>4}{'won':>5}{'win%':>6}{'exp R':>7}{'$ total':>9}"
+                  f"{'max DD':>8}  | exit {vr['time_exit']}: exp R, $")
+            for name, v in s["gates"].items():
+                h, nn = v["held"], v["time_exit"]
+                if not h["n"]:
+                    continue
+                print(f"  {name:26}{h['n']:>4}{h['won']:>5}{h['win_rate']*100:>5.0f}%"
+                      f"{h['exp_r']:>7.2f}{h['sum_usd']:>9,}{h['max_dd_usd']:>8,}"
+                      f"  | {nn['exp_r']:>5.2f} {nn['sum_usd']:>8,}")
 
 
 # -------------------------------------------------------------------- live
@@ -389,9 +455,10 @@ def main():
     ap.add_argument("--trades", metavar="PATH", help="write every trade with its path")
     a = ap.parse_args()
     day = lambda v: datetime.strptime(v, "%Y-%m-%d").date() if v else None
-    trades, n = backtest(day(a.since), day(a.until))
-    rep = report(trades, n)
+    results = backtest(day(a.since), day(a.until))
+    rep = report(results)
     print_report(rep)
+    trades = [t for ts, _ in results.values() for t in ts]
     if a.json:
         Path(a.json).write_text(json.dumps(rep, indent=2), encoding="utf-8")
     if a.trades:
