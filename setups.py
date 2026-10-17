@@ -353,6 +353,16 @@ def step_window(win, ws, history, payload, calib, insts, now):
                 entry["bars_to"] = bars[-1][0] if bars else None
             except Exception as exc:
                 entry["error"] = f"bars unavailable ({type(exc).__name__})"
+            # The 09:50 sweep board (tools/sweeps.py "day"), for awareness: it
+            # lost in the backtest, so the page shows it but marks it so.
+            if win == "day" and name in sw.SYMBOLS and session == now.date().isoformat():
+                try:
+                    gmap = {"call": [w["level"] for w in smap["walls"] if w["side"] == "call"],
+                            "put": [w["level"] for w in smap["walls"] if w["side"] == "put"],
+                            "flip": smap.get("flip"), "regime": smap.get("regime")}
+                    entry["sweeps"] = sw.live(smap["contract"], name, gmap, now, "day")
+                except Exception as exc:
+                    entry["sweeps_error"] = f"sweeps unavailable ({type(exc).__name__})"
             symbols.append(entry)
 
     # The finished session goes into the record; a re-run replaces it.
@@ -716,6 +726,19 @@ function sweepTradeRows(ts, live){
     +`<th class="num">Target</th><th class="num">Result</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
+function daySweeps(d, s){
+  const b = s.sweeps;
+  if(!b) return s.sweeps_error ? `<div class="err">${esc(s.sweeps_error)}</div>` : "";
+  const bt = ((((d.london||{}).backtest||{}).variants||{}).day||{}).symbols||{};
+  const lv = (b.levels||[]).map(l=>`<tr class="dim"><td>${esc(l.name)}</td><td>${l.kind==="high"?"short a sweep above":"long a sweep below"}</td>`
+    +`<td class="num">${fx(l.level)}</td><td class="num">${l.dist_pts==null?"—":(l.dist_pts>0?"+":"")+fx(l.dist_pts)}</td>`
+    +`<td>${l.gex?chip(`${l.gex} ${fx(l.gex_level)}`,"v-ok"):`<span class="sub">nearest gamma level ${fx(l.gex_level)}, ${fx(l.gex_dist)} away</span>`}</td></tr>`).join("");
+  return `<div class="k">Prior-session sweeps ${esc(b.window[0])}–${esc(b.window[1])} ${chip("awareness only","v-noedge")}</div>`
+    + `<div class="sub">Backtest: ${statLine((bt[s.symbol]||{}).all)}. Shown so you can see the levels and what fired; not a rule to trade.</div>`
+    + (sweepTradeRows(b.trades||[], true) || `<div class="empty">No sweep-and-reclaim yet today.</div>`)
+    + `<div class="scroll"><table><thead><tr><th>Level</th><th>Trade</th><th class="num">Price</th><th class="num">From last</th><th>Gamma confluence</th></tr></thead><tbody>${lv}</tbody></table></div>`;
+}
+
 function renderLondon(d){
   const L = d.london || {};
   let html = windowTabs(d, "london");
@@ -790,6 +813,7 @@ function renderSetups(d, win){
       + `<span class="sub">map frozen ${esc(m.frozen_at)} ET · flip ${fx(m.flip)}`
       + (s.last!=null?` · last ${fx(s.last)} (${esc(s.bars_to)} bar)`:"")+`</span></div>`
       + (s.error?`<div class="err">${esc(s.error)}</div>`:"");
+    html += (evening ? "" : daySweeps(d, s));
     html += `<div class="k">Setups ${evening?"tonight":"today"}</div>` + eventRows(s.events||[], m.multiplier)
       + `<div class="k">Session map: each rule's ${evening?"evening ":""}history in each gamma regime</div>` + mapTable(m) + `</div>`;
   }
