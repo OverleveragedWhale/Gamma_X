@@ -207,7 +207,8 @@ def main():
     if "function renderSetups" in html:
         return check_setups(ctx, engine, html, calls=(
             "renderSetups(SETUPS_DATA)", "renderSetups(SETUPS_DATA, 'day')",
-            "renderSetups(SETUPS_DATA, 'evening')"))
+            "renderSetups(SETUPS_DATA, 'evening')",
+            "renderSetups(SETUPS_DATA, 'london')"))
     if "function renderLab" in html:
         # Each window, a filtered set, an asymmetric stop with a flat-by time,
         # and no data at all: every branch of the page.

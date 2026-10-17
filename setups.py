@@ -353,15 +353,6 @@ def step_window(win, ws, history, payload, calib, insts, now):
                 entry["bars_to"] = bars[-1][0] if bars else None
             except Exception as exc:
                 entry["error"] = f"bars unavailable ({type(exc).__name__})"
-            # Prior-session liquidity sweeps, gated by this map (tools/sweeps.py).
-            if win == "day" and name in sw.SYMBOLS and session == now.date().isoformat():
-                try:
-                    gmap = {"call": [w["level"] for w in smap["walls"] if w["side"] == "call"],
-                            "put": [w["level"] for w in smap["walls"] if w["side"] == "put"],
-                            "flip": smap.get("flip"), "regime": smap.get("regime")}
-                    entry["sweeps"] = sw.live(smap["contract"], name, gmap, now)
-                except Exception as exc:
-                    entry["sweeps_error"] = f"sweeps unavailable ({type(exc).__name__})"
             symbols.append(entry)
 
     # The finished session goes into the record; a re-run replaces it.
@@ -374,9 +365,137 @@ def step_window(win, ws, history, payload, calib, insts, now):
              "symbols": symbols, "notes": notes, "maps": maps}, history)
 
 
+# ---------------------------------------------------------- London sweeps
+# tools/sweeps.py's "london" variant, forward-tested: the Asia range (18:00 to
+# 03:00 ET) swept and reclaimed between 03:00 and 08:00, flat by 09:30. Its
+# gamma map is the last clean snapshot published before 03:00 that day - the
+# 00:00 run - exactly as the backtest takes it, frozen once 03:00 passes.
+LONDON = sw.VARIANTS["london"]
+SWEEP_MULT = {"ES": 50, "NQ": 20}
+
+
+def london_end(session):
+    return datetime.combine(datetime.fromisoformat(session).date(), hm(LONDON["end"]))
+
+
+def london_map(sym, stamp):
+    lv = sl.levels_of(sym, "near", 2, "nearest")
+    return {"contract": (sym.get("contract") or {}).get("symbol"),
+            "regime": ((sym.get("regimes") or {}).get("near") or {}).get("regime"),
+            "call": lv["call"], "put": lv["put"], "flip": lv.get("flip"),
+            "frozen_at": stamp[11:16]}
+
+
+def london_boards(ls, at):
+    out = []
+    for name, m in sorted((ls.get("maps") or {}).items()):
+        entry = {"symbol": name, "map": m}
+        try:
+            entry["board"] = sw.live(m["contract"], name, m, at, "london")
+        except Exception as exc:
+            entry["error"] = f"bars unavailable ({type(exc).__name__})"
+        out.append(entry)
+    return out
+
+
+def london_record(history, session, boards):
+    keep = [h for h in history if h.get("date") != session]
+    for b in boards:
+        for t in (b.get("board") or {}).get("trades") or []:
+            if t["status"] in FINAL:
+                keep.append({"date": session, "symbol": b["symbol"],
+                             "pnl_usd": round(t["r"] * t["risk"] * SWEEP_MULT[b["symbol"]]),
+                             **{k: t.get(k) for k in (
+                                 "level_name", "level", "direction", "sweep_time",
+                                 "time", "entry", "stop", "target", "risk", "status",
+                                 "r", "resolved_at", "regime", "gex")}})
+    return sorted(keep, key=lambda h: (h["date"], h["symbol"], h["time"]))
+
+
+def london_summary(history):
+    out = {}
+    for h in history:
+        o = out.setdefault(h["symbol"], {"n": 0, "won": 0, "r": 0.0, "usd": 0,
+                                         "eq": 0, "peak": 0, "dd": 0})
+        o["n"] += 1
+        o["won"] += h["status"] == "won"
+        o["r"] += h["r"] or 0
+        o["usd"] += h["pnl_usd"] or 0
+        o["eq"] += h["pnl_usd"] or 0
+        o["peak"] = max(o["peak"], o["eq"])
+        o["dd"] = min(o["dd"], o["eq"] - o["peak"])
+    return {k: {"n": v["n"], "won": v["won"], "exp_r": round(v["r"] / v["n"], 2),
+                "sum_usd": v["usd"], "max_dd_usd": v["dd"]} for k, v in out.items()}
+
+
+def london_backtest():
+    """The committed backtest (sweeps.yml): every variant's headline figures,
+    for comparison, and the London trades themselves, paths left out."""
+    try:
+        rep = json.loads((ROOT / "sweeps_report.json").read_text(encoding="utf-8"))
+        trades = json.loads((ROOT / "sweeps_trades.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    keep = ("all", "negative gamma", "positive gamma")
+    variants = {}
+    for name, v in (rep.get("variants") or {}).items():
+        variants[name] = {"label": v.get("label"), "sessions": v.get("sessions"),
+                          "symbols": {sym: {g: (x.get("gates") or {}).get(g, {}).get("held")
+                                            for g in keep}
+                                      for sym, x in (v.get("symbols") or {}).items()}}
+    rows = [{k: t.get(k) for k in ("date", "symbol", "level_name", "level",
+                                   "direction", "time", "entry", "stop", "target",
+                                   "risk", "status", "r", "regime", "gex")}
+            for t in trades if t.get("variant") == "london"]
+    for r in rows:
+        r["pnl_usd"] = round((r["r"] or 0) * (r["risk"] or 0) * SWEEP_MULT.get(r["symbol"], 0))
+    return {"generated": rep.get("generated"), "rules": rep.get("rules"),
+            "variants": variants,
+            "trades": sorted(rows, key=lambda r: (r["date"], r["symbol"], r["time"]))}
+
+
+def step_london(ls, history, payload, now):
+    """Advance the London sweep session by one run. Returns (london, history)."""
+    today = now.date().isoformat()
+    notes = []
+    # Finish a session no run saw to its end (PC asleep at 09:30, say).
+    if ls.get("session") and ls["session"] < today and not ls.get("over"):
+        history = london_record(history, ls["session"],
+                                london_boards(ls, london_end(ls["session"])))
+        ls = dict(ls, over=True)
+    if g.is_trading_day(now.date()) and ls.get("session") != today:
+        ls = {"session": today, "maps": {}, "over": False}
+    stamp = (payload.get("generated") or "").replace(" ET", "")
+    if ls.get("session") == today and stamp[:10] == today \
+            and stamp[11:16] < LONDON["map_by"]:
+        for sym in payload.get("symbols") or []:
+            name = sym.get("symbol")
+            if name in sw.SYMBOLS and sym.get("ok") and not sym.get("regimes_from"):
+                ls["maps"][name] = london_map(sym, stamp)
+    boards = []
+    if ls.get("session") == today:
+        if not ls["maps"] and now.strftime("%H:%M") >= LONDON["map_by"]:
+            notes.append("No clean snapshot before 03:00 today, so no London map: "
+                         "the backtest skips such sessions and so does this.")
+        if now.strftime("%H:%M") >= LONDON["first"]:
+            boards = london_boards(ls, now)
+        if now >= london_end(today) and ls["maps"]:
+            history = london_record(history, today, boards)
+            ls["over"] = True
+    return ({"session": ls.get("session"), "over": ls.get("over", False),
+             "maps": ls.get("maps") or {}, "symbols": boards, "notes": notes,
+             "label": LONDON["label"], "first": LONDON["first"],
+             "last": LONDON["last"], "end": LONDON["end"],
+             "map_by": LONDON["map_by"]}, history)
+
+
 def default_window(windows, now):
     """The tab a visitor lands on: a day session still trading, else the
     evening from the cash close until the next morning's map."""
+    lon = windows.get("london") or {}
+    if lon.get("session") == now.date().isoformat() and \
+            LONDON["first"] <= now.strftime("%H:%M") < MAP_AT:
+        return "london"
     day = windows.get("day") or {}
     if day.get("session") == now.date().isoformat() and not day.get("session_over"):
         return "day"
@@ -408,8 +527,20 @@ def run(pub, now=None, payload_path=None):
         windows[win], history = step_window(win, prior.get(win) or {}, history,
                                             payload, calib, insts, now)
 
+    try:
+        london, lhist = step_london(state.get("london") or {},
+                                    state.get("london_history") or [], payload, now)
+    except Exception as exc:          # never cost the rest of the page
+        london = dict(state.get("london") or {},
+                      error=f"London sweeps failed ({type(exc).__name__}: {exc})")
+        lhist = state.get("london_history") or []
+    london["record"] = london_summary(lhist)
+    london["history"] = lhist
+    london["backtest"] = london_backtest()
+
     data = {"generated": now.strftime("%Y-%m-%d %H:%M ET"), "epoch": time.time(),
-            "default_window": default_window(windows, now),
+            "default_window": default_window(dict(windows, london=london), now),
+            "london": london, "london_history": lhist,
             "windows": list(windows.values()),
             "calibration": {k: calib.get(k) for k in ("from", "to", "days")},
             "record": summarise_record(history), "history": history}
@@ -540,23 +671,6 @@ function eventRows(evs, mult){
     +`<th class="num">Target</th><th class="num">Result</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
-function sweepRows(sw, regime){
-  if(!sw) return "";
-  const lv = sw.levels.map(l=>`<tr><td>${esc(l.name)}</td><td class="side-${l.kind==="high"?"c":"p"}">${l.kind==="high"?"sell sweep above":"buy sweep below"}</td>`
-    +`<td class="num">${fx(l.level)}</td><td class="num">${l.dist_pts==null?"—":(l.dist_pts>0?"+":"")+fx(l.dist_pts)}</td>`
-    +`<td>${l.gex?chip(`${l.gex} ${fx(l.gex_level)}`,"v-ok"):`<span class="sub">nearest ${esc(fx(l.gex_level))} (${fx(l.gex_dist)} away)</span>`}</td></tr>`).join("");
-  const tr = (sw.trades||[]).map(t=>{
-    const st = {open:"s-open",won:"s-won",lost:"s-lost"}[t.status]||"";
-    return `<tr><td>${esc(t.level_name)} ${fx(t.level)}</td><td>${t.direction>0?"long":"short"}</td><td>${chip(t.status,st)}</td>`
-      +`<td>${t.gex?chip(t.gex,"v-ok"):chip("no gamma level")}</td><td class="num">${esc(t.time)}</td>`
-      +`<td class="num">${fx(t.entry)}</td><td class="num">${fx(t.stop)}</td><td class="num">${fx(t.target)}</td>`
-      +`<td class="num"><b class="${(t.r||0)>=0?"pos":"neg"}">${rFmt(t.r)}</b></td></tr>`}).join("");
-  return `<div class="k">Liquidity sweeps ${esc(sw.window[0])}–${esc(sw.window[1])}: reclaim close in, stop past the wick (${fx(sw.stop_range[0],0)}–${fx(sw.stop_range[1],0)} pts), target ${fx(sw.target,0)} pts, max 2</div>`
-    + (tr?`<div class="scroll"><table><thead><tr><th>Level</th><th>Side</th><th>Status</th><th>Gamma</th><th class="num">Time</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">Target</th><th class="num">Result</th></tr></thead><tbody>${tr}</tbody></table></div>`
-         :`<div class="empty">No sweep-and-reclaim yet today.</div>`)
-    + `<div class="scroll"><table><thead><tr><th>Level</th><th>Trade</th><th class="num">Price</th><th class="num">From last</th><th>Gamma confluence</th></tr></thead><tbody>${lv}</tbody></table></div>`;
-}
-
 function recordTable(rec){
   if(!rec||!rec.length) return `<div class="empty">No finished sessions yet. The record starts with the first session this page sees through to the close.</div>`;
   const rows = rec.map(r=>`<tr><td>${esc(r.symbol)}</td><td>${esc(r.setup)}</td><td>${regimeChip(r.regime)}</td>`
@@ -570,17 +684,94 @@ function recordTable(rec){
 }
 
 function windowTabs(d, cur){
+  const L = d.london;
+  const lon = L ? `<button class="tab ${cur==="london"?"on":""}" onclick="pickWin('london')">`
+      + `London sweeps <span class="sub">${esc(L.first)}–${esc(L.last)} ET</span>`
+      + `<small>${esc(!L.session ? "no session yet" : `${L.session} · ${L.over?"closed":"live"}`)}</small></button>` : "";
   return `<div class="tabs">` + d.windows.map(w=>{
     const st = !w.session ? "no map yet" : `${w.session} · ${w.session_over?"closed":"live"}`;
     return `<button class="tab ${w.name===cur?"on":""}" onclick="pickWin('${w.name}')">`
       + `${esc(w.label)} <span class="sub">${esc(w.map_from)}–${esc(w.end)} ET</span><small>${esc(st)}</small></button>`;
-  }).join("") + `</div>`;
+  }).join("") + lon + `</div>`;
+}
+
+const SIDE = d => d>0 ? "long" : "short";
+function statLine(st){
+  if(!st || !st.n) return `<span class="sub">no trades</span>`;
+  return `${st.n} trade${st.n===1?"":"s"} · ${st.won} won (${Math.round(100*st.won/st.n)}%) · `
+    + `<b class="${st.exp_r>=0?"pos":"neg"}">${rFmt(st.exp_r)}</b> · ${usd(st.sum_usd)} · max DD ${st.max_dd_usd ? usd(st.max_dd_usd) : "$0"}`;
+}
+function sweepTradeRows(ts, live){
+  if(!ts.length) return "";
+  const rows = ts.map(t=>{
+    const st = {open:"s-open",won:"s-won",lost:"s-lost"}[t.status]||"";
+    return `<tr>${live?"":`<td>${esc(t.date)}</td><td>${esc(t.symbol)}</td>`}<td>${esc(t.level_name)} ${fx(t.level)}</td>`
+      +`<td class="${t.direction>0?"side-c":"side-p"}">${SIDE(t.direction)}</td><td>${chip(t.status,st)}</td>`
+      +`<td>${regimeChip(t.regime)}</td><td class="num">${esc(t.time)}</td>`
+      +`<td class="num">${fx(t.entry)}</td><td class="num">${fx(t.stop)}</td><td class="num">${fx(t.target)}</td>`
+      +`<td class="num"><b class="${(t.r||0)>=0?"pos":"neg"}">${rFmt(t.r)}</b>${t.pnl_usd!=null?` <span class="sub">${usd(t.pnl_usd)}</span>`:""}</td></tr>`;
+  }).join("");
+  return `<div class="scroll"><table><thead><tr>${live?"":"<th>Date</th><th>Sym</th>"}<th>Level</th><th>Side</th><th>Status</th>`
+    +`<th>Regime</th><th class="num">Entry time</th><th class="num">Entry</th><th class="num">Stop</th>`
+    +`<th class="num">Target</th><th class="num">Result</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderLondon(d){
+  const L = d.london || {};
+  let html = windowTabs(d, "london");
+  html += `<div class="panel"><div class="phead"><span class="sym" style="font-size:16px">${esc(L.label||"London sweeps")}</span>`
+    + `<span class="sub">Asia high/low (18:00–03:00) swept by a tick and closed back inside within 3 bars → fade it on that close. `
+    + `Stop a tick past the wick (2–5 ES / 8–20 NQ, wider skipped), target 10 ES / 40 NQ, max 2 a day, flat by ${esc(L.end||"09:30")}. `
+    + `Gamma map: last snapshot before ${esc(L.map_by||"03:00")}.</span></div>`
+    + (L.error?`<div class="err">${esc(L.error)}</div>`:"")
+    + (L.session ? "" : `<div class="empty">No session yet. The first runs on the next trading day from 03:00 ET.</div>`)
+    + `</div>`;
+  for(const n of (L.notes||[])) html += `<div class="sub">${esc(n)}</div>`;
+  for(const s of (L.symbols||[])){
+    const m = s.map||{}, b = s.board||{};
+    const lv = (b.levels||[]).map(l=>`<tr><td>${esc(l.name)}</td><td class="side-${l.kind==="high"?"p":"c"}">${l.kind==="high"?"short a sweep above":"long a sweep below"}</td>`
+      +`<td class="num">${fx(l.level)}</td><td class="num">${l.dist_pts==null?"—":(l.dist_pts>0?"+":"")+fx(l.dist_pts)}</td>`
+      +`<td>${l.gex?chip(`${l.gex} ${fx(l.gex_level)}`,"v-ok"):`<span class="sub">nearest gamma level ${fx(l.gex_level)}, ${fx(l.gex_dist)} away</span>`}</td></tr>`).join("");
+    html += `<div class="panel"><div class="phead"><span class="sym">${esc(s.symbol)}</span> ${regimeChip(m.regime)}`
+      + `<span class="sub">map ${esc(m.frozen_at)} ET · flip ${fx(m.flip)}`
+      + (b.last!=null?` · last ${fx(b.last)} (${esc(b.bars_to)} bar)`:"") + `</span></div>`
+      + (s.error?`<div class="err">${esc(s.error)}</div>`:"")
+      + `<div class="k">Trades ${b.over?"this session":"so far"}</div>`
+      + (sweepTradeRows(b.trades||[], true) || `<div class="empty">No sweep-and-reclaim yet.</div>`)
+      + `<div class="k">Asia range</div><div class="scroll"><table><thead><tr><th>Level</th><th>Trade</th>`
+      + `<th class="num">Price</th><th class="num">From last</th><th>Gamma confluence</th></tr></thead><tbody>${lv}</tbody></table></div></div>`;
+  }
+  // Forward test
+  const rec = L.record||{}, hist = L.history||[];
+  html += `<div class="panel"><div class="phead"><span class="sym" style="font-size:16px">Forward test</span>`
+    + `<span class="sub">live results since this tab went up</span></div>`
+    + (Object.keys(rec).length ? Object.entries(rec).map(([k,v])=>`<div><b>${esc(k)}</b> ${statLine(v)}</div>`).join("")
+       : `<div class="empty">No finished sessions yet.</div>`)
+    + (hist.length ? `<div class="k">Every live trade</div>` + sweepTradeRows(hist.slice().reverse(), false) : "")
+    + `</div>`;
+  // Backtest
+  const bt = L.backtest;
+  if(bt){
+    const vs = bt.variants||{};
+    const vrows = Object.entries(vs).map(([name,v])=>Object.entries(v.symbols||{}).map(([sym,g])=>
+      `<tr class="${name==="london"?"":"dim"}"><td>${esc(v.label)}</td><td>${esc(sym)}</td>`
+      + `<td>${statLine(g.all)}</td><td>${statLine(g["negative gamma"])}</td><td>${statLine(g["positive gamma"])}</td></tr>`).join("")).join("");
+    html += `<div class="panel"><div class="phead"><span class="sym" style="font-size:16px">Backtest</span>`
+      + `<span class="sub">every published session, same rules · run ${esc(bt.generated)}</span></div>`
+      + `<div class="scroll"><table><thead><tr><th>Version</th><th>Sym</th><th>All</th><th>Negative gamma</th><th>Positive gamma</th></tr></thead><tbody>${vrows}</tbody></table></div>`
+      + `<div class="k">Every London backtest trade</div>` + sweepTradeRows((bt.trades||[]).slice().reverse(), false)
+      + `<div class="caveat"><b>*</b> About 20 sessions per symbol: a lead, not proof - one trade either way moves the total by hundreds of dollars. `
+      + `5-minute bars cannot order a stop and a target inside one bar; such a bar counts as the stop. `
+      + `The page updates when the terminal publishes (00:00, 04:00, 08:00), so a live trade can show up hours late: this is a record, not an alert. Not advice.</div></div>`;
+  }
+  return html;
 }
 
 function renderSetups(d, win){
   if(!d) return `<div class="panel empty">No setups data yet.</div>`;
   if(!d.windows) return `<div class="panel empty">Updating to the new format…</div>`;
   win = win || d.default_window || "day";
+  if(win === "london") return renderLondon(d);
   const w = d.windows.find(x=>x.name===win) || d.windows[0];
   const evening = w.name==="evening";
   const syms = (w.symbols||[]).slice().sort((a,b)=>
@@ -599,8 +790,6 @@ function renderSetups(d, win){
       + `<span class="sub">map frozen ${esc(m.frozen_at)} ET · flip ${fx(m.flip)}`
       + (s.last!=null?` · last ${fx(s.last)} (${esc(s.bars_to)} bar)`:"")+`</span></div>`
       + (s.error?`<div class="err">${esc(s.error)}</div>`:"");
-    html += (evening ? "" : sweepRows(s.sweeps, m.regime))
-      + (s.sweeps_error?`<div class="err">${esc(s.sweeps_error)}</div>`:"");
     html += `<div class="k">Setups ${evening?"tonight":"today"}</div>` + eventRows(s.events||[], m.multiplier)
       + `<div class="k">Session map: each rule's ${evening?"evening ":""}history in each gamma regime</div>` + mapTable(m) + `</div>`;
   }

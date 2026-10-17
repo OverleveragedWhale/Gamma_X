@@ -412,17 +412,20 @@ def print_report(rep):
 
 
 # -------------------------------------------------------------------- live
-def live(contract, sym, gmap, now, by_day=None):
-    """Today's sweep board for the setups page: levels, their state, and any
-    trades so far. Uses only completed bars."""
-    import gex_terminal as g          # noqa: E402
+def live(contract, sym, gmap, now, variant="london", by_day=None):
+    """One symbol's sweep board for the setups page: the variant's levels,
+    their distance from price, and its trades so far, from completed bars
+    only. A trade still open past the window's end is 'closed' once the
+    session is over and 'open' before."""
     import score_levels as sl         # noqa: E402
     if sym not in SYMBOLS:
         return None
+    v = VARIANTS[variant]
     if by_day is None:
         by_day = sl.bars(contract)
     day = now.date()
-    rows = [r for r in by_day.get(day) or [] if RTH_OPEN <= r[0] < RTH_CLOSE
+    start = v["spent_from"] or v["first"]
+    rows = [r for r in by_day.get(day) or [] if start <= r[0] < v["end"]
             and datetime.combine(day, datetime.strptime(r[0], "%H:%M").time())
             + timedelta(minutes=5) <= now]
     levels = liquidity_levels(by_day, day)
@@ -430,21 +433,22 @@ def live(contract, sym, gmap, now, by_day=None):
     board = []
     for name, kind in LEVELS:
         lv = levels.get(name)
-        if lv is None:
+        if lv is None or name not in v["levels"]:
             continue
         tag, near, dist = gex_context(lv, gmap, sym)
         board.append({"name": name, "kind": kind, "level": lv, "gex": tag,
                       "gex_level": near, "gex_dist": dist,
                       "dist_pts": round(lv - last, 2) if last is not None else None})
-    trades = day_trades(rows, levels, gmap, sym) if rows else []
+    over = now >= datetime.combine(day, datetime.strptime(v["end"], "%H:%M").time())
+    trades = day_trades(rows, levels, gmap, sym, v) if rows else []
     for t in trades:
-        if t["status"] == "closed" and rows and rows[-1][0] < "15:55":
+        if t["status"] == "closed" and not over:
             t["status"] = "open"
         t.pop("i", None)
-    return {"levels": board, "trades": trades, "last": last,
-            "bars_to": rows[-1][0] if rows else None,
-            "window": [FIRST, LAST], "target": TARGET[sym],
-            "stop_range": [MIN_STOP[sym], MAX_STOP[sym]]}
+    return {"variant": variant, "levels": board, "trades": trades, "last": last,
+            "bars_to": rows[-1][0] if rows else None, "over": over,
+            "window": [v["first"], v["last"]], "end": v["end"],
+            "target": TARGET[sym], "stop_range": [MIN_STOP[sym], MAX_STOP[sym]]}
 
 
 def main():
