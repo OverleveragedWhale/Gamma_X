@@ -33,6 +33,26 @@ sys.path.insert(0, str(ROOT))
 import gex_terminal as g          # noqa: E402
 
 TRADES_PATH = ROOT / "rules_trades.json"
+SWEEPS_PATH = ROOT / "sweeps_trades.json"     # tools/sweeps.py --trades
+SWEEPS_LIVE_FROM = "2026-10-19"   # first session after the London tab went live
+SWEEP_FIELDS = ("variant", "date", "symbol", "time", "level_name", "level", "kind",
+                "direction", "entry", "risk", "regime", "gex", "adv", "fav", "marks")
+
+
+def sweeps_of(path=SWEEPS_PATH):
+    """The sweep backtest's trades with their paths. The weekly run re-scores
+    every session, so sessions since go-live arrive here too: the page splits
+    them out as the live comparison."""
+    try:
+        rows = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    sys.path.insert(0, str(ROOT / "tools"))
+    import sweeps as sw                       # noqa: E402
+    return {"trades": [{k: t.get(k) for k in SWEEP_FIELDS} for t in rows],
+            "target": sw.TARGET, "min_stop": sw.MIN_STOP, "max_stop": sw.MAX_STOP,
+            "labels": {k: v["label"] for k, v in sw.VARIANTS.items()},
+            "live_from": SWEEPS_LIVE_FROM}
 
 
 def write(pub, trades_path=TRADES_PATH):
@@ -40,6 +60,10 @@ def write(pub, trades_path=TRADES_PATH):
         data = json.loads(Path(trades_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = None
+    sweeps = sweeps_of()
+    if sweeps:
+        data = data or {}
+        data["sweeps"] = sweeps
     if data is not None:
         data["generated"] = g.now_et().strftime("%Y-%m-%d %H:%M ET")
         data["epoch"] = time.time()
@@ -135,7 +159,8 @@ const LAB_DATA = null;
 // Sweep grids, in points: the values the tables try for each symbol.
 const GRID = {NQ:[10,120,5], GC:[2,30,1], ES:[4,40,2]};
 const MIN_N = 10;                 // fewer trades than this: shown, but dimmed
-const WIN_LABEL = {evening:"Evening", day:"Day"};
+const WIN_LABEL = {evening:"Evening", day:"Day", sweeps:"Liquidity sweeps"};
+const SWEEP_STOPS = {ES:[2,3,4,5,6,8,10,12,15], NQ:[8,12,16,20,25,30,40,50]};
 const esc = v => String(v==null?"":v).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const fx = (v,d=2) => v==null||!isFinite(v) ? "—" : (+v).toFixed(d);
 const sgn = (v,d=2) => v==null||!isFinite(v) ? "—" : `${v>0?"+":""}${(+v).toFixed(d)}`;
@@ -146,8 +171,12 @@ const cls = v => v>0 ? "pos" : v<0 ? "neg" : "";
 const chip = (t,c) => `<span class="chip ${c||""}">${esc(t)}</span>`;
 const regimeChip = r => r ? chip(r, r==="negative"?"g-neg":"g-pos") : "";
 
-function windowsOf(d){ return d ? ["evening","day"].filter(w=>d[w]) : []; }
+function windowsOf(d){
+  if(!d) return [];
+  return ["evening","day"].filter(w=>d[w]).concat(((d.sweeps||{}).trades||[]).length ? ["sweeps"] : []);
+}
 function times(d, win){
+  if(win==="sweeps") return {start:"03:00", end:"09:30"};
   const w = (d||{})[win]||{};
   return win==="evening" ? {start:w.map_from||"18:00", end:w.end||"03:00"}
                          : {start:w.map_at||"09:50", end:w.end||"16:00"};
@@ -168,7 +197,7 @@ function halfHours(d, win){
 function defaultState(d){
   const pts = (d&&d.points)||{};
   const sym = "NQ";
-  return {win: windowsOf(d)[0]||"evening", sym, setup:"all", regime:"all", flip:"all",
+  return {win: windowsOf(d)[0]||"evening", sym, variant:"london", setup:"all", regime:"all", flip:"all",
           side:"all", basis:"all", from:"", to:"", enter_from:"", enter_to:"", flat:"",
           stop: pts[sym]||40, target: pts[sym]||40, link:true};
 }
@@ -300,7 +329,61 @@ function tradeTable(st){
     +`<th class="num">Pts</th><th class="num">$</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
+// --- liquidity sweeps: the rule's stop (a tick past the wick) against fixed ones
+function sweepReplay(t, stop, target){
+  const ks = first(t.adv||[], stop), kt = first(t.fav||[], target);
+  if(ks!=null && (kt==null || ks<=kt)) return {how:"stop", pts:-stop};
+  if(kt!=null) return {how:"target", pts:target};
+  const m = (t.marks||[])[(t.marks||[]).length-1];
+  return {how:"close", pts: m ? m[2] : 0};
+}
+function sweepRun(trades, stopOf, target, mult){
+  const st = {n:0, won:0, lost:0, closed:0, usd:0, dd:0};
+  let eq = 0, peak = 0;
+  for(const t of trades){
+    const r = sweepReplay(t, stopOf(t), target);
+    st.n++; st[r.how==="target"?"won":r.how==="stop"?"lost":"closed"]++;
+    eq += r.pts*mult; peak = Math.max(peak, eq); st.dd = Math.min(st.dd, eq-peak);
+  }
+  st.usd = eq; st.per = st.n ? eq/st.n : null; st.win = st.n ? st.won/st.n : null;
+  return st;
+}
+function sweepCells(st){
+  if(!st.n) return `<td class="num">0</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td>`;
+  return `<td class="num">${st.n}</td><td class="num">${st.won}/${st.lost}/${st.closed}</td><td class="num">${pc(st.win)}</td>`
+    + `<td class="num ${cls(st.usd)}">${usd(st.usd)}</td><td class="num neg">${st.dd?usd(st.dd):"$0"}</td>`;
+}
+function renderSweeps(d, S){
+  const sw = (d||{}).sweeps;
+  if(!sw || !(sw.trades||[]).length) return `<div class="panel empty">No sweep trades yet. The "Score liquidity sweeps" workflow `
+    + `writes them to sweeps_trades.json each weekend (or by hand from the Actions tab), and this tab replays them at the rule's `
+    + `stop and at fixed stops once they are there.</div>`;
+  const sym = (sw.target||{})[S.sym] ? S.sym : "ES";
+  const mult = ((d.multipliers||{})[sym]) || ({ES:50,NQ:20})[sym] || 1;
+  const target = sw.target[sym];
+  const all = sw.trades.filter(t=>t.variant===(S.variant||"london") && t.symbol===sym);
+  const bt = all.filter(t=>t.date < sw.live_from), live = all.filter(t=>t.date >= sw.live_from);
+  const rows = [{label:`Rule: a tick past the wick (${fx(sw.min_stop[sym],0)}–${fx(sw.max_stop[sym],0)})`, f:t=>t.risk, rule:true}]
+    .concat((SWEEP_STOPS[sym]||[]).map(v=>({label:`Fixed ${v} pts ($${(v*mult).toLocaleString()} a loss)`, f:()=>v})));
+  const body = rows.map(r=>{
+    const a = sweepRun(bt, r.f, target, mult), b = sweepRun(live, r.f, target, mult), c = sweepRun(all, r.f, target, mult);
+    return `<tr class="${r.rule?"cur":""}"><td>${esc(r.label)}</td>${sweepCells(a)}${sweepCells(b)}${sweepCells(c)}</tr>`;
+  }).join("");
+  const head = p => `<th class="num">${p}<br>trades</th><th class="num">W/L/time</th><th class="num">Win</th><th class="num">Total</th><th class="num">Max DD</th>`;
+  return `<div class="panel"><div class="k">${esc((sw.labels||{})[S.variant]||S.variant)} · ${esc(sym)} · target ${fx(target,0)} pts · 1 lot</div>`
+    + `<div class="sub">Same entries, same target; only the stop changes. The highlighted row is the rule the setups page trades. `
+    + `Sessions from ${esc(sw.live_from)} on are the live comparison - they fill in each weekend when the sweeps backtest reruns.</div>`
+    + `<div class="scroll"><table><thead><tr><th>Stop</th>${head("Backtest")}${head("Live")}${head("All")}</tr></thead>`
+    + `<tbody>${body}</tbody></table></div>`
+    + (live.length ? "" : `<div class="empty">No live sessions yet.</div>`)
+    + `<div class="caveat"><b>*</b> A replay of trades the rule actually took: a sweep it skipped for needing a stop wider than `
+    + `${fx(sw.max_stop[sym],0)} pts is not here, and with a wider stop a trade can stay open long enough to block the day's next one, `
+    + `which this ignores. A 5-minute bar touching both stop and target counts as the stop. On ${all.length} trades one result `
+    + `moves a row by hundreds of dollars. No commission or slippage. Not advice.</div></div>`;
+}
+
 function renderLab(d, S){
+  if(S && S.win==="sweeps") return renderSweeps(d, S);
   if(!d || !(d.trades||[]).length)
     return `<div class="panel empty">No scored trades yet. The weekly calibration writes them.</div>`;
   const mult = (d.multipliers||{})[S.sym] || 1;
@@ -346,6 +429,15 @@ function renderLab(d, S){
 let S = null;
 function opts(list, cur){ return list.map(([v,l])=>`<option value="${esc(v)}"${String(v)===String(cur)?" selected":""}>${esc(l)}</option>`).join(""); }
 function controls(d){
+  if(S.win==="sweeps"){
+    const sw = d.sweeps||{};
+    const ss = Object.keys(sw.target||{}).sort();
+    const vs = Object.entries(sw.labels||{});
+    document.getElementById("controls").innerHTML =
+        `<label>Symbol<select onchange="set('sym',this.value)">${opts(ss.map(s=>[s,s]), S.sym)}</select></label>`
+      + `<label>Version<select onchange="set('variant',this.value)">${opts(vs, S.variant)}</select></label>`;
+    return;
+  }
   const syms = [...new Set(((d&&d.trades)||[]).map(t=>t.symbol))].sort();
   const hh = halfHours(d, S.win).map(h=>[h,h]);
   const step = (GRID[S.sym]||[0,0,1])[2] < 1 ? 0.5 : (S.sym==="GC" ? 0.5 : 1);
@@ -368,7 +460,9 @@ function controls(d){
 }
 function tabs(d){
   document.getElementById("tabs").innerHTML = windowsOf(d).map(w=>{
-    const t = times(d, w), n = (d.trades||[]).filter(x=>(x.window||"day")===w && x.symbol===S.sym).length;
+    const t = times(d, w), n = w==="sweeps"
+      ? ((d.sweeps||{}).trades||[]).filter(x=>x.variant===S.variant && x.symbol===S.sym).length
+      : (d.trades||[]).filter(x=>(x.window||"day")===w && x.symbol===S.sym).length;
     return `<button class="tab ${w===S.win?"on":""}" onclick="set('win','${w}')">${WIN_LABEL[w]}<small>${esc(t.start)}–${esc(t.end)} ET · ${n} ${esc(S.sym)} trades</small></button>`;
   }).join("");
 }

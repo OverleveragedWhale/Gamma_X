@@ -217,6 +217,8 @@ def main():
             f"renderLab(LAB_DATA, {s})",
             f"renderLab(LAB_DATA, Object.assign({s}, {{win:'day', setup:'fade', regime:'negative'}}))",
             f"renderLab(LAB_DATA, Object.assign({s}, {{sym:'GC', stop:10, target:20, link:false, flat:'00:00'}}))",
+            f"renderLab(LAB_DATA, Object.assign({s}, {{win:'sweeps'}}))",
+            f"renderLab(LAB_DATA, Object.assign({s}, {{win:'sweeps', sym:'ES', variant:'day'}}))",
             "renderLab(null, {})"))
 
     bad = 0
