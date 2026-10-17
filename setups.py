@@ -49,6 +49,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 import gex_terminal as g          # noqa: E402
 import score_levels as sl         # noqa: E402
+import sweeps as sw               # noqa: E402
 
 MAP_AT = "09:50"
 CLOSE = "16:00"
@@ -352,6 +353,15 @@ def step_window(win, ws, history, payload, calib, insts, now):
                 entry["bars_to"] = bars[-1][0] if bars else None
             except Exception as exc:
                 entry["error"] = f"bars unavailable ({type(exc).__name__})"
+            # Prior-session liquidity sweeps, gated by this map (tools/sweeps.py).
+            if win == "day" and name in sw.SYMBOLS and session == now.date().isoformat():
+                try:
+                    gmap = {"call": [w["level"] for w in smap["walls"] if w["side"] == "call"],
+                            "put": [w["level"] for w in smap["walls"] if w["side"] == "put"],
+                            "flip": smap.get("flip"), "regime": smap.get("regime")}
+                    entry["sweeps"] = sw.live(smap["contract"], name, gmap, now)
+                except Exception as exc:
+                    entry["sweeps_error"] = f"sweeps unavailable ({type(exc).__name__})"
             symbols.append(entry)
 
     # The finished session goes into the record; a re-run replaces it.
@@ -530,6 +540,23 @@ function eventRows(evs, mult){
     +`<th class="num">Target</th><th class="num">Result</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
+function sweepRows(sw, regime){
+  if(!sw) return "";
+  const lv = sw.levels.map(l=>`<tr><td>${esc(l.name)}</td><td class="side-${l.kind==="high"?"c":"p"}">${l.kind==="high"?"sell sweep above":"buy sweep below"}</td>`
+    +`<td class="num">${fx(l.level)}</td><td class="num">${l.dist_pts==null?"—":(l.dist_pts>0?"+":"")+fx(l.dist_pts)}</td>`
+    +`<td>${l.gex?chip(`${l.gex} ${fx(l.gex_level)}`,"v-ok"):`<span class="sub">nearest ${esc(fx(l.gex_level))} (${fx(l.gex_dist)} away)</span>`}</td></tr>`).join("");
+  const tr = (sw.trades||[]).map(t=>{
+    const st = {open:"s-open",won:"s-won",lost:"s-lost"}[t.status]||"";
+    return `<tr><td>${esc(t.level_name)} ${fx(t.level)}</td><td>${t.direction>0?"long":"short"}</td><td>${chip(t.status,st)}</td>`
+      +`<td>${t.gex?chip(t.gex,"v-ok"):chip("no gamma level")}</td><td class="num">${esc(t.time)}</td>`
+      +`<td class="num">${fx(t.entry)}</td><td class="num">${fx(t.stop)}</td><td class="num">${fx(t.target)}</td>`
+      +`<td class="num"><b class="${(t.r||0)>=0?"pos":"neg"}">${rFmt(t.r)}</b></td></tr>`}).join("");
+  return `<div class="k">Liquidity sweeps ${esc(sw.window[0])}–${esc(sw.window[1])}: reclaim close in, stop past the wick (${fx(sw.stop_range[0],0)}–${fx(sw.stop_range[1],0)} pts), target ${fx(sw.target,0)} pts, max 2</div>`
+    + (tr?`<div class="scroll"><table><thead><tr><th>Level</th><th>Side</th><th>Status</th><th>Gamma</th><th class="num">Time</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">Target</th><th class="num">Result</th></tr></thead><tbody>${tr}</tbody></table></div>`
+         :`<div class="empty">No sweep-and-reclaim yet today.</div>`)
+    + `<div class="scroll"><table><thead><tr><th>Level</th><th>Trade</th><th class="num">Price</th><th class="num">From last</th><th>Gamma confluence</th></tr></thead><tbody>${lv}</tbody></table></div>`;
+}
+
 function recordTable(rec){
   if(!rec||!rec.length) return `<div class="empty">No finished sessions yet. The record starts with the first session this page sees through to the close.</div>`;
   const rows = rec.map(r=>`<tr><td>${esc(r.symbol)}</td><td>${esc(r.setup)}</td><td>${regimeChip(r.regime)}</td>`
@@ -572,6 +599,8 @@ function renderSetups(d, win){
       + `<span class="sub">map frozen ${esc(m.frozen_at)} ET · flip ${fx(m.flip)}`
       + (s.last!=null?` · last ${fx(s.last)} (${esc(s.bars_to)} bar)`:"")+`</span></div>`
       + (s.error?`<div class="err">${esc(s.error)}</div>`:"");
+    html += (evening ? "" : sweepRows(s.sweeps, m.regime))
+      + (s.sweeps_error?`<div class="err">${esc(s.sweeps_error)}</div>`:"");
     html += `<div class="k">Setups ${evening?"tonight":"today"}</div>` + eventRows(s.events||[], m.multiplier)
       + `<div class="k">Session map: each rule's ${evening?"evening ":""}history in each gamma regime</div>` + mapTable(m) + `</div>`;
   }

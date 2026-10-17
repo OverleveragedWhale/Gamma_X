@@ -1,0 +1,59 @@
+name: Score liquidity sweeps
+
+# Backtests tools/sweeps.py - prior-session sweep-and-reclaim, tagged with the
+# 09:50 gamma map - over every published session, and commits the report and
+# the trades (with their paths) back to the branch it ran on.
+#
+# Runs when the rules change (a push touching tools/sweeps.py), by hand from
+# the Actions tab, and weekly after the calibration refresh. Yahoo keeps 60
+# days of 5-minute bars, so like the scorecard this has to keep running for
+# the record to grow past two months.
+
+on:
+  push:
+    paths:
+      - tools/sweeps.py
+      - .github/workflows/sweeps.yml
+  schedule:
+    - cron: "40 14 * * 6"       # Saturday, after calibrate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sweeps-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Fetch the published history
+        run: git fetch --no-tags origin +refs/heads/snapshot:refs/remotes/origin/snapshot
+
+      - name: Backtest the sweeps
+        run: |
+          set -euo pipefail
+          python tools/sweeps.py --json sweeps_report.json --trades sweeps_trades.json \
+              | tee "$RUNNER_TEMP/sweeps.txt"
+          { echo '### Liquidity sweeps'; echo '```'; cat "$RUNNER_TEMP/sweeps.txt"; echo '```'; } \
+              >> "$GITHUB_STEP_SUMMARY"
+          cp "$RUNNER_TEMP/sweeps.txt" sweeps_report.txt
+
+      - name: Commit the report
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898729+github-actions[bot]@users.noreply.github.com"
+          git add sweeps_report.json sweeps_trades.json sweeps_report.txt
+          if git diff --cached --quiet; then echo "no change"; exit 0; fi
+          git commit -m "sweeps: backtest $(date -u +%F)"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
