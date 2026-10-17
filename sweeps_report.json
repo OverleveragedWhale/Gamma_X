@@ -1,5 +1,5 @@
 {
-  "generated": "2026-10-17 04:56 UTC",
+  "generated": "2026-10-17 05:18 UTC",
   "rules": {
     "target": {
       "ES": 10.0,
@@ -17,335 +17,1060 @@
       "ES": 5.0,
       "NQ": 20.0
     },
-    "window": [
-      "09:50",
-      "11:30"
-    ],
     "max_trades": 2,
     "reclaim_bars": 3
   },
-  "sessions": 40,
-  "symbols": {
-    "ES": {
-      "trades": 10,
-      "days_with_trade": 7,
-      "gates": {
-        "all": {
-          "held": {
-            "n": 10,
-            "won": 1,
-            "lost": 9,
-            "win_rate": 0.1,
-            "exp_r": -0.57,
-            "sum_r": -5.67,
-            "sum_usd": -713,
-            "max_dd_usd": -750
-          },
-          "noon": {
-            "n": 10,
-            "won": 1,
-            "lost": 9,
-            "win_rate": 0.1,
-            "exp_r": -0.57,
-            "sum_r": -5.67,
-            "sum_usd": -713,
-            "max_dd_usd": -750
+  "variants": {
+    "day": {
+      "label": "Any prior level, 09:50-11:30",
+      "levels": [
+        "PDH",
+        "PDL",
+        "ONH",
+        "ONL",
+        "AH",
+        "AL",
+        "LH",
+        "LL"
+      ],
+      "map_by": "09:50",
+      "first": "09:50",
+      "last": "11:30",
+      "end": "16:00",
+      "spent_from": "09:30",
+      "time_exit": "12:00",
+      "sessions": 40,
+      "symbols": {
+        "ES": {
+          "trades": 10,
+          "days_with_trade": 7,
+          "gates": {
+            "all": {
+              "held": {
+                "n": 10,
+                "won": 1,
+                "lost": 9,
+                "win_rate": 0.1,
+                "exp_r": -0.57,
+                "sum_r": -5.67,
+                "sum_usd": -688,
+                "max_dd_usd": -738
+              },
+              "time_exit": {
+                "n": 10,
+                "won": 1,
+                "lost": 9,
+                "win_rate": 0.1,
+                "exp_r": -0.57,
+                "sum_r": -5.67,
+                "sum_usd": -688,
+                "max_dd_usd": -738
+              }
+            },
+            "negative gamma": {
+              "held": {
+                "n": 3,
+                "won": 0,
+                "lost": 3,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -3.0,
+                "sum_usd": -338,
+                "max_dd_usd": -338
+              },
+              "time_exit": {
+                "n": 3,
+                "won": 0,
+                "lost": 3,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -3.0,
+                "sum_usd": -338,
+                "max_dd_usd": -338
+              }
+            },
+            "positive gamma": {
+              "held": {
+                "n": 7,
+                "won": 1,
+                "lost": 6,
+                "win_rate": 0.14,
+                "exp_r": -0.38,
+                "sum_r": -2.67,
+                "sum_usd": -350,
+                "max_dd_usd": -538
+              },
+              "time_exit": {
+                "n": 7,
+                "won": 1,
+                "lost": 6,
+                "win_rate": 0.14,
+                "exp_r": -0.38,
+                "sum_r": -2.67,
+                "sum_usd": -350,
+                "max_dd_usd": -538
+              }
+            },
+            "at a gamma level": {
+              "held": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -150,
+                "max_dd_usd": -150
+              },
+              "time_exit": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -150,
+                "max_dd_usd": -150
+              }
+            },
+            "not at a gamma level": {
+              "held": {
+                "n": 9,
+                "won": 1,
+                "lost": 8,
+                "win_rate": 0.11,
+                "exp_r": -0.52,
+                "sum_r": -4.67,
+                "sum_usd": -538,
+                "max_dd_usd": -588
+              },
+              "time_exit": {
+                "n": 9,
+                "won": 1,
+                "lost": 8,
+                "win_rate": 0.11,
+                "exp_r": -0.52,
+                "sum_r": -4.67,
+                "sum_usd": -538,
+                "max_dd_usd": -588
+              }
+            },
+            "gamma level + negative": {
+              "held": {
+                "n": 0
+              },
+              "time_exit": {
+                "n": 0
+              }
+            },
+            "gamma level + positive": {
+              "held": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -150,
+                "max_dd_usd": -150
+              },
+              "time_exit": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -150,
+                "max_dd_usd": -150
+              }
+            },
+            "prior day (PDH/PDL)": {
+              "held": {
+                "n": 3,
+                "won": 1,
+                "lost": 2,
+                "win_rate": 0.33,
+                "exp_r": 0.44,
+                "sum_r": 1.33,
+                "sum_usd": 250,
+                "max_dd_usd": -250
+              },
+              "time_exit": {
+                "n": 3,
+                "won": 1,
+                "lost": 2,
+                "win_rate": 0.33,
+                "exp_r": 0.44,
+                "sum_r": 1.33,
+                "sum_usd": 250,
+                "max_dd_usd": -250
+              }
+            },
+            "overnight (ON/A/L)": {
+              "held": {
+                "n": 7,
+                "won": 0,
+                "lost": 7,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -7.0,
+                "sum_usd": -938,
+                "max_dd_usd": -938
+              },
+              "time_exit": {
+                "n": 7,
+                "won": 0,
+                "lost": 7,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -7.0,
+                "sum_usd": -938,
+                "max_dd_usd": -938
+              }
+            }
           }
         },
-        "negative gamma": {
-          "held": {
-            "n": 3,
-            "won": 0,
-            "lost": 3,
-            "win_rate": 0.0,
-            "exp_r": -1.0,
-            "sum_r": -3.0,
-            "sum_usd": -350,
-            "max_dd_usd": -350
-          },
-          "noon": {
-            "n": 3,
-            "won": 0,
-            "lost": 3,
-            "win_rate": 0.0,
-            "exp_r": -1.0,
-            "sum_r": -3.0,
-            "sum_usd": -350,
-            "max_dd_usd": -350
-          }
-        },
-        "positive gamma": {
-          "held": {
-            "n": 7,
-            "won": 1,
-            "lost": 6,
-            "win_rate": 0.14,
-            "exp_r": -0.38,
-            "sum_r": -2.67,
-            "sum_usd": -363,
-            "max_dd_usd": -550
-          },
-          "noon": {
-            "n": 7,
-            "won": 1,
-            "lost": 6,
-            "win_rate": 0.14,
-            "exp_r": -0.38,
-            "sum_r": -2.67,
-            "sum_usd": -363,
-            "max_dd_usd": -550
-          }
-        },
-        "at a gamma level": {
-          "held": {
-            "n": 1,
-            "won": 0,
-            "lost": 1,
-            "win_rate": 0.0,
-            "exp_r": -1.0,
-            "sum_r": -1.0,
-            "sum_usd": -150,
-            "max_dd_usd": -150
-          },
-          "noon": {
-            "n": 1,
-            "won": 0,
-            "lost": 1,
-            "win_rate": 0.0,
-            "exp_r": -1.0,
-            "sum_r": -1.0,
-            "sum_usd": -150,
-            "max_dd_usd": -150
-          }
-        },
-        "not at a gamma level": {
-          "held": {
-            "n": 9,
-            "won": 1,
-            "lost": 8,
-            "win_rate": 0.11,
-            "exp_r": -0.52,
-            "sum_r": -4.67,
-            "sum_usd": -563,
-            "max_dd_usd": -600
-          },
-          "noon": {
-            "n": 9,
-            "won": 1,
-            "lost": 8,
-            "win_rate": 0.11,
-            "exp_r": -0.52,
-            "sum_r": -4.67,
-            "sum_usd": -563,
-            "max_dd_usd": -600
-          }
-        },
-        "gamma level + negative": {
-          "held": {
-            "n": 0
-          },
-          "noon": {
-            "n": 0
-          }
-        },
-        "gamma level + positive": {
-          "held": {
-            "n": 1,
-            "won": 0,
-            "lost": 1,
-            "win_rate": 0.0,
-            "exp_r": -1.0,
-            "sum_r": -1.0,
-            "sum_usd": -150,
-            "max_dd_usd": -150
-          },
-          "noon": {
-            "n": 1,
-            "won": 0,
-            "lost": 1,
-            "win_rate": 0.0,
-            "exp_r": -1.0,
-            "sum_r": -1.0,
-            "sum_usd": -150,
-            "max_dd_usd": -150
-          }
-        },
-        "prior day (PDH/PDL)": {
-          "held": {
-            "n": 3,
-            "won": 1,
-            "lost": 2,
-            "win_rate": 0.33,
-            "exp_r": 0.44,
-            "sum_r": 1.33,
-            "sum_usd": 250,
-            "max_dd_usd": -250
-          },
-          "noon": {
-            "n": 3,
-            "won": 1,
-            "lost": 2,
-            "win_rate": 0.33,
-            "exp_r": 0.44,
-            "sum_r": 1.33,
-            "sum_usd": 250,
-            "max_dd_usd": -250
-          }
-        },
-        "overnight (ON/A/L)": {
-          "held": {
-            "n": 7,
-            "won": 0,
-            "lost": 7,
-            "win_rate": 0.0,
-            "exp_r": -1.0,
-            "sum_r": -7.0,
-            "sum_usd": -962,
-            "max_dd_usd": -962
-          },
-          "noon": {
-            "n": 7,
-            "won": 0,
-            "lost": 7,
-            "win_rate": 0.0,
-            "exp_r": -1.0,
-            "sum_r": -7.0,
-            "sum_usd": -962,
-            "max_dd_usd": -962
+        "NQ": {
+          "trades": 1,
+          "days_with_trade": 1,
+          "gates": {
+            "all": {
+              "held": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -160,
+                "max_dd_usd": -160
+              },
+              "time_exit": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -160,
+                "max_dd_usd": -160
+              }
+            },
+            "negative gamma": {
+              "held": {
+                "n": 0
+              },
+              "time_exit": {
+                "n": 0
+              }
+            },
+            "positive gamma": {
+              "held": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -160,
+                "max_dd_usd": -160
+              },
+              "time_exit": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -160,
+                "max_dd_usd": -160
+              }
+            },
+            "at a gamma level": {
+              "held": {
+                "n": 0
+              },
+              "time_exit": {
+                "n": 0
+              }
+            },
+            "not at a gamma level": {
+              "held": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -160,
+                "max_dd_usd": -160
+              },
+              "time_exit": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -160,
+                "max_dd_usd": -160
+              }
+            },
+            "gamma level + negative": {
+              "held": {
+                "n": 0
+              },
+              "time_exit": {
+                "n": 0
+              }
+            },
+            "gamma level + positive": {
+              "held": {
+                "n": 0
+              },
+              "time_exit": {
+                "n": 0
+              }
+            },
+            "prior day (PDH/PDL)": {
+              "held": {
+                "n": 0
+              },
+              "time_exit": {
+                "n": 0
+              }
+            },
+            "overnight (ON/A/L)": {
+              "held": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -160,
+                "max_dd_usd": -160
+              },
+              "time_exit": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -160,
+                "max_dd_usd": -160
+              }
+            }
           }
         }
       }
     },
-    "NQ": {
-      "trades": 1,
-      "days_with_trade": 1,
-      "gates": {
-        "all": {
-          "held": {
-            "n": 1,
-            "won": 0,
-            "lost": 1,
-            "win_rate": 0.0,
-            "exp_r": -1.0,
-            "sum_r": -1.0,
-            "sum_usd": -160,
-            "max_dd_usd": -160
-          },
-          "noon": {
-            "n": 1,
-            "won": 0,
-            "lost": 1,
-            "win_rate": 0.0,
-            "exp_r": -1.0,
-            "sum_r": -1.0,
-            "sum_usd": -160,
-            "max_dd_usd": -160
+    "london": {
+      "label": "Asia range swept in London, 03:00-08:00",
+      "levels": [
+        "AH",
+        "AL"
+      ],
+      "map_by": "03:00",
+      "first": "03:00",
+      "last": "08:00",
+      "end": "09:30",
+      "spent_from": null,
+      "time_exit": "08:00",
+      "sessions": 36,
+      "symbols": {
+        "ES": {
+          "trades": 10,
+          "days_with_trade": 10,
+          "gates": {
+            "all": {
+              "held": {
+                "n": 10,
+                "won": 3,
+                "lost": 7,
+                "win_rate": 0.3,
+                "exp_r": 0.31,
+                "sum_r": 3.08,
+                "sum_usd": 750,
+                "max_dd_usd": -538
+              },
+              "time_exit": {
+                "n": 10,
+                "won": 3,
+                "lost": 7,
+                "win_rate": 0.3,
+                "exp_r": 0.31,
+                "sum_r": 3.08,
+                "sum_usd": 750,
+                "max_dd_usd": -538
+              }
+            },
+            "negative gamma": {
+              "held": {
+                "n": 2,
+                "won": 1,
+                "lost": 1,
+                "win_rate": 0.5,
+                "exp_r": 0.93,
+                "sum_r": 1.86,
+                "sum_usd": 388,
+                "max_dd_usd": -112
+              },
+              "time_exit": {
+                "n": 2,
+                "won": 1,
+                "lost": 1,
+                "win_rate": 0.5,
+                "exp_r": 0.93,
+                "sum_r": 1.86,
+                "sum_usd": 388,
+                "max_dd_usd": -112
+              }
+            },
+            "positive gamma": {
+              "held": {
+                "n": 8,
+                "won": 2,
+                "lost": 6,
+                "win_rate": 0.25,
+                "exp_r": 0.15,
+                "sum_r": 1.22,
+                "sum_usd": 362,
+                "max_dd_usd": -638
+              },
+              "time_exit": {
+                "n": 8,
+                "won": 2,
+                "lost": 6,
+                "win_rate": 0.25,
+                "exp_r": 0.15,
+                "sum_r": 1.22,
+                "sum_usd": 362,
+                "max_dd_usd": -638
+              }
+            },
+            "at a gamma level": {
+              "held": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -100,
+                "max_dd_usd": -100
+              },
+              "time_exit": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -100,
+                "max_dd_usd": -100
+              }
+            },
+            "not at a gamma level": {
+              "held": {
+                "n": 9,
+                "won": 3,
+                "lost": 6,
+                "win_rate": 0.33,
+                "exp_r": 0.45,
+                "sum_r": 4.08,
+                "sum_usd": 850,
+                "max_dd_usd": -438
+              },
+              "time_exit": {
+                "n": 9,
+                "won": 3,
+                "lost": 6,
+                "win_rate": 0.33,
+                "exp_r": 0.45,
+                "sum_r": 4.08,
+                "sum_usd": 850,
+                "max_dd_usd": -438
+              }
+            },
+            "gamma level + negative": {
+              "held": {
+                "n": 0
+              },
+              "time_exit": {
+                "n": 0
+              }
+            },
+            "gamma level + positive": {
+              "held": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -100,
+                "max_dd_usd": -100
+              },
+              "time_exit": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -100,
+                "max_dd_usd": -100
+              }
+            },
+            "prior day (PDH/PDL)": {
+              "held": {
+                "n": 0
+              },
+              "time_exit": {
+                "n": 0
+              }
+            },
+            "overnight (ON/A/L)": {
+              "held": {
+                "n": 10,
+                "won": 3,
+                "lost": 7,
+                "win_rate": 0.3,
+                "exp_r": 0.31,
+                "sum_r": 3.08,
+                "sum_usd": 750,
+                "max_dd_usd": -538
+              },
+              "time_exit": {
+                "n": 10,
+                "won": 3,
+                "lost": 7,
+                "win_rate": 0.3,
+                "exp_r": 0.31,
+                "sum_r": 3.08,
+                "sum_usd": 750,
+                "max_dd_usd": -538
+              }
+            }
           }
         },
-        "negative gamma": {
-          "held": {
-            "n": 0
-          },
-          "noon": {
-            "n": 0
+        "NQ": {
+          "trades": 7,
+          "days_with_trade": 7,
+          "gates": {
+            "all": {
+              "held": {
+                "n": 7,
+                "won": 2,
+                "lost": 5,
+                "win_rate": 0.29,
+                "exp_r": 0.2,
+                "sum_r": 1.39,
+                "sum_usd": 331,
+                "max_dd_usd": -670
+              },
+              "time_exit": {
+                "n": 7,
+                "won": 2,
+                "lost": 5,
+                "win_rate": 0.29,
+                "exp_r": 0.2,
+                "sum_r": 1.39,
+                "sum_usd": 331,
+                "max_dd_usd": -670
+              }
+            },
+            "negative gamma": {
+              "held": {
+                "n": 2,
+                "won": 1,
+                "lost": 1,
+                "win_rate": 0.5,
+                "exp_r": 0.96,
+                "sum_r": 1.91,
+                "sum_usd": 500,
+                "max_dd_usd": -300
+              },
+              "time_exit": {
+                "n": 2,
+                "won": 1,
+                "lost": 1,
+                "win_rate": 0.5,
+                "exp_r": 0.96,
+                "sum_r": 1.91,
+                "sum_usd": 500,
+                "max_dd_usd": -300
+              }
+            },
+            "positive gamma": {
+              "held": {
+                "n": 5,
+                "won": 1,
+                "lost": 4,
+                "win_rate": 0.2,
+                "exp_r": -0.1,
+                "sum_r": -0.52,
+                "sum_usd": -170,
+                "max_dd_usd": -970
+              },
+              "time_exit": {
+                "n": 5,
+                "won": 1,
+                "lost": 4,
+                "win_rate": 0.2,
+                "exp_r": -0.1,
+                "sum_r": -0.52,
+                "sum_usd": -170,
+                "max_dd_usd": -970
+              }
+            },
+            "at a gamma level": {
+              "held": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -300,
+                "max_dd_usd": -300
+              },
+              "time_exit": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -300,
+                "max_dd_usd": -300
+              }
+            },
+            "not at a gamma level": {
+              "held": {
+                "n": 6,
+                "won": 2,
+                "lost": 4,
+                "win_rate": 0.33,
+                "exp_r": 0.4,
+                "sum_r": 2.39,
+                "sum_usd": 631,
+                "max_dd_usd": -670
+              },
+              "time_exit": {
+                "n": 6,
+                "won": 2,
+                "lost": 4,
+                "win_rate": 0.33,
+                "exp_r": 0.4,
+                "sum_r": 2.39,
+                "sum_usd": 631,
+                "max_dd_usd": -670
+              }
+            },
+            "gamma level + negative": {
+              "held": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -300,
+                "max_dd_usd": -300
+              },
+              "time_exit": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -300,
+                "max_dd_usd": -300
+              }
+            },
+            "gamma level + positive": {
+              "held": {
+                "n": 0
+              },
+              "time_exit": {
+                "n": 0
+              }
+            },
+            "prior day (PDH/PDL)": {
+              "held": {
+                "n": 0
+              },
+              "time_exit": {
+                "n": 0
+              }
+            },
+            "overnight (ON/A/L)": {
+              "held": {
+                "n": 7,
+                "won": 2,
+                "lost": 5,
+                "win_rate": 0.29,
+                "exp_r": 0.2,
+                "sum_r": 1.39,
+                "sum_usd": 331,
+                "max_dd_usd": -670
+              },
+              "time_exit": {
+                "n": 7,
+                "won": 2,
+                "lost": 5,
+                "win_rate": 0.29,
+                "exp_r": 0.2,
+                "sum_r": 1.39,
+                "sum_usd": 331,
+                "max_dd_usd": -670
+              }
+            }
+          }
+        }
+      }
+    },
+    "nyopen": {
+      "label": "London range swept at the NY open, 09:30-11:30",
+      "levels": [
+        "LH",
+        "LL"
+      ],
+      "map_by": "09:30",
+      "first": "09:30",
+      "last": "11:30",
+      "end": "16:00",
+      "spent_from": null,
+      "time_exit": "12:00",
+      "sessions": 40,
+      "symbols": {
+        "ES": {
+          "trades": 5,
+          "days_with_trade": 4,
+          "gates": {
+            "all": {
+              "held": {
+                "n": 5,
+                "won": 0,
+                "lost": 5,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -5.0,
+                "sum_usd": -738,
+                "max_dd_usd": -738
+              },
+              "time_exit": {
+                "n": 5,
+                "won": 0,
+                "lost": 5,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -5.0,
+                "sum_usd": -738,
+                "max_dd_usd": -738
+              }
+            },
+            "negative gamma": {
+              "held": {
+                "n": 4,
+                "won": 0,
+                "lost": 4,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -4.0,
+                "sum_usd": -550,
+                "max_dd_usd": -550
+              },
+              "time_exit": {
+                "n": 4,
+                "won": 0,
+                "lost": 4,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -4.0,
+                "sum_usd": -550,
+                "max_dd_usd": -550
+              }
+            },
+            "positive gamma": {
+              "held": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -188,
+                "max_dd_usd": -188
+              },
+              "time_exit": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -188,
+                "max_dd_usd": -188
+              }
+            },
+            "at a gamma level": {
+              "held": {
+                "n": 3,
+                "won": 0,
+                "lost": 3,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -3.0,
+                "sum_usd": -388,
+                "max_dd_usd": -388
+              },
+              "time_exit": {
+                "n": 3,
+                "won": 0,
+                "lost": 3,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -3.0,
+                "sum_usd": -388,
+                "max_dd_usd": -388
+              }
+            },
+            "not at a gamma level": {
+              "held": {
+                "n": 2,
+                "won": 0,
+                "lost": 2,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -2.0,
+                "sum_usd": -350,
+                "max_dd_usd": -350
+              },
+              "time_exit": {
+                "n": 2,
+                "won": 0,
+                "lost": 2,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -2.0,
+                "sum_usd": -350,
+                "max_dd_usd": -350
+              }
+            },
+            "gamma level + negative": {
+              "held": {
+                "n": 2,
+                "won": 0,
+                "lost": 2,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -2.0,
+                "sum_usd": -200,
+                "max_dd_usd": -200
+              },
+              "time_exit": {
+                "n": 2,
+                "won": 0,
+                "lost": 2,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -2.0,
+                "sum_usd": -200,
+                "max_dd_usd": -200
+              }
+            },
+            "gamma level + positive": {
+              "held": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -188,
+                "max_dd_usd": -188
+              },
+              "time_exit": {
+                "n": 1,
+                "won": 0,
+                "lost": 1,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -1.0,
+                "sum_usd": -188,
+                "max_dd_usd": -188
+              }
+            },
+            "prior day (PDH/PDL)": {
+              "held": {
+                "n": 0
+              },
+              "time_exit": {
+                "n": 0
+              }
+            },
+            "overnight (ON/A/L)": {
+              "held": {
+                "n": 5,
+                "won": 0,
+                "lost": 5,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -5.0,
+                "sum_usd": -738,
+                "max_dd_usd": -738
+              },
+              "time_exit": {
+                "n": 5,
+                "won": 0,
+                "lost": 5,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -5.0,
+                "sum_usd": -738,
+                "max_dd_usd": -738
+              }
+            }
           }
         },
-        "positive gamma": {
-          "held": {
-            "n": 1,
-            "won": 0,
-            "lost": 1,
-            "win_rate": 0.0,
-            "exp_r": -1.0,
-            "sum_r": -1.0,
-            "sum_usd": -160,
-            "max_dd_usd": -160
-          },
-          "noon": {
-            "n": 1,
-            "won": 0,
-            "lost": 1,
-            "win_rate": 0.0,
-            "exp_r": -1.0,
-            "sum_r": -1.0,
-            "sum_usd": -160,
-            "max_dd_usd": -160
-          }
-        },
-        "at a gamma level": {
-          "held": {
-            "n": 0
-          },
-          "noon": {
-            "n": 0
-          }
-        },
-        "not at a gamma level": {
-          "held": {
-            "n": 1,
-            "won": 0,
-            "lost": 1,
-            "win_rate": 0.0,
-            "exp_r": -1.0,
-            "sum_r": -1.0,
-            "sum_usd": -160,
-            "max_dd_usd": -160
-          },
-          "noon": {
-            "n": 1,
-            "won": 0,
-            "lost": 1,
-            "win_rate": 0.0,
-            "exp_r": -1.0,
-            "sum_r": -1.0,
-            "sum_usd": -160,
-            "max_dd_usd": -160
-          }
-        },
-        "gamma level + negative": {
-          "held": {
-            "n": 0
-          },
-          "noon": {
-            "n": 0
-          }
-        },
-        "gamma level + positive": {
-          "held": {
-            "n": 0
-          },
-          "noon": {
-            "n": 0
-          }
-        },
-        "prior day (PDH/PDL)": {
-          "held": {
-            "n": 0
-          },
-          "noon": {
-            "n": 0
-          }
-        },
-        "overnight (ON/A/L)": {
-          "held": {
-            "n": 1,
-            "won": 0,
-            "lost": 1,
-            "win_rate": 0.0,
-            "exp_r": -1.0,
-            "sum_r": -1.0,
-            "sum_usd": -160,
-            "max_dd_usd": -160
-          },
-          "noon": {
-            "n": 1,
-            "won": 0,
-            "lost": 1,
-            "win_rate": 0.0,
-            "exp_r": -1.0,
-            "sum_r": -1.0,
-            "sum_usd": -160,
-            "max_dd_usd": -160
+        "NQ": {
+          "trades": 2,
+          "days_with_trade": 2,
+          "gates": {
+            "all": {
+              "held": {
+                "n": 2,
+                "won": 0,
+                "lost": 2,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -2.0,
+                "sum_usd": -410,
+                "max_dd_usd": -410
+              },
+              "time_exit": {
+                "n": 2,
+                "won": 0,
+                "lost": 2,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -2.0,
+                "sum_usd": -410,
+                "max_dd_usd": -410
+              }
+            },
+            "negative gamma": {
+              "held": {
+                "n": 0
+              },
+              "time_exit": {
+                "n": 0
+              }
+            },
+            "positive gamma": {
+              "held": {
+                "n": 2,
+                "won": 0,
+                "lost": 2,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -2.0,
+                "sum_usd": -410,
+                "max_dd_usd": -410
+              },
+              "time_exit": {
+                "n": 2,
+                "won": 0,
+                "lost": 2,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -2.0,
+                "sum_usd": -410,
+                "max_dd_usd": -410
+              }
+            },
+            "at a gamma level": {
+              "held": {
+                "n": 0
+              },
+              "time_exit": {
+                "n": 0
+              }
+            },
+            "not at a gamma level": {
+              "held": {
+                "n": 2,
+                "won": 0,
+                "lost": 2,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -2.0,
+                "sum_usd": -410,
+                "max_dd_usd": -410
+              },
+              "time_exit": {
+                "n": 2,
+                "won": 0,
+                "lost": 2,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -2.0,
+                "sum_usd": -410,
+                "max_dd_usd": -410
+              }
+            },
+            "gamma level + negative": {
+              "held": {
+                "n": 0
+              },
+              "time_exit": {
+                "n": 0
+              }
+            },
+            "gamma level + positive": {
+              "held": {
+                "n": 0
+              },
+              "time_exit": {
+                "n": 0
+              }
+            },
+            "prior day (PDH/PDL)": {
+              "held": {
+                "n": 0
+              },
+              "time_exit": {
+                "n": 0
+              }
+            },
+            "overnight (ON/A/L)": {
+              "held": {
+                "n": 2,
+                "won": 0,
+                "lost": 2,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -2.0,
+                "sum_usd": -410,
+                "max_dd_usd": -410
+              },
+              "time_exit": {
+                "n": 2,
+                "won": 0,
+                "lost": 2,
+                "win_rate": 0.0,
+                "exp_r": -1.0,
+                "sum_r": -2.0,
+                "sum_usd": -410,
+                "max_dd_usd": -410
+              }
+            }
           }
         }
       }
