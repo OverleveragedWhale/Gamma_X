@@ -56,4 +56,5 @@ jobs:
           git add sweeps_report.json sweeps_trades.json sweeps_report.txt
           if git diff --cached --quiet; then echo "no change"; exit 0; fi
           git commit -m "sweeps: backtest $(date -u +%F)"
+          git pull --rebase --quiet origin "${GITHUB_REF_NAME}"
           git push origin "HEAD:${GITHUB_REF_NAME}"

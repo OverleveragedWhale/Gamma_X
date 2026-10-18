@@ -26,7 +26,8 @@ The rule (fixed points, nothing fitted)
            No reclaim in three bars and the level is broken: dead for the day
   entry    at that reclaim close, short a swept high, long a swept low
   stop     one tick past the sweep's extreme, never tighter than MIN_STOP;
-           a sweep whose stop would be wider than MAX_STOP is skipped
+           a sweep whose stop would be wider than MAX_STOP is skipped.
+           Moved to the entry once the trade is BREAKEVEN_R in favour
   target   TARGET points (10 ES / 40 NQ, the trader's 10-point win)
   limits   one trade per level, one position at a time, at most two a day
 
@@ -57,7 +58,11 @@ SYMBOLS = ("ES", "NQ")
 # NQ is scaled 4x ES, the same ratio score_levels.RULE_POINTS uses (40 / 10).
 TARGET = {"ES": 10.0, "NQ": 40.0}
 MIN_STOP = {"ES": 2.0, "NQ": 8.0}
-MAX_STOP = {"ES": 5.0, "NQ": 20.0}
+MAX_STOP = {"ES": 5.0, "NQ": 30.0}   # NQ 20 -> 30 on 2026-10-18: research.md
+# Once a trade is this many R in favour the stop moves to the entry, from the
+# next bar. Added 2026-10-18 after the 49-session research pass (research.md
+# on the sweeps-research branch): it improved both symbols in both halves.
+BREAKEVEN_R = 1.0
 GEX_TOL = {"ES": 5.0, "NQ": 20.0}
 RECLAIM_BARS = 3          # the sweep bar plus two more
 FIRST = "09:50"
@@ -222,8 +227,11 @@ def find_sweeps(rows, levels, sym, v=None):
 
 
 def resolve(rows, s, end="16:00", time_exit=TIME_EXIT):
-    """Walk one trade from its start bar: (status, r, exit time, noon r)."""
+    """Walk one trade from its start bar: (status, r, exit time, noon r).
+    status is won / lost / breakeven (stopped at entry after BREAKEVEN_R) /
+    closed. Same order as score_levels.replay_be: stop, then target, then arm."""
     d, entry, risk = s["direction"], s["entry"], s["risk"]
+    armed = False
     tgt = abs(s["target"] - entry)
     noon = None                 # r at the 12:00 mark, once it is passed
     mark = 0.0                  # r at the latest bar close before 12:00
@@ -235,11 +243,14 @@ def resolve(rows, s, end="16:00", time_exit=TIME_EXIT):
             noon = mark
         a = (entry - lo) if d > 0 else (hi - entry)
         f = (hi - entry) if d > 0 else (entry - lo)
-        if a >= risk:
-            return "lost", -1.0, t, -1.0 if noon is None else noon
+        if a >= (0.0 if armed else risk):
+            r = 0.0 if armed else -1.0
+            return ("breakeven" if armed else "lost"), r, t, r if noon is None else noon
         if f >= tgt:
             r = tgt / risk
             return "won", r, t, r if noon is None else noon
+        if BREAKEVEN_R is not None and f >= BREAKEVEN_R * risk:
+            armed = True
         mark = (cl - entry) * d / risk
         last = cl
     r = (last - entry) * d / risk
@@ -330,9 +341,9 @@ def backtest(since=None, until=None, variants=None):
             for t in day_trades(rows, levels, gmap, sym, v):
                 t.update({"variant": name, "date": day.isoformat(), "symbol": sym,
                           "era": s["era"], "map_at": s["at"].strftime("%H:%M")})
-                adv, fav, marks = sl.trade_path(rows, t["i"], t["entry"],
-                                                t["direction"], False)
-                t.update({"adv": adv, "fav": fav, "marks": marks})
+                adv, fav, marks, ex = sl.trade_path(rows, t["i"], t["entry"],
+                                                    t["direction"], False)
+                t.update({"adv": adv, "fav": fav, "marks": marks, "ex": ex})
                 trades.append(t)
         out[name] = (trades, seen)
     return out

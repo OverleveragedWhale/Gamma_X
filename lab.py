@@ -36,7 +36,7 @@ TRADES_PATH = ROOT / "rules_trades.json"
 SWEEPS_PATH = ROOT / "sweeps_trades.json"     # tools/sweeps.py --trades
 SWEEPS_LIVE_FROM = "2026-10-19"   # first session after the London tab went live
 SWEEP_FIELDS = ("variant", "date", "symbol", "time", "level_name", "level", "kind",
-                "direction", "entry", "risk", "regime", "gex", "adv", "fav", "marks")
+                "direction", "entry", "risk", "regime", "gex", "adv", "fav", "marks", "ex")
 
 
 def sweeps_of(path=SWEEPS_PATH):
@@ -50,6 +50,7 @@ def sweeps_of(path=SWEEPS_PATH):
     sys.path.insert(0, str(ROOT / "tools"))
     import sweeps as sw                       # noqa: E402
     return {"trades": [{k: t.get(k) for k in SWEEP_FIELDS} for t in rows],
+            "breakeven_r": sw.BREAKEVEN_R,
             "target": sw.TARGET, "min_stop": sw.MIN_STOP, "max_stop": sw.MAX_STOP,
             "labels": {k: v["label"] for k, v in sw.VARIANTS.items()},
             "live_from": SWEEPS_LIVE_FROM}
@@ -60,6 +61,10 @@ def write(pub, trades_path=TRADES_PATH):
         data = json.loads(Path(trades_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = None
+    sys.path.insert(0, str(ROOT / "tools"))
+    import score_levels as sl                 # noqa: E402
+    if data is not None:
+        data["breakeven"] = {f"{w}:{k}": v for (w, k), v in sl.RULE_BREAKEVEN.items()}
     sweeps = sweeps_of()
     if sweeps:
         data = data or {}
@@ -161,6 +166,7 @@ const GRID = {NQ:[10,120,5], GC:[2,30,1], ES:[4,40,2]};
 const MIN_N = 10;                 // fewer trades than this: shown, but dimmed
 const WIN_LABEL = {evening:"Evening", day:"Day", sweeps:"Liquidity sweeps"};
 const SWEEP_STOPS = {ES:[2,3,4,5,6,8,10,12,15], NQ:[8,12,16,20,25,30,40,50]};
+const BE_OPTS = [["rule","Live rule"],["off","Off"],["0.25","+0.25R"],["0.5","+0.5R"],["0.75","+0.75R"],["1","+1R"],["1.5","+1.5R"]];
 const esc = v => String(v==null?"":v).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const fx = (v,d=2) => v==null||!isFinite(v) ? "—" : (+v).toFixed(d);
 const sgn = (v,d=2) => v==null||!isFinite(v) ? "—" : `${v>0?"+":""}${(+v).toFixed(d)}`;
@@ -197,7 +203,7 @@ function halfHours(d, win){
 function defaultState(d){
   const pts = (d&&d.points)||{};
   const sym = "NQ";
-  return {win: windowsOf(d)[0]||"evening", sym, variant:"london", setup:"all", regime:"all", flip:"all",
+  return {win: windowsOf(d)[0]||"evening", sym, variant:"london", be:"rule", setup:"all", regime:"all", flip:"all",
           side:"all", basis:"all", from:"", to:"", enter_from:"", enter_to:"", flat:"",
           stop: pts[sym]||40, target: pts[sym]||40, link:true};
 }
@@ -210,9 +216,29 @@ function markAt(t, flat, win){
   for(const x of t.marks){ if(ord(x[0],win) <= ord(flat,win)) m = x; else break; }
   return m;
 }
-function replay(t, stop, target, flat, win){
+// Breakeven, as a fraction of the stop: "rule" is the live rule for the trade's
+// window and setup (tools/score_levels.RULE_BREAKEVEN), "off" none, a number
+// that fraction. score_levels.replay_be(), line for line: walk the per-bar
+// excursions, stop then target then arm, the stop at the entry from the next
+// bar. A trade without per-bar data (stored before 2026-10-18) replays as if off.
+function beOf(t, S){
+  if(S.be==="off" || S.be==null) return null;
+  if(S.be==="rule") return ((LAB_DATA||{}).breakeven||{})[`${t.window||"day"}:${t.setup}`] ?? null;
+  return +S.be;
+}
+function replay(t, stop, target, flat, win, be){
   const m = markAt(t, flat, win);
   if(!m) return null;                       // entered after flat-by: no trade
+  if(be!=null && t.ex){
+    let armed = false;
+    for(let k=0; k<t.ex.length && k<=m[1]; k++){
+      const [a,f] = t.ex[k];
+      if(a >= (armed ? 0 : stop)) return armed ? {how:"breakeven", pts:0} : {how:"stop", pts:-stop};
+      if(f >= target) return {how:"target", pts:target};
+      if(f >= be*stop) armed = true;
+    }
+    return {how:"close", pts:m[2]};
+  }
   const ks = first(t.adv, stop), kt = first(t.fav, target);
   if(ks!=null && ks<=m[1] && (kt==null || ks<=kt)) return {how:"stop", pts:-stop};
   if(kt!=null && kt<=m[1]) return {how:"target", pts:target};
@@ -236,14 +262,14 @@ function filtered(d, S){
 function run(trades, stop, target, S, mult){
   const rows = [];
   for(const t of trades){
-    const r = replay(t, stop, target, S.flat, S.win);
+    const r = replay(t, stop, target, S.flat, S.win, beOf(t, S));
     if(r) rows.push({t, ...r, usd: r.pts*mult});
   }
   const n = rows.length;
   const st = {n, won:0, lost:0, closed:0, pts:0, usd:0, dd:0};
   let eq = 0, peak = 0;
   for(const r of rows){
-    st[r.how==="target"?"won":r.how==="stop"?"lost":"closed"]++;
+    st[r.how==="target"?"won":r.how==="stop"?"lost":"closed"]++;   // breakeven counts with time exits
     st.pts += r.pts; eq += r.usd; peak = Math.max(peak, eq); st.dd = Math.min(st.dd, eq-peak);
   }
   st.usd = eq;
@@ -330,18 +356,28 @@ function tradeTable(st){
 }
 
 // --- liquidity sweeps: the rule's stop (a tick past the wick) against fixed ones
-function sweepReplay(t, stop, target){
+function sweepReplay(t, stop, target, be){
+  if(be!=null && t.ex){
+    let armed = false;
+    for(const [a,f] of t.ex){
+      if(a >= (armed ? 0 : stop)) return armed ? {how:"breakeven", pts:0} : {how:"stop", pts:-stop};
+      if(f >= target) return {how:"target", pts:target};
+      if(f >= be*stop) armed = true;
+    }
+    const m = (t.marks||[])[(t.marks||[]).length-1];
+    return {how:"close", pts: m ? m[2] : 0};
+  }
   const ks = first(t.adv||[], stop), kt = first(t.fav||[], target);
   if(ks!=null && (kt==null || ks<=kt)) return {how:"stop", pts:-stop};
   if(kt!=null) return {how:"target", pts:target};
   const m = (t.marks||[])[(t.marks||[]).length-1];
   return {how:"close", pts: m ? m[2] : 0};
 }
-function sweepRun(trades, stopOf, target, mult){
+function sweepRun(trades, stopOf, target, mult, be){
   const st = {n:0, won:0, lost:0, closed:0, usd:0, dd:0};
   let eq = 0, peak = 0;
   for(const t of trades){
-    const r = sweepReplay(t, stopOf(t), target);
+    const r = sweepReplay(t, stopOf(t), target, be);
     st.n++; st[r.how==="target"?"won":r.how==="stop"?"lost":"closed"]++;
     eq += r.pts*mult; peak = Math.max(peak, eq); st.dd = Math.min(st.dd, eq-peak);
   }
@@ -363,15 +399,17 @@ function renderSweeps(d, S){
   const target = sw.target[sym];
   const all = sw.trades.filter(t=>t.variant===(S.variant||"london") && t.symbol===sym);
   const bt = all.filter(t=>t.date < sw.live_from), live = all.filter(t=>t.date >= sw.live_from);
+  const be = S.be==="off" ? null : S.be==="rule" ? sw.breakeven_r : +S.be;
   const rows = [{label:`Rule: a tick past the wick (${fx(sw.min_stop[sym],0)}–${fx(sw.max_stop[sym],0)})`, f:t=>t.risk, rule:true}]
     .concat((SWEEP_STOPS[sym]||[]).map(v=>({label:`Fixed ${v} pts ($${(v*mult).toLocaleString()} a loss)`, f:()=>v})));
   const body = rows.map(r=>{
-    const a = sweepRun(bt, r.f, target, mult), b = sweepRun(live, r.f, target, mult), c = sweepRun(all, r.f, target, mult);
+    const a = sweepRun(bt, r.f, target, mult, be), b = sweepRun(live, r.f, target, mult, be), c = sweepRun(all, r.f, target, mult, be);
     return `<tr class="${r.rule?"cur":""}"><td>${esc(r.label)}</td>${sweepCells(a)}${sweepCells(b)}${sweepCells(c)}</tr>`;
   }).join("");
   const head = p => `<th class="num">${p}<br>trades</th><th class="num">W/L/time</th><th class="num">Win</th><th class="num">Total</th><th class="num">Max DD</th>`;
-  return `<div class="panel"><div class="k">${esc((sw.labels||{})[S.variant]||S.variant)} · ${esc(sym)} · target ${fx(target,0)} pts · 1 lot</div>`
-    + `<div class="sub">Same entries, same target; only the stop changes. The highlighted row is the rule the setups page trades. `
+  return `<div class="panel"><div class="k">${esc((sw.labels||{})[S.variant]||S.variant)} · ${esc(sym)} · target ${fx(target,0)} pts · `
+    + `breakeven ${be==null?"off":`+${be}R`}${S.be==="rule"?" (live rule)":""} · 1 lot</div>`
+    + `<div class="sub">Same entries, same target; only the stop changes. The highlighted row with breakeven on "Live rule" is what the setups page trades. `
     + `Sessions from ${esc(sw.live_from)} on are the live comparison - they fill in each weekend when the sweeps backtest reruns.</div>`
     + `<div class="scroll"><table><thead><tr><th>Stop</th>${head("Backtest")}${head("Live")}${head("All")}</tr></thead>`
     + `<tbody>${body}</tbody></table></div>`
@@ -382,6 +420,14 @@ function renderSweeps(d, S){
     + `moves a row by hundreds of dollars. No commission or slippage. Not advice.</div></div>`;
 }
 
+function beLabel(d, S){
+  if(S.be==="off") return "off";
+  if(S.be==="rule"){
+    const r = Object.entries((d||{}).breakeven||{}).filter(([k])=>k.startsWith((S.win||"day")+":"));
+    return r.length ? "live rule (" + r.map(([k,v])=>`${k.split(":")[1]}s +${v}R`).join(", ") + ")" : "live rule (none here)";
+  }
+  return `+${S.be}R`;
+}
 function renderLab(d, S){
   if(S && S.win==="sweeps") return renderSweeps(d, S);
   if(!d || !(d.trades||[]).length)
@@ -392,7 +438,8 @@ function renderLab(d, S){
   const t = times(d, S.win);
   const dates = new Set(trades.map(x=>x.date));
   let html = `<div class="panel"><div class="k">${WIN_LABEL[S.win]} · ${esc(S.sym)} · stop ${fx(S.stop,S.stop%1?1:0)} / target ${fx(S.target,S.target%1?1:0)} pts`
-    + (S.flat?` · flat by ${esc(S.flat)}`:` · held to ${esc(t.end)}`)+`</div><div class="stats">`
+    + (S.flat?` · flat by ${esc(S.flat)}`:` · held to ${esc(t.end)}`)
+    + ` · breakeven ${esc(beLabel(d, S))}</div><div class="stats">`
     + statBox("Trades", `${st.n}<span class="sub"> / ${dates.size} sessions</span>`)
     + statBox("Won / lost / time", `${st.won} / ${st.lost} / ${st.closed}`)
     + statBox("Win rate", pc(st.win))
@@ -403,6 +450,7 @@ function renderLab(d, S){
     + statBox("Max drawdown", usd(st.dd), "neg")
     + `</div>`
     + (st.n && st.n<MIN_N ? `<div class="warn">Only ${st.n} trades: too few to tell a value from luck.</div>` : "")
+    + (S.be!=="off" && trades.some(x=>!x.ex) ? `<div class="warn">${trades.filter(x=>!x.ex).length} of these trades were stored before per-bar data existed and replay without a breakeven.</div>` : "")
     + `<div class="k">By setup and gamma regime, at these values</div>` + breakdown(d, S, mult)
     + `</div>`;
   html += `<div class="panel"><div class="k">1:1 sweep: stop = target</div>`
@@ -435,7 +483,8 @@ function controls(d){
     const vs = Object.entries(sw.labels||{});
     document.getElementById("controls").innerHTML =
         `<label>Symbol<select onchange="set('sym',this.value)">${opts(ss.map(s=>[s,s]), S.sym)}</select></label>`
-      + `<label>Version<select onchange="set('variant',this.value)">${opts(vs, S.variant)}</select></label>`;
+      + `<label>Version<select onchange="set('variant',this.value)">${opts(vs, S.variant)}</select></label>`
+      + `<label>Breakeven<select onchange="set('be',this.value)">${opts(BE_OPTS, S.be)}</select></label>`;
     return;
   }
   const syms = [...new Set(((d&&d.trades)||[]).map(t=>t.symbol))].sort();
@@ -452,6 +501,7 @@ function controls(d){
     + sel("side","Wall", [["all","Both"],["call","Call walls"],["put","Put walls"]])
     + sel("basis","Gamma read at", [["all","Any"],["close","4pm close (old)"],["live","Live future"],["chain","Chain, cash hours"]])
     + num("stop","Stop, pts") + num("target","Target, pts")
+    + sel("be","Breakeven", BE_OPTS)
     + `<label class="chk"><input type="checkbox" ${S.link?"checked":""} onchange="set('link',this.checked)">Keep 1:1</label>`
     + sel("enter_from","Enter from", [["","Map time"], ...hh])
     + sel("enter_to","No entries after", [["","End"], ...hh])

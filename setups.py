@@ -186,7 +186,7 @@ def build_symbol_map(sym, inst, calib, stamp, win="day"):
 
 
 # ----------------------------------------------------------------- events
-def evaluate(smap, bars, session_over):
+def evaluate(smap, bars, session_over, win="day"):
     """Every rule setup in the frozen map, against the session's bars.
 
     Entry and the bar rules are the scorecard's; stop and target are the
@@ -236,18 +236,27 @@ def evaluate(smap, bars, session_over):
                        "target": round(entry + d * pts, 2),
                        "flip_side": (("above" if entry > flip else "below")
                                      if flip else None)})
-            status, r, at = "open", 0.0, None
+            # Breakeven (score_levels.RULE_BREAKEVEN): day fades move the stop
+            # to the entry from the bar after they are +0.5R, as replay_be().
+            be = sl.rule_be(win, setup)
+            if be is not None:
+                ev["breakeven_at"] = round(entry + d * be * pts, 2)
+            status, r, at, armed = "open", 0.0, None, False
             for k, (t, hi, lo, cl) in enumerate(bars[start:]):
                 a = (entry - lo) if d > 0 else (hi - entry)
                 f = (hi - entry) if d > 0 else (entry - lo)
-                if a >= pts:                        # both in one bar = stop
-                    status, r, at = "lost", -1.0, t
+                if a >= (0.0 if armed else pts):    # both in one bar = stop
+                    status, r, at = ("breakeven", 0.0, t) if armed else ("lost", -1.0, t)
                     break
                 if k == 0 and setup == "fade":
                     continue                        # fill bar counts against only
                 if f >= pts:
                     status, r, at = "won", 1.0, t
                     break
+                if be is not None and f >= be * pts:
+                    armed = True
+            if status == "open" and armed:
+                ev["stop"] = round(entry, 2)        # moved
             if status == "open" and last is not None:
                 r = (last - entry) * d / pts
                 if session_over:
@@ -259,7 +268,7 @@ def evaluate(smap, bars, session_over):
 
 
 # ---------------------------------------------------------------- record
-FINAL = ("won", "lost", "closed")
+FINAL = ("won", "lost", "breakeven", "closed")
 
 
 def summarise_record(history):
@@ -294,7 +303,7 @@ def record_session(history, session, maps, now, win="day"):
     for name, smap in maps.items():
         try:
             bars = session_bars(smap["contract"], day, now, map_start(win, smap), win)
-            evs = evaluate(smap, bars, True)
+            evs = evaluate(smap, bars, True, win)
         except Exception:
             continue
         for ev in evs:
@@ -348,7 +357,7 @@ def step_window(win, ws, history, payload, calib, insts, now):
             try:
                 bars = session_bars(smap["contract"], day, now,
                                     map_start(win, smap), win)
-                entry["events"] = evaluate(smap, bars, session_over)
+                entry["events"] = evaluate(smap, bars, session_over, win)
                 entry["last"] = bars[-1][3] if bars else None
                 entry["bars_to"] = bars[-1][0] if bars else None
             except Exception as exc:
@@ -660,9 +669,9 @@ function mapTable(sm){
 }
 
 function eventRows(evs, mult){
-  const live = evs.filter(e=>["armed","open","won","lost","closed"].includes(e.status));
+  const live = evs.filter(e=>["armed","open","won","lost","breakeven","closed"].includes(e.status));
   if(!live.length) return `<div class="empty">Nothing armed or triggered yet. Each wall fires once per setup per session.</div>`;
-  const order = {open:0,armed:1,won:2,lost:2,closed:2};
+  const order = {open:0,armed:1,won:2,lost:2,breakeven:2,closed:2};
   live.sort((a,b)=>(order[a.status]-order[b.status]) || ((a.time||"")<(b.time||"")?-1:1));
   const rows = live.map(e=>{
     const st = {open:"s-open",armed:"s-armed",won:"s-won",lost:"s-lost"}[e.status]||"";
@@ -744,7 +753,7 @@ function renderLondon(d){
   let html = windowTabs(d, "london");
   html += `<div class="panel"><div class="phead"><span class="sym" style="font-size:16px">${esc(L.label||"London sweeps")}</span>`
     + `<span class="sub">Asia high/low (18:00–03:00) swept by a tick and closed back inside within 3 bars → fade it on that close. `
-    + `Stop a tick past the wick (2–5 ES / 8–20 NQ, wider skipped), target 10 ES / 40 NQ, max 2 a day, flat by ${esc(L.end||"09:30")}. `
+    + `Stop a tick past the wick (2–5 ES / 8–30 NQ, wider skipped), moved to entry once +1R, target 10 ES / 40 NQ, max 2 a day, flat by ${esc(L.end||"09:30")}. `
     + `Gamma map: last snapshot before ${esc(L.map_by||"03:00")}.</span></div>`
     + (L.error?`<div class="err">${esc(L.error)}</div>`:"")
     + (L.session ? "" : `<div class="empty">No session yet. The first runs on the next trading day from 03:00 ET.</div>`)
@@ -806,7 +815,7 @@ function renderSetups(d, win){
   for(const s of syms){
     const m = s.map||{};
     html += `<div class="panel"><div class="phead"><span class="sym">${esc(s.symbol)}</span>`
-      + chip(`rules: 1:1, ${fx(m.points,0)} pts`)
+      + chip(`rules: 1:1, ${fx(m.points,0)} pts` + (evening ? "" : ", fades to breakeven at +0.5R"))
       + (m.traded===false ? ` ${chip("reference, not traded")}` : "")
       + ` ${regimeChip(m.regime)}`
       + (m.basis==="live" ? ` ${chip("gamma at live price")}` : "")

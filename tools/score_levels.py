@@ -432,6 +432,16 @@ def fmt(v, nd=2):
 # trade triggers, because that is the call the trader makes at the screen.
 RULE_POINTS = {"NQ": 40.0, "GC": 10.0, "ES": 10.0}
 REFERENCE_ONLY = {"ES"}
+# Breakeven, as a fraction of the stop, by (window, setup): the stop moves to
+# the entry from the bar after the trade is this far in favour. Day fades only,
+# from 2026-10-18 (gamma_be.md on the sweeps-research branch): at +0.5R it
+# raised the total or held it and cut the drawdown on all three symbols' day
+# fades, but cost breakouts and the evening, so those stay without one.
+RULE_BREAKEVEN = {("day", "fade"): 0.5}
+
+
+def rule_be(window, setup):
+    return RULE_BREAKEVEN.get((window or "day", setup))
 
 
 def trade_path(rows, start, entry, direction, fill_bar_adverse_only):
@@ -448,7 +458,7 @@ def trade_path(rows, start, entry, direction, fill_bar_adverse_only):
     This is derived from the bars without being them: no prices, only how far
     each trade went for and against, so it can sit on a public page.
     """
-    adv, fav, marks = [], [], []
+    adv, fav, marks, ex = [], [], [], []
     worst = best = 0.0
     seg = rows[start:]
     for k, (t, hi, lo, cl) in enumerate(seg):
@@ -456,6 +466,7 @@ def trade_path(rows, start, entry, direction, fill_bar_adverse_only):
         f = (hi - entry) if direction > 0 else (entry - lo)
         if k == 0 and fill_bar_adverse_only:
             f = 0.0
+        ex.append([round(a, 2), round(f, 2)])
         if a > worst:
             worst = a
             adv.append([k, round(a, 4)])
@@ -465,7 +476,27 @@ def trade_path(rows, start, entry, direction, fill_bar_adverse_only):
         end = (datetime.strptime(t, "%H:%M") + timedelta(minutes=5)).strftime("%H:%M")
         if end[3:] in ("00", "30") or k == len(seg) - 1:
             marks.append([end, k, round((cl - entry) * direction, 4)])
-    return adv, fav, marks
+    return adv, fav, marks, ex
+
+
+def replay_be(t, stop, target, be_at=None):
+    """replay() with an optional breakeven: once the trade has been `be_at`
+    points in favour, the stop moves to the entry from the NEXT bar (5-minute
+    bars cannot say whether price came back inside the bar that paid). Needs
+    the per-bar excursions `ex`; a trade stored before they existed replays
+    without the breakeven. Returns (R, how), how in stop/breakeven/target/close."""
+    ex = t.get("ex")
+    if be_at is None or not ex:
+        return replay(t, stop, target)
+    armed = False
+    for a, f in ex:
+        if a >= (0.0 if armed else stop):
+            return (0.0, "breakeven") if armed else (-1.0, "stop")
+        if f >= target:
+            return target / stop, "target"
+        if f >= be_at:
+            armed = True
+    return t["marks"][-1][2] / stop, "close"
 
 
 def replay(t, stop, target):
@@ -518,7 +549,7 @@ def rule_trades(since=None, until=None):
                         if not ev:
                             continue
                         start, entry, d = ev
-                        adv, fav, marks = trade_path(rb, start, entry, d, fill)
+                        adv, fav, marks, ex = trade_path(rb, start, entry, d, fill)
                         out.append({
                             "date": s["date"].isoformat(), "window": win,
                             "symbol": sym, "setup": name, "side": side,
@@ -529,7 +560,7 @@ def rule_trades(since=None, until=None):
                             "map_at": s["at"].strftime("%H:%M"),
                             "time": rb[start if fill else start - 1][0],
                             "entry": round(entry, 2),
-                            "adv": adv, "fav": fav, "marks": marks})
+                            "adv": adv, "fav": fav, "marks": marks, "ex": ex})
     return out, covered
 
 
@@ -563,7 +594,8 @@ def score_rules(trades, window="day"):
         if sym not in RULE_POINTS or t.get("window", "day") != window:
             continue
         pts = RULE_POINTS[sym]
-        r, how = replay(t, pts, pts)
+        be = rule_be(t.get("window", "day"), t["setup"])
+        r, how = replay_be(t, pts, pts, None if be is None else be * pts)
         rec = (r, how == "target")
         grp = acc[sym][t["setup"]]
         grp["all"].append(rec)
