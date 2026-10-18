@@ -474,6 +474,45 @@ def london_backtest():
             "trades": sorted(rows, key=lambda r: (r["date"], r["symbol"], r["time"]))}
 
 
+KZ_ORDER = {"A": 0, "L": 1, "N": 2, "P": 3}
+
+
+def killzone_maps(windows, london):
+    """{symbol: string} for pine/gx_killzone_sweeps*.pine: the history in
+    pine_maps.json (tools/pine_maps.py, refreshed by sweeps.yml) with this
+    session's own maps on top - London's 00:00 map as LNDN, the 09:50 day map
+    as NYAM, the evening map as ASIA."""
+    try:
+        base = json.loads((ROOT / "pine_maps.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        base = {}
+    out = {}
+    for sym in sw.SYMBOLS:
+        rows = {e.split(",")[0]: e for e in (base.get(sym) or "").split(";") if e}
+        cur = []
+        lm = ((london or {}).get("maps") or {}).get(sym)
+        if lm and london.get("session"):
+            cur.append((london["session"], "L", lm))
+        for w in windows.values():
+            m = (w.get("maps") or {}).get(sym)
+            if m and w.get("session"):
+                walls = m.get("walls") or []
+                m = {"regime": m.get("regime"), "flip": m.get("flip"),
+                     "call": [x["level"] for x in walls if x["side"] == "call"],
+                     "put": [x["level"] for x in walls if x["side"] == "put"]}
+                cur.append((w["session"], "A" if w["name"] == "evening" else "N", m))
+        for day, code, m in cur:
+            f = lambda xs: "/".join(f"{float(x):.2f}" for x in xs or [])
+            reg = {"positive": "+", "negative": "-"}.get(m.get("regime"), "")
+            key = day[5:7] + day[8:10] + code
+            parts = [key, reg, f"{float(m['flip']):.2f}" if m.get("flip") else "",
+                     f(m.get("call")), f(m.get("put"))]
+            rows[key] = ",".join(x or "x" for x in parts)   # Pine's split may drop empties
+        keys = sorted(rows, key=lambda k: (k[:4], KZ_ORDER.get(k[4:], 9)))[-60:]
+        out[sym] = ";".join(rows[k] for k in keys)
+    return out
+
+
 def window_pine(session, maps):
     """A Day or Evening map in the same string format as london_pine()."""
     conv = {}
@@ -591,6 +630,7 @@ def run(pub, now=None, payload_path=None):
     data = {"generated": now.strftime("%Y-%m-%d %H:%M ET"), "epoch": time.time(),
             "default_window": default_window(dict(windows, london=london), now),
             "london": london, "london_history": lhist,
+            "pine_maps": killzone_maps(windows, london),
             "windows": list(windows.values()),
             "calibration": {k: calib.get(k) for k in ("from", "to", "days")},
             "record": summarise_record(history), "history": history}
@@ -787,6 +827,17 @@ function pineBox(str, what){
     + `<div class="sub">Tap to select, then paste into the indicator's settings. One string covers ES and NQ.</div></div>`;
 }
 
+function kzBox(d){
+  const pm = d.pine_maps||{};
+  const syms = Object.keys(pm).filter(k=>pm[k]);
+  if(!syms.length) return "";
+  return `<div class="panel"><div class="k">TradingView · GX Killzone Sweeps → Gamma map string</div>`
+    + syms.map(k=>`<div class="sub" style="margin-top:6px">${esc(k)} · ${pm[k].split(";").length} killzone maps, oldest first</div>`
+      + `<code class="pine" onclick="getSelection().selectAllChildren(this)" style="display:block;overflow-x:auto;white-space:nowrap;`
+      + `background:var(--raised);border:1px solid var(--line);border-radius:4px;padding:8px">${esc(pm[k])}</code>`).join("")
+    + `<div class="sub">Paste the string for the chart's symbol. It carries the map for every recent killzone, so the indicator's gamma filter and its "at a gamma level" row cover those sessions.</div></div>`;
+}
+
 function renderLondon(d){
   const L = d.london || {};
   let html = windowTabs(d, "london");
@@ -799,6 +850,7 @@ function renderLondon(d){
     + `</div>`;
   for(const n of (L.notes||[])) html += `<div class="sub">${esc(n)}</div>`;
   html += pineBox(L.pine, "00:00 map, for the London open");
+  html += kzBox(d);
   for(const s of (L.symbols||[])){
     const m = s.map||{}, b = s.board||{};
     const lv = (b.levels||[]).map(l=>`<tr><td>${esc(l.name)}</td><td class="side-${l.kind==="high"?"p":"c"}">${l.kind==="high"?"short a sweep above":"long a sweep below"}</td>`
@@ -868,6 +920,7 @@ function renderSetups(d, win){
   }
   for(const n of (w.notes||[])) html += `<div class="sub">${esc(n)}</div>`;
   html += pineBox(w.pine, evening ? "evening map, for the Asia open" : "09:50 map, for the New York session");
+  html += kzBox(d);
   const c = d.calibration||{};
   const rec = (d.record||[]).filter(r=>(r.window||"day")===w.name);
   html += `<div class="panel"><div class="phead"><span class="sym" style="font-size:16px">Forward test, ${esc(w.label.toLowerCase())}</span>`

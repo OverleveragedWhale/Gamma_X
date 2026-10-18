@@ -13,6 +13,7 @@ on:
   push:
     paths:
       - tools/sweeps.py
+      - tools/pine_maps.py
       - .github/workflows/sweeps.yml
   schedule:
     - cron: "40 14 * * 6"       # Saturday, after calibrate.yml
@@ -49,11 +50,14 @@ jobs:
               >> "$GITHUB_STEP_SUMMARY"
           cp "$RUNNER_TEMP/sweeps.txt" sweeps_report.txt
 
+      - name: Gamma map history for TradingView
+        run: python tools/pine_maps.py --out pine_maps.json --days 15
+
       - name: Commit the report
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898729+github-actions[bot]@users.noreply.github.com"
-          git add sweeps_report.json sweeps_trades.json sweeps_report.txt
+          git add sweeps_report.json sweeps_trades.json sweeps_report.txt pine_maps.json
           if git diff --cached --quiet; then echo "no change"; exit 0; fi
           git commit -m "sweeps: backtest $(date -u +%F)"
           git pull --rebase --quiet origin "${GITHUB_REF_NAME}"
