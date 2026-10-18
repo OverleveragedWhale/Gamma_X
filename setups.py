@@ -379,6 +379,7 @@ def step_window(win, ws, history, payload, calib, insts, now):
         history = record_session(history, session, maps, now, win)
 
     return ({"name": win, "label": spec["label"], "session": session,
+             "pine": window_pine(session, maps) if session else "",
              "session_over": session_over, "map_from": spec["map_from"],
              "map_to": spec["map_to"], "end": spec["end"],
              "symbols": symbols, "notes": notes, "maps": maps}, history)
@@ -473,8 +474,20 @@ def london_backtest():
             "trades": sorted(rows, key=lambda r: (r["date"], r["symbol"], r["time"]))}
 
 
+def window_pine(session, maps):
+    """A Day or Evening map in the same string format as london_pine()."""
+    conv = {}
+    for name, m in (maps or {}).items():
+        walls = m.get("walls") or []
+        conv[name] = {"frozen_at": m.get("frozen_at"), "regime": m.get("regime"),
+                      "flip": m.get("flip"),
+                      "call": [w["level"] for w in walls if w["side"] == "call"],
+                      "put": [w["level"] for w in walls if w["side"] == "put"]}
+    return london_pine(session, conv)
+
+
 def london_pine(session, maps):
-    """The London map as the string pine/gx_london_sweep.pine reads:
+    """A gamma map as the string pine/gx_session_sweeps.pine reads:
     SYM:DATE=..,AT=hhmm,REG=..,FLIP=..,CW=a/b,PW=a/b;SYM:..."""
     out = []
     for name, m in sorted((maps or {}).items()):
@@ -766,6 +779,14 @@ function daySweeps(d, s){
     + `<div class="scroll"><table><thead><tr><th>Level</th><th>Trade</th><th class="num">Price</th><th class="num">From last</th><th>Gamma confluence</th></tr></thead><tbody>${lv}</tbody></table></div>`;
 }
 
+function pineBox(str, what){
+  if(!str) return "";
+  return `<div class="panel"><div class="k">TradingView · GX Session Sweeps → Gamma map string (${esc(what)})</div>`
+    + `<code class="pine" onclick="getSelection().selectAllChildren(this)" style="display:block;overflow-x:auto;white-space:nowrap;`
+    + `background:var(--raised);border:1px solid var(--line);border-radius:4px;padding:8px">${esc(str)}</code>`
+    + `<div class="sub">Tap to select, then paste into the indicator's settings. One string covers ES and NQ.</div></div>`;
+}
+
 function renderLondon(d){
   const L = d.london || {};
   let html = windowTabs(d, "london");
@@ -777,10 +798,7 @@ function renderLondon(d){
     + (L.session ? "" : `<div class="empty">No session yet. The first runs on the next trading day from 03:00 ET.</div>`)
     + `</div>`;
   for(const n of (L.notes||[])) html += `<div class="sub">${esc(n)}</div>`;
-  if(L.pine) html += `<div class="panel"><div class="k">TradingView: paste into GX London Sweep → Gamma map string</div>`
-    + `<code class="pine" onclick="getSelection().selectAllChildren(this)" style="display:block;overflow-x:auto;white-space:nowrap;`
-    + `background:var(--raised);border:1px solid var(--line);border-radius:4px;padding:8px">${esc(L.pine)}</code>`
-    + `<div class="sub">Tap to select. One string covers ES and NQ; the indicator picks its own symbol.</div></div>`;
+  html += pineBox(L.pine, "00:00 map, for the London open");
   for(const s of (L.symbols||[])){
     const m = s.map||{}, b = s.board||{};
     const lv = (b.levels||[]).map(l=>`<tr><td>${esc(l.name)}</td><td class="side-${l.kind==="high"?"p":"c"}">${l.kind==="high"?"short a sweep above":"long a sweep below"}</td>`
@@ -849,6 +867,7 @@ function renderSetups(d, win){
       + `<div class="k">Session map: each rule's ${evening?"evening ":""}history in each gamma regime</div>` + mapTable(m) + `</div>`;
   }
   for(const n of (w.notes||[])) html += `<div class="sub">${esc(n)}</div>`;
+  html += pineBox(w.pine, evening ? "evening map, for the Asia open" : "09:50 map, for the New York session");
   const c = d.calibration||{};
   const rec = (d.record||[]).filter(r=>(r.window||"day")===w.name);
   html += `<div class="panel"><div class="phead"><span class="sym" style="font-size:16px">Forward test, ${esc(w.label.toLowerCase())}</span>`
