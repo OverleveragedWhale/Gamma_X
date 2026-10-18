@@ -473,6 +473,23 @@ def london_backtest():
             "trades": sorted(rows, key=lambda r: (r["date"], r["symbol"], r["time"]))}
 
 
+def london_pine(session, maps):
+    """The London map as the string pine/gx_london_sweep.pine reads:
+    SYM:DATE=..,AT=hhmm,REG=..,FLIP=..,CW=a/b,PW=a/b;SYM:..."""
+    out = []
+    for name, m in sorted((maps or {}).items()):
+        kv = [f"DATE={session}", f"AT={(m.get('frozen_at') or '').replace(':', '')}"]
+        if m.get("regime"):
+            kv.append(f"REG={m['regime']}")
+        if m.get("flip"):
+            kv.append(f"FLIP={float(m['flip']):.2f}")
+        for k, side in (("CW", "call"), ("PW", "put")):
+            if m.get(side):
+                kv.append(k + "=" + "/".join(f"{float(x):.2f}" for x in m[side]))
+        out.append(f"{name}:" + ",".join(kv))
+    return ";".join(out)
+
+
 def step_london(ls, history, payload, now):
     """Advance the London sweep session by one run. Returns (london, history)."""
     today = now.date().isoformat()
@@ -503,6 +520,7 @@ def step_london(ls, history, payload, now):
             ls["over"] = True
     return ({"session": ls.get("session"), "over": ls.get("over", False),
              "maps": ls.get("maps") or {}, "symbols": boards, "notes": notes,
+             "pine": london_pine(ls.get("session"), ls.get("maps")),
              "label": LONDON["label"], "first": LONDON["first"],
              "last": LONDON["last"], "end": LONDON["end"],
              "map_by": LONDON["map_by"]}, history)
@@ -759,6 +777,10 @@ function renderLondon(d){
     + (L.session ? "" : `<div class="empty">No session yet. The first runs on the next trading day from 03:00 ET.</div>`)
     + `</div>`;
   for(const n of (L.notes||[])) html += `<div class="sub">${esc(n)}</div>`;
+  if(L.pine) html += `<div class="panel"><div class="k">TradingView: paste into GX London Sweep → Gamma map string</div>`
+    + `<code class="pine" onclick="getSelection().selectAllChildren(this)" style="display:block;overflow-x:auto;white-space:nowrap;`
+    + `background:var(--raised);border:1px solid var(--line);border-radius:4px;padding:8px">${esc(L.pine)}</code>`
+    + `<div class="sub">Tap to select. One string covers ES and NQ; the indicator picks its own symbol.</div></div>`;
   for(const s of (L.symbols||[])){
     const m = s.map||{}, b = s.board||{};
     const lv = (b.levels||[]).map(l=>`<tr><td>${esc(l.name)}</td><td class="side-${l.kind==="high"?"p":"c"}">${l.kind==="high"?"short a sweep above":"long a sweep below"}</td>`

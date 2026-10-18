@@ -1,0 +1,326 @@
+//@version=6
+// Gamma/X London Sweep - the setups page's London rule, drawn on the chart.
+//
+// Rule (tools/sweeps.py, variant "london"), on 5-minute bars, ET:
+//   Asia range   high/low from 18:00 to 03:00
+//   window       a sweep must START 03:00-08:00
+//   sweep        a bar trades at least one tick beyond the Asia high or low
+//   reclaim      that bar or one of the next two CLOSES back inside
+//   entry        at that close: short a swept high, long a swept low
+//   stop         one tick past the sweep's extreme; at least 2 ES / 8 NQ,
+//                and a sweep needing more than 5 ES / 30 NQ is skipped
+//   breakeven    stop to entry from the bar after the trade is +1R
+//   target       10 ES / 40 NQ
+//   limits       each level once, one trade at a time, two a day, flat 09:30
+// A bar that touches stop and target counts as the stop, as in the backtest.
+//
+// Gamma levels: paste the "TradingView" string from the setups page's London
+// tab. Only that session's map is real; on earlier days the lines are context.
+indicator("Gamma/X London Sweep", shorttitle = "GX Sweep", overlay = true,
+          max_lines_count = 500, max_labels_count = 500)
+
+// ------------------------------------------------------------------ inputs
+gexStr    = input.text_area("", "Gamma map string (setups page, London tab)", group = "Gamma")
+showGex   = input.bool(true, "Draw gamma levels", group = "Gamma")
+tz        = input.string("America/New_York", "Exchange time zone", group = "Rules")
+useBE     = input.bool(true, "Breakeven at +1R", group = "Rules")
+maxTrades = input.int(2, "Max trades a day", minval = 1, maxval = 5, group = "Rules")
+showRange = input.bool(true, "Draw the Asia range", group = "Display")
+showTable = input.bool(true, "Results table", group = "Display")
+doAlerts  = input.bool(true, "Alerts on entry and exit", group = "Display")
+
+// ----------------------------------------------------- symbol parameters
+isNQ    = str.contains(syminfo.root, "NQ")
+symKey  = isNQ ? "NQ" : "ES"
+tgtPts  = isNQ ? 40.0 : 10.0
+minStop = isNQ ? 8.0 : 2.0
+maxStop = isNQ ? 30.0 : 5.0
+gexTol  = isNQ ? 20.0 : 5.0
+tick    = syminfo.mintick
+
+// ------------------------------------------------------------------ clock
+hhmm     = hour(time, tz) * 100 + minute(time, tz)
+prevHhmm = nz(hhmm[1], hhmm)
+newAsia  = hhmm >= 1800 and prevHhmm < 1800
+inAsia   = hhmm >= 1800 or hhmm < 300
+openWin  = hhmm >= 300 and prevHhmm < 300
+inWin    = hhmm >= 300 and hhmm < 800
+flatNow  = hhmm >= 930 and prevHhmm < 930
+inSess   = hhmm >= 300 and hhmm < 930
+today    = str.format_time(time, "yyyy-MM-dd", tz)
+
+// ------------------------------------------------------------- gamma map
+var cw = array.new_float()
+var pw = array.new_float()
+var float flip = na
+var string reg = ""
+var string mapAt = ""
+var string mapDate = ""
+if barstate.isfirst and str.length(gexStr) > 0
+    s = str.replace_all(str.replace_all(str.replace_all(gexStr, " ", ""), "\n", ""), "\r", "")
+    for blk in str.split(s, ";")
+        parts = str.split(blk, ":")
+        if array.size(parts) == 2 and array.get(parts, 0) == symKey
+            for kv in str.split(array.get(parts, 1), ",")
+                p = str.split(kv, "=")
+                if array.size(p) == 2
+                    k = array.get(p, 0)
+                    v = array.get(p, 1)
+                    if k == "FLIP"
+                        flip := str.tonumber(v)
+                    else if k == "REG"
+                        reg := v
+                    else if k == "AT"
+                        mapAt := v
+                    else if k == "DATE"
+                        mapDate := v
+                    else if k == "CW"
+                        for x in str.split(v, "/")
+                            n = str.tonumber(x)
+                            if not na(n)
+                                array.push(cw, n)
+                    else if k == "PW"
+                        for x in str.split(v, "/")
+                            n = str.tonumber(x)
+                            if not na(n)
+                                array.push(pw, n)
+
+// Nearest gamma level to a price: [name, level, distance]
+nearestGex(float px) =>
+    string nm = ""
+    float lv = na
+    float dist = na
+    for x in cw
+        if na(dist) or math.abs(x - px) < dist
+            dist := math.abs(x - px)
+            lv := x
+            nm := "CW"
+    for x in pw
+        if na(dist) or math.abs(x - px) < dist
+            dist := math.abs(x - px)
+            lv := x
+            nm := "PW"
+    if not na(flip) and (na(dist) or math.abs(flip - px) < dist)
+        dist := math.abs(flip - px)
+        lv := flip
+        nm := "FLIP"
+    [nm, lv, dist]
+
+// ---------------------------------------------------------- Asia range
+var float aHi = na
+var float aLo = na
+var int aStart = na
+var float AH = na
+var float AL = na
+var line hLine = na
+var line lLine = na
+
+if newAsia
+    aHi := high
+    aLo := low
+    aStart := bar_index
+else if inAsia and not na(aHi)
+    aHi := math.max(aHi, high)
+    aLo := math.min(aLo, low)
+
+// ------------------------------------------------------------ day state
+var bool hDone = true
+var bool lDone = true
+var int hSweep = na
+var int lSweep = na
+var float hExt = na
+var float lExt = na
+var int nToday = 0
+
+if openWin and not na(aHi)
+    AH := aHi
+    AL := aLo
+    hDone := false
+    lDone := false
+    hSweep := na
+    lSweep := na
+    nToday := 0
+    if showRange
+        hLine := line.new(aStart, AH, bar_index, AH, color = color.new(color.orange, 0), width = 2)
+        lLine := line.new(aStart, AL, bar_index, AL, color = color.new(color.orange, 0), width = 2)
+        label.new(aStart, AH, "Asia H " + str.tostring(AH, format.mintick), style = label.style_label_down,
+                  color = color.new(color.orange, 80), textcolor = color.orange, size = size.tiny)
+        label.new(aStart, AL, "Asia L " + str.tostring(AL, format.mintick), style = label.style_label_up,
+                  color = color.new(color.orange, 80), textcolor = color.orange, size = size.tiny)
+
+if inSess and showRange and not na(hLine)
+    line.set_x2(hLine, bar_index)
+    line.set_x2(lLine, bar_index)
+
+// ---------------------------------------------------------- trade state
+var int dir = 0
+var float ePx = na
+var float sPx = na
+var float tPx = na
+var float risk = na
+var bool armed = false
+var int eBar = na
+var line eLine = na
+var line sLine = na
+var line tLine = na
+
+// results across the chart's history
+var int nWon = 0
+var int nLost = 0
+var int nBE = 0
+var int nTime = 0
+var float sumPts = 0.0
+var float peakPts = 0.0
+var float ddPts = 0.0
+
+// 1) Manage an open trade first: a level reclaimed on the bar a trade exits
+//    may still be taken, as in the backtest. (Pine functions cannot reassign
+//    globals, so exits and entries are written out in the main scope.)
+float exitPts = na
+string exitHow = ""
+if dir != 0 and bar_index > eBar
+    if flatNow
+        exitPts := (close[1] - ePx) * dir
+        exitHow := "time"
+    else
+        a = dir > 0 ? ePx - low : high - ePx
+        f = dir > 0 ? high - ePx : ePx - low
+        if a >= (armed ? 0.0 : risk)
+            exitPts := armed ? 0.0 : -risk
+            exitHow := armed ? "breakeven" : "lost"
+        else if f >= tgtPts
+            exitPts := tgtPts
+            exitHow := "won"
+        else
+            if useBE and not armed and f >= risk
+                armed := true
+                line.set_y1(sLine, ePx)
+                line.set_y2(sLine, ePx)
+            line.set_x2(eLine, bar_index)
+            line.set_x2(sLine, bar_index)
+            line.set_x2(tLine, bar_index)
+
+if exitHow != ""
+    sumPts += exitPts
+    peakPts := math.max(peakPts, sumPts)
+    ddPts := math.min(ddPts, sumPts - peakPts)
+    if exitHow == "won"
+        nWon += 1
+    else if exitHow == "lost"
+        nLost += 1
+    else if exitHow == "breakeven"
+        nBE += 1
+    else
+        nTime += 1
+    usdX = exitPts * syminfo.pointvalue
+    colX = exitPts > 0 ? color.teal : exitPts < 0 ? color.red : color.gray
+    label.new(bar_index, dir > 0 ? high : low, exitHow + " " + (exitPts >= 0 ? "+" : "") + str.tostring(exitPts, "#.##")
+              + " pts / " + (usdX >= 0 ? "+$" : "-$") + str.tostring(math.abs(usdX), "#,###"),
+              style = dir > 0 ? label.style_label_down : label.style_label_up,
+              color = color.new(colX, 20), textcolor = color.white, size = size.small)
+    line.set_x2(eLine, bar_index)
+    line.set_x2(sLine, bar_index)
+    line.set_x2(tLine, bar_index)
+    if doAlerts
+        alert(symKey + " London sweep " + exitHow + ": " + str.tostring(exitPts, "#.##") + " pts", alert.freq_once_per_bar_close)
+    dir := 0
+
+// 2) Sweep and reclaim: each Asia level gets one chance a session.
+int sigDir = 0
+float sigLvl = na
+float sigExt = na
+string sigName = ""
+if not na(AH) and inSess
+    if not hDone and na(hSweep) and inWin and high >= AH + tick
+        hSweep := bar_index
+        hExt := high
+        hDone := true
+    if not na(hSweep)
+        hExt := math.max(hExt, high)
+        if close < AH
+            sigDir := -1
+            sigLvl := AH
+            sigExt := hExt
+            sigName := "Asia high"
+            hSweep := na
+        else if bar_index - hSweep >= 2
+            hSweep := na                // held beyond: broken, not swept
+    if not lDone and na(lSweep) and inWin and low <= AL - tick
+        lSweep := bar_index
+        lExt := low
+        lDone := true
+    if not na(lSweep)
+        lExt := math.min(lExt, low)
+        if close > AL
+            if sigDir == 0
+                sigDir := 1
+                sigLvl := AL
+                sigExt := lExt
+                sigName := "Asia low"
+            lSweep := na
+        else if bar_index - lSweep >= 2
+            lSweep := na
+
+// 3) Enter on a reclaim if flat, under the day's limit, and the stop fits.
+if sigDir != 0 and dir == 0 and nToday < maxTrades and hhmm < 925
+    r = math.max(sigDir < 0 ? sigExt + tick - close : close - (sigExt - tick), minStop)
+    if r <= maxStop
+        dir := sigDir
+        ePx := close
+        risk := r
+        sPx := close - sigDir * r
+        tPx := close + sigDir * tgtPts
+        armed := false
+        eBar := bar_index
+        nToday += 1
+        eLine := line.new(bar_index, ePx, bar_index + 1, ePx, color = color.white, width = 1)
+        sLine := line.new(bar_index, sPx, bar_index + 1, sPx, color = color.red, width = 1, style = line.style_dashed)
+        tLine := line.new(bar_index, tPx, bar_index + 1, tPx, color = color.teal, width = 1, style = line.style_dashed)
+        [gn, gl, gd] = nearestGex(sigLvl)
+        bool conf = today == mapDate and not na(gd) and gd <= gexTol
+        txt = (sigDir < 0 ? "SHORT " : "LONG ") + sigName + " sweep\nstop " + str.tostring(r, "#.##")
+              + " · tgt " + str.tostring(tgtPts, "#") + (conf ? "\nat " + gn + " " + str.tostring(gl, format.mintick) : "")
+        label.new(bar_index, sigDir < 0 ? high : low, txt, style = sigDir < 0 ? label.style_label_down : label.style_label_up,
+                  color = color.new(sigDir < 0 ? color.red : color.teal, 10), textcolor = color.white, size = size.small)
+        if doAlerts
+            alert(symKey + " London sweep " + (sigDir < 0 ? "SHORT" : "LONG") + " at " + str.tostring(close, format.mintick)
+                  + ", stop " + str.tostring(sPx, format.mintick) + ", target " + str.tostring(tPx, format.mintick),
+                  alert.freq_once_per_bar_close)
+
+// ---------------------------------------------------------- gamma lines
+var bool drawn = false
+if barstate.islast and showGex and not drawn
+    drawn := true
+    for x in cw
+        line.new(bar_index - 1, x, bar_index, x, extend = extend.both, color = color.new(color.green, 30), width = 1)
+        label.new(bar_index + 3, x, "CW " + str.tostring(x, format.mintick), style = label.style_label_left,
+                  color = color.new(color.green, 70), textcolor = color.green, size = size.tiny)
+    for x in pw
+        line.new(bar_index - 1, x, bar_index, x, extend = extend.both, color = color.new(color.red, 30), width = 1)
+        label.new(bar_index + 3, x, "PW " + str.tostring(x, format.mintick), style = label.style_label_left,
+                  color = color.new(color.red, 70), textcolor = color.red, size = size.tiny)
+    if not na(flip)
+        line.new(bar_index - 1, flip, bar_index, flip, extend = extend.both, color = color.new(color.yellow, 20),
+                 width = 1, style = line.style_dashed)
+        label.new(bar_index + 3, flip, "FLIP " + str.tostring(flip, format.mintick) + (reg != "" ? " · " + reg + " gamma" : ""),
+                  style = label.style_label_left, color = color.new(color.yellow, 70), textcolor = color.yellow, size = size.tiny)
+
+// ------------------------------------------------------------- table
+var table tb = table.new(position.top_right, 2, 7, bgcolor = color.new(color.black, 30), border_width = 1)
+if barstate.islast and showTable
+    n = nWon + nLost + nBE + nTime
+    usd = sumPts * syminfo.pointvalue
+    table.cell(tb, 0, 0, "GX London sweep · " + symKey, text_color = color.orange, text_size = size.small)
+    table.cell(tb, 1, 0, timeframe.period == "5" ? "5m ✓" : "use 5m!", text_color = timeframe.period == "5" ? color.gray : color.red, text_size = size.small)
+    table.cell(tb, 0, 1, "Trades on chart", text_color = color.gray, text_size = size.small)
+    table.cell(tb, 1, 1, str.tostring(n), text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 2, "Won / lost / BE / time", text_color = color.gray, text_size = size.small)
+    table.cell(tb, 1, 2, str.format("{0} / {1} / {2} / {3}", nWon, nLost, nBE, nTime), text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 3, "Total, 1 lot", text_color = color.gray, text_size = size.small)
+    table.cell(tb, 1, 3, (usd >= 0 ? "+$" : "-$") + str.tostring(math.abs(usd), "#,###"), text_color = usd >= 0 ? color.teal : color.red, text_size = size.small)
+    table.cell(tb, 0, 4, "Max drawdown", text_color = color.gray, text_size = size.small)
+    table.cell(tb, 1, 4, "-$" + str.tostring(math.abs(ddPts * syminfo.pointvalue), "#,###"), text_color = color.red, text_size = size.small)
+    table.cell(tb, 0, 5, "Asia range today", text_color = color.gray, text_size = size.small)
+    table.cell(tb, 1, 5, na(AH) ? "—" : str.tostring(AL, format.mintick) + " – " + str.tostring(AH, format.mintick), text_color = color.orange, text_size = size.small)
+    table.cell(tb, 0, 6, "Gamma map", text_color = color.gray, text_size = size.small)
+    table.cell(tb, 1, 6, mapDate == "" ? "none pasted" : mapDate + " " + mapAt + (reg != "" ? " · " + reg : ""), text_color = color.white, text_size = size.small)
