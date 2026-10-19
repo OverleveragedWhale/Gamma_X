@@ -74,6 +74,7 @@ than a round number someone liked.
 import argparse
 import csv
 import json
+import os
 import subprocess
 import sys
 from collections import defaultdict
@@ -313,6 +314,14 @@ def bars(sym):
     """
     if sym in _BARS:
         return _BARS[sym]
+    # In CI with GX_BARS=massive and a key: the contract's own bars from
+    # Massive (tools/bars.py), so sessions older than Yahoo's 60 days keep
+    # scoring. The live pages never set GX_BARS and stay on Yahoo.
+    if os.environ.get("GX_BARS") == "massive":
+        import bars as massive
+        if massive.enabled():
+            _BARS[sym] = massive.contract_bars(sym, int(os.environ.get("BARS_DAYS", "400")))
+            return _BARS[sym]
     result = json.loads(g.http_get(BARS_URL.format(sym=sym)))["chart"]["result"][0]
     stamps = result["timestamp"]
     q = result["indicators"]["quote"][0]

@@ -18,6 +18,7 @@ Continuous front month, ~60 days of 5-minute bars. Halves are by date.
 """
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -36,6 +37,15 @@ TICK = 0.25
 
 
 def load(series):
+    """5-minute bars, ET. Massive's stitched front month over BACKTEST_YEARS
+    (default 2) when GX_BARS=massive and a key is set (tools/bars.py);
+    otherwise Yahoo's continuous series, about 60 days."""
+    import bars as massive
+    if os.environ.get("GX_BARS") == "massive" and massive.enabled():
+        from datetime import date
+        yrs = float(os.environ.get("BACKTEST_YEARS", "2") or 2)
+        return massive.continuous(series.split("=")[0][:2],
+                                  date.today() - timedelta(days=int(yrs * 365)))
     res = json.loads(g.http_get(URL.format(sym=series)))["chart"]["result"][0]
     q = res["indicators"]["quote"][0]
     off = (res.get("meta") or {}).get("gmtoffset") or 0
@@ -53,8 +63,22 @@ def at(d, hhmm):
     return datetime.combine(d, datetime.strptime(hhmm, "%H:%M").time())
 
 
+_IDX = {}
+
+
+def window(bars, a, b):
+    """Bars with a <= time < b, by binary search (years of bars make a scan
+    per session too slow)."""
+    import bisect
+    key = id(bars)
+    if key not in _IDX or _IDX[key][0] is not bars:
+        _IDX[key] = (bars, [r[0] for r in bars])
+    ts = _IDX[key][1]
+    return bars[bisect.bisect_left(ts, a):bisect.bisect_left(ts, b)]
+
+
 def hl(bars, a, b):
-    xs = [r for r in bars if a <= r[0] < b]
+    xs = window(bars, a, b)
     return (max(r[1] for r in xs), min(r[2] for r in xs)) if xs else (None, None)
 
 
@@ -104,7 +128,7 @@ def instances(bars, hours=1, all_levels=False):
 
 
 def run_session(bars, start, levels, trig_end, flat, sym):
-    rows = [r for r in bars if start <= r[0] < flat]
+    rows = window(bars, start, flat)
     if len(rows) < 6:
         return []
     out, busy_until, done = [], -1, set()

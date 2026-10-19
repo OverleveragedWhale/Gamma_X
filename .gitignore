@@ -7,3 +7,5 @@ _site/
 # liquidation-band paste is local work. The terminal emits the paste; what
 # draws it lives outside version control here.
 tools/VARIS_Zones.pine
+# licensed market data - never committed (tools/bars.py)
+.bars_cache/

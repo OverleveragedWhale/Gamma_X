@@ -1,0 +1,72 @@
+name: Long backtest (Massive)
+
+# The price-only sweep rules over years of 5-minute futures bars from Massive
+# (tools/bars.py), not Yahoo's ~60 days. Needs the MASSIVE_API_KEY repository
+# secret (Settings -> Secrets and variables -> Actions). The free plan covers
+# 2 years; Developer 5; Advanced everything since 2017-04.
+#
+# Writes backtests/killzones.md and backtests/session_sweeps.md. The bars stay
+# in the runner's cache, never in the repository.
+
+on:
+  workflow_dispatch:
+    inputs:
+      years:
+        description: "Years of history (free plan: up to 2)"
+        default: "2"
+  schedule:
+    - cron: "10 15 * * 6"        # Saturday, after the other refreshes
+
+permissions:
+  contents: write
+
+concurrency:
+  group: long-backtest
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GX_BARS: massive
+      MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+      BACKTEST_YEARS: ${{ github.event.inputs.years || '2' }}
+      MASSIVE_MIN_INTERVAL: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check the key
+        run: |
+          if [ -z "$MASSIVE_API_KEY" ]; then
+            echo "::error::Add the MASSIVE_API_KEY repository secret first"; exit 1
+          fi
+      - uses: actions/cache@v4
+        with:
+          path: .bars_cache
+          key: bars-${{ github.run_id }}
+          restore-keys: bars-
+      - name: Fetch the published history (gamma maps)
+        run: git fetch --no-tags origin +refs/heads/snapshot:refs/remotes/origin/snapshot
+      - name: Backtests
+        run: |
+          set -euo pipefail
+          mkdir -p backtests
+          python tools/bars.py ES --years "$BACKTEST_YEARS"
+          python tools/bars.py NQ --years "$BACKTEST_YEARS"
+          python tools/killzone_research.py --out backtests/killzones.md
+          python tools/session_sweeps_research.py --out backtests/session_sweeps.md
+          { echo "### Long backtest, $BACKTEST_YEARS years"; cat backtests/killzones.md backtests/session_sweeps.md; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Commit
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898729+github-actions[bot]@users.noreply.github.com"
+          git add backtests/*.md
+          git diff --cached --quiet && exit 0
+          git commit -m "long backtest: $BACKTEST_YEARS years ($(date -u +%F))"
+          git pull --rebase --quiet origin main
+          git push origin HEAD:main

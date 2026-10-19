@@ -46,6 +46,9 @@ jobs:
         run: git fetch --no-tags origin +refs/heads/snapshot:refs/remotes/origin/snapshot
 
       - name: Score the levels
+        env:
+          GX_BARS: massive                       # tools/bars.py; Yahoo if no key
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
         run: |
           set -euo pipefail
           python tools/score_levels.py --book near --top 2 --select nearest \

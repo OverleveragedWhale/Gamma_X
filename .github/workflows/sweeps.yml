@@ -42,6 +42,9 @@ jobs:
         run: git fetch --no-tags origin +refs/heads/snapshot:refs/remotes/origin/snapshot
 
       - name: Backtest the sweeps
+        env:
+          GX_BARS: massive                       # tools/bars.py; Yahoo if no key
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
         run: |
           set -euo pipefail
           python tools/sweeps.py --json sweeps_report.json --trades sweeps_trades.json \
