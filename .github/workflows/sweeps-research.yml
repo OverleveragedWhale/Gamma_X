@@ -1,0 +1,44 @@
+name: Sweep research (temporary)
+
+# Runs tools/sweeps_research.py on the sweeps-research branch only and commits
+# research.md back to it. Not part of the live system.
+
+on:
+  push:
+    branches: [sweeps-research]
+    paths:
+      - tools/sweeps_research.py
+      - tools/gamma_be_research.py
+      - tools/session_sweeps_research.py
+      - tools/gamma_sweep_research.py
+      - tools/killzone_research.py
+      - tools/band_coverage.py
+      - .github/workflows/sweeps-research.yml
+
+permissions:
+  contents: write
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Fetch the published history
+        run: git fetch --no-tags origin +refs/heads/snapshot:refs/remotes/origin/snapshot
+      - name: Research
+        run: |
+          python tools/band_coverage.py --out band_coverage.md
+          cat band_coverage.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Commit
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898729+github-actions[bot]@users.noreply.github.com"
+          git add band_coverage.md
+          git commit -m "research: $(date -u +%F)" || exit 0
+          git pull --rebase --quiet origin sweeps-research
+          git push origin HEAD:sweeps-research

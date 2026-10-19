@@ -118,6 +118,27 @@ LIQ_BASE_SHARE = 0.01                            # (retired 2026-10-19, see belo
 MARGIN_COVERAGE = 0.99
 MARGIN_MPOR_DAYS = 1.0
 LIQ_LEVELS = (("95%", 1.9600), ("99%", 2.5758))  # label -> two-sided normal quantile
+# ...and since 2026-10-19 (later the same day) the bands the TradingView paste
+# carries come from REALIZED volatility, sized so ~95% / ~99% of daily closes
+# land inside them. The margin-implied pair above runs ~5x realized and is now
+# printed beside them as a cross-check only.
+#
+# Filtered historical simulation (ported from the fat-tail-bands branch,
+# 2026-10-14): daily log returns of a long, clean series (the cash index -
+# continuous futures carry roll gaps) are divided by their one-step-ahead EWMA
+# vol forecast; the empirical quantiles of |standardized return| carry the fat
+# tails; today's EWMA forecast scales them back to price. Two-sided:
+#     P(the session closes outside anchor -/+ band) = 1 - confidence
+# Walk-forward coverage is measured by tools/band_coverage.py.
+BAND_LEVELS = (("95%", 0.95), ("99%", 0.99))      # label -> two-sided confidence
+EWMA_LAMBDA = 0.94            # RiskMetrics daily decay
+TAIL_HISTORY_ROWS = 5000      # ~20y of sessions: includes 2008, 2020, 2022
+TAIL_MIN_ROWS = 1000          # fewer and the deep quantile is a guess: fall back
+                              # to normal quantiles on the future's realized vol
+TAIL_WARMUP = 60              # sessions to seed EWMA before residuals count
+TAIL_HISTORY_YEARS = 21
+YAHOO_LONG_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
+                  "{{sym}}?period1={p1}&period2={p2}&interval=1d")
 if any(a[1] >= b[1] for a, b in zip(LIQ_LEVELS, LIQ_LEVELS[1:])):
     raise ValueError("LIQ_LEVELS must ascend in quantile: a wider confidence "
                      "level has to produce a wider band, not a narrower one")
@@ -192,7 +213,7 @@ INSTRUMENTS = [
     # the primary on where spot is simply does not contribute. That keeps a
     # bad second feed from moving levels: the worst case is today's behaviour.
     {"future": "ES",  "chain": "_SPX", "hist": "^GSPC", "index": "^GSPC",
-     "fut": "ES=F",  "multiplier": 50,   "cycle": "quarterly", "exch": ".CME",
+     "fut": "ES=F",  "multiplier": 50,   "tail": "^GSPC", "tick": 0.25,   "cycle": "quarterly", "exch": ".CME",
      "wall_sep": 5.0,  "wall_count": 10,
      "extra": [{"chain": "SPY", "hist": "SPY"}]},
     # QQQ stays primary over NDX: it is the chain the ratio, the carry gate and
@@ -200,13 +221,14 @@ INSTRUMENTS = [
     # margin notional. NDX joins as the bigger-strike, finer-grained half of
     # the same book.
     {"future": "NQ",  "chain": "QQQ",  "hist": "QQQ",   "index": "^NDX",
-     "fut": "NQ=F",  "multiplier": 20,   "cycle": "quarterly", "exch": ".CME",
+     "fut": "NQ=F",  "multiplier": 20,   "tail": "^NDX", "tick": 0.25,   "cycle": "quarterly", "exch": ".CME",
      "wall_sep": 1.0,  "wall_count": 10,
      "extra": [{"chain": "_NDX", "hist": "^NDX"}]},
     # Commodity books ride an ETF chain the same way NQ rides QQQ, but the
     # proxy is looser: see the ratio-noise note in compute_symbol.
     {"future": "GC",  "chain": "GLD",  "hist": "GLD",   "index": "GC=F",
-     "fut": "GC=F",  "multiplier": 100,  "cycle": "gc",        "exch": ".CMX",
+     # GLD, not GC=F: the continuous future's roll gaps would land in the tails
+     "fut": "GC=F",  "multiplier": 100,  "tail": "GLD", "tick": 0.10,  "cycle": "gc",        "exch": ".CMX",
      "wall_sep": 1.0,  "wall_count": 6},
 ]
 
@@ -1563,7 +1585,7 @@ def find_flip(spot, contracts, today, span=0.07, steps=71):
 
 
 # ---------------- history (prior close + chain-scale ratio only) ----------------
-def fetch_rows(sym, max_rows=PRIOR_SESSION_ROWS):
+def fetch_rows(sym, max_rows=PRIOR_SESSION_ROWS, url=YAHOO_URL):
     """Daily OHLC rows (chronological) from the Yahoo chart API.
 
     Bar timestamps are epoch seconds at the exchange's session start, so the
@@ -1572,7 +1594,7 @@ def fetch_rows(sym, max_rows=PRIOR_SESSION_ROWS):
     prior_session pick the wrong bar. A month is requested so a run of
     holidays still leaves PRIOR_SESSION_ROWS usable bars.
     """
-    text = http_get(YAHOO_URL.format(sym=quote(sym)))
+    text = http_get(url.format(sym=quote(sym)))
     try:
         result = json.loads(text)["chart"]["result"][0]
         stamps = result["timestamp"]
@@ -2188,6 +2210,97 @@ def liq_factor(multiplier):
     ticks of $12.50 and $10.00. Do not "correct" it.
     """
     return 100.0 / multiplier
+
+
+_TAIL_CACHE = {}   # (symbol, trade date) -> tail model; history only moves daily
+
+
+def quantile(xs_sorted, p):
+    """Linear-interpolated empirical quantile of an ascending list."""
+    h = (len(xs_sorted) - 1) * p
+    lo = int(math.floor(h))
+    hi = min(lo + 1, len(xs_sorted) - 1)
+    return xs_sorted[lo] + (h - lo) * (xs_sorted[hi] - xs_sorted[lo])
+
+
+def ewma_standardize(closes, lam=EWMA_LAMBDA, warmup=TAIL_WARMUP):
+    """Daily log returns divided by their one-step-ahead EWMA vol.
+
+    Returns (residuals, sigma_next): sigma_next is the forecast for the session
+    after the last close - the one the bands are drawn for. Each residual uses
+    only the variance known BEFORE that return, so there is no look-ahead.
+    """
+    closes = [c for c in closes if c and c > 0]
+    rets = [math.log(b / a) for a, b in zip(closes, closes[1:])]
+    if len(rets) <= warmup + 2:
+        raise ValueError(f"only {len(rets)} returns, need > {warmup + 2}")
+    var = sum(r * r for r in rets[:warmup]) / warmup
+    resid = []
+    for r in rets[warmup:]:
+        sd = math.sqrt(var)
+        if sd > 0:
+            resid.append(r / sd)
+        var = lam * var + (1.0 - lam) * r * r
+    return resid, math.sqrt(var)
+
+
+def tail_model(closes):
+    """Two-sided |standardized move| quantiles per BAND_LEVELS, and sigma."""
+    resid, sigma = ewma_standardize(closes[-(TAIL_HISTORY_ROWS + TAIL_WARMUP + 1):])
+    if len(resid) < TAIL_MIN_ROWS:
+        raise ValueError(f"only {len(resid)} residuals, need {TAIL_MIN_ROWS}")
+    srt = sorted(abs(x) for x in resid)
+    return {"sigma": sigma, "n": len(resid), "method": "fhs",
+            "q": {label: quantile(srt, p) for label, p in BAND_LEVELS}}
+
+
+def normal_model(sigma):
+    """Fallback when the long history cannot be had: normal quantiles on the
+    future's own 20-session realized vol."""
+    return {"sigma": sigma, "n": None, "method": "normal",
+            "q": {label: norm_ppf(0.5 + p / 2.0) for label, p in BAND_LEVELS}}
+
+
+def load_tail_model(sym, now):
+    """Tail model on bars settled by the 18:00 ET boundary, cached for the
+    trade date so a day of snapshots fetches the long history once."""
+    key = (sym, futures_trade_date(now).isoformat())
+    if key not in _TAIL_CACHE:
+        p2 = int(time.time()) + 86400
+        p1 = p2 - int(TAIL_HISTORY_YEARS * 365.25 * 86400)
+        rows = fetch_rows(sym, max_rows=TAIL_HISTORY_ROWS + TAIL_WARMUP + 2,
+                          url=YAHOO_LONG_URL.format(p1=p1, p2=p2))
+        rows = settled_futures(rows, now)
+        gaps = sorted((date.fromisoformat(b["date"]) - date.fromisoformat(a["date"])).days
+                      for a, b in zip(rows, rows[1:]))
+        if not gaps or gaps[len(gaps) // 2] > 3:
+            raise ValueError(f"{sym} history is not daily")
+        _TAIL_CACHE.clear()          # one trade date at a time
+        _TAIL_CACHE[key] = dict(tail_model([r["c"] for r in rows]),
+                                source=sym, through=rows[-1]["date"])
+    return _TAIL_CACHE[key]
+
+
+def round_out(px, tick, up):
+    """Round a band edge to the tick, AWAY from the anchor (conservative)."""
+    n = px / tick
+    n = math.ceil(n - 1e-9) if up else math.floor(n + 1e-9)
+    return round(n * tick, 6)
+
+
+def vol_bands(model, anchor, tick):
+    """Two-sided close bands about `anchor`, in log-return space so the band
+    above is a little wider than the one below, as returns compound."""
+    out = []
+    for label, _p in BAND_LEVELS:
+        x = model["q"][label] * model["sigma"]
+        dn, up = anchor * (1 - math.exp(-x)), anchor * (math.exp(x) - 1)
+        out.append({"label": label, "q": round(model["q"][label], 3),
+                    "down": round(dn, 2), "up": round(up, 2),
+                    "points": round(max(dn, up), 2),
+                    "lo": round_out(anchor - dn, tick, False),
+                    "hi": round_out(anchor + up, tick, True)})
+    return out
 
 
 def margin_buffer(inst, idx_close, margins_cfg):
@@ -2904,6 +3017,19 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
     else:
         out["risk"] = {"error": "not enough futures history for a vol estimate"}
 
+    # Realized-vol close bands (BAND_LEVELS): the liquidation bands the page
+    # and the TradingView paste carry. Long-history FHS model, or normal
+    # quantiles on the future's own realized vol when that history fails.
+    vmodel, vnote = None, None
+    try:
+        vmodel = load_tail_model(inst.get("tail") or inst["index"], now)
+    except Exception as exc:
+        logging.warning("%s: tail model unavailable (%s)", future, exc)
+        vnote = f"normal fallback ({exc.__class__.__name__})"
+        if sigma:
+            vmodel = normal_model(sigma)
+    vtick = inst.get("tick", 0.25)
+
     # margin band, in points either side of the future - the axis the walls,
     # flip and spot are already drawn on, so the band is directly comparable
     if margins_cfg is not None and idx_close:
@@ -2929,17 +3055,26 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
                 # without the date a correct hold and a stale feed look alike.
                 "liq_anchor_date": (prior_fut["date"] if prior_fut else None),
                 # anchor,95%,99% - the three numbers the TradingView overlay
-                # wants, in the order its paste field parses them.
+                # wants, in the order its paste field parses them: the
+                # REALIZED-vol close bands about the 16:59 anchor, each the
+                # larger of its down/up distance.
                 "pine": (",".join(
                     [f"{pine_anchor:.2f}"]
-                    + [f"{b['points']:.2f}" for b in mb["liq"]])
-                    if pine_anchor is not None else None),
+                    + [f"{b['points']:.2f}" for b in vol_bands(vmodel, pine_anchor, vtick)])
+                    if (pine_anchor is not None and vmodel) else None),
+                "vol_model": ({"method": vmodel["method"], "note": vnote,
+                               "sigma_pct": round(100 * vmodel["sigma"], 3),
+                               "n": vmodel["n"], "source": vmodel.get("source"),
+                               "through": vmodel.get("through")} if vmodel else None),
+                "vol_bands": (vol_bands(vmodel, prior_fut["c"], vtick)
+                              if (vmodel and prior_fut) else []),
                 # Surfaced because it deliberately differs from liq_anchor: two
                 # numbers that look like the same thing quietly disagreeing is
                 # worse than the difference itself.
                 "pine_anchor": (round(pine_anchor, 2)
                                 if pine_anchor is not None else None),
                 "pine_src": pine_src,
+                # The margin-implied pair (LIQ_LEVELS), kept as a cross-check.
                 "liq": [
                     {"label": b["label"], "z": b["z"], "points": round(b["points"], 2),
                      "lo": (round(prior_fut["c"] - b["points_down"], 2)
@@ -3524,11 +3659,21 @@ function panel(s){
         +`<b style="color:var(--ink)">+${m.points_up}/−${m.points_down} pts</b>`
         +` → band ${m.band_lo}–${m.band_hi}`
         +` · set ${m.set_at}</span></div>`;
-    if((m.liq||[]).length&&m.liq[0].points!==undefined){
-      marg+=`<div class="mrow"><span>liquidation, off the `
+    if((m.vol_bands||[]).length){
+      const vm=m.vol_model||{};
+      marg+=`<div class="mrow"><span>liquidation bands (daily close inside ~95% / ~99% of sessions), off the `
           +`${m.liq_anchor_date?m.liq_anchor_date+" ":""}${m.liq_anchor} close: `
-          +m.liq.map(b=>`<b style="color:var(--jade)">${b.label} ±${b.points}</b>`
+          +m.vol_bands.map(b=>`<b style="color:var(--jade)">${b.label} −${b.down}/+${b.up}</b>`
                        +` (${b.lo}–${b.hi})`).join(" · ")
+          +`</span></div>`
+          +`<div class="mrow"><span style="opacity:.8">EWMA σ <b style="color:var(--ink)">${vm.sigma_pct}%/day</b>`
+          +(vm.method==="fhs"?` × fat-tail quantiles ${m.vol_bands.map(b=>b.q).join(" / ")} from ${vm.n} sessions of ${vm.source} through ${vm.through}`
+                             :` × normal quantiles (${vm.note||"no long history"})`)
+          +`</span></div>`;
+    }
+    if((m.liq||[]).length&&m.liq[0].points!==undefined){
+      marg+=`<div class="mrow"><span style="opacity:.75">margin-implied, for reference: `
+          +m.liq.map(b=>`${b.label} ±${b.points}`).join(" · ")
           +`</span></div>`
           +`<div class="mrow"><span style="opacity:.8">margin-implied σ <b style="color:var(--ink)">${m.sigma_points} pts`
           +`${m.sigma_pct!=null?` (${m.sigma_pct}%/day)`:""}</b> = margin pts ÷ (${m.z_cover} × √${m.mpor_days}d), `
