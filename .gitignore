@@ -9,3 +9,4 @@ _site/
 tools/VARIS_Zones.pine
 # licensed market data - never committed (tools/bars.py)
 .bars_cache/
+massive.key

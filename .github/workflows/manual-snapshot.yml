@@ -40,6 +40,9 @@ jobs:
 
       - name: Generate and publish snapshot
         id: publish
+        env:
+          GX_CHAINS: massive                   # Massive chains when the secret exists, else Cboe
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"

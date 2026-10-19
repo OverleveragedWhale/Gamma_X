@@ -54,6 +54,15 @@ unreliable second writer rather than a useful backup.
    machine is on Pacific, every snapshot fires three hours out and the symptom
    looks like a broken schedule rather than a wrong clock.
 
+**Optional: Massive option chains.** The terminal reads Cboe's free delayed
+chains. With a Massive Options plan (Starter or better) it can read Massive's
+chain snapshot instead - real greeks for NDX as well as SPX, plus delta, vega
+and theta on every panel. Put the API key in a file named `massive.key` beside
+`gex_terminal.py` (gitignored - never commit it) and set the environment
+variable `GX_CHAINS=massive` for the scheduled task's user
+(`setx GX_CHAINS massive`). Any Massive failure falls back to Cboe for that
+chain; the panel's "chains:" tag says which source each run used.
+
 `tzdata` is installed for you. It is **required**, not optional: Windows ships
 no IANA timezone database, and without it `gex_terminal.py` silently falls back
 to the PC clock and assumes it is already Eastern.

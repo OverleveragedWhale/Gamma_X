@@ -26,6 +26,7 @@ import configparser
 import http.client
 import http.cookiejar
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
@@ -543,11 +544,95 @@ def http_get(url, timeout=None):
             time.sleep(HTTP_RETRY_PAUSE)
 
 
-# ---------------- Cboe chain + GEX ----------------
+# ---------------- option chains: Cboe, or Massive when configured ----------------
+# Massive (ex-Polygon) Options API, chain snapshot:
+#   GET https://api.massive.com/v3/snapshot/options/{underlying}?limit=250
+#       &expiration_date.lte=YYYY-MM-DD&apiKey=KEY   (follow next_url)
+# Each result: details{ticker "O:SPXW261016C07800000", strike_price,
+# expiration_date, contract_type}, greeks{delta,gamma,theta,vega},
+# implied_volatility, open_interest, day{volume}, underlying_asset{price|value}.
+# Index underlyings need the I: prefix (I:SPX, I:NDX) or the greeks come back
+# empty. Needs the Options Starter plan or better (Basic has no snapshot).
+# Massive keeps NO historical open interest or greeks: what the terminal
+# archives each day (oi/ on the snapshot branch) is the only history.
+#
+# Turned on by GX_CHAINS=massive plus a key in MASSIVE_API_KEY or in a local
+# massive.key file beside this script (gitignored - this repo is public).
+# Any failure falls back to Cboe for that chain, so a Massive outage costs
+# nothing but the source tag on the page.
+MASSIVE_SNAPSHOT_URL = "https://api.massive.com/v3/snapshot/options/{u}"
+MASSIVE_UNDERLYING = {"_SPX": "I:SPX", "_NDX": "I:NDX", "_RUT": "I:RUT"}
+CHAIN_SRC = {}          # chain symbol -> "massive" / "cboe", for the page
+
+
+def massive_key():
+    k = os.environ.get("MASSIVE_API_KEY", "").strip()
+    if not k:
+        try:
+            k = (BASE_DIR / "massive.key").read_text(encoding="utf-8").strip()
+        except OSError:
+            k = ""
+    return k
+
+
+def massive_chains_on():
+    return os.environ.get("GX_CHAINS", "").strip().lower() == "massive" and bool(massive_key())
+
+
+def _massive_url(url, key):
+    sep = "&" if "?" in url else "?"
+    return url if "apiKey=" in url else f"{url}{sep}apiKey={urllib.parse.quote(key)}"
+
+
+def fetch_chain_massive(sym):
+    """(spot, options) in the Cboe row shape load_contracts() reads, so the
+    rest of the terminal cannot tell the sources apart."""
+    key = massive_key()
+    u = MASSIVE_UNDERLYING.get(sym, sym.lstrip("_"))
+    last = (date.today() + timedelta(days=MAX_DTE + 1)).isoformat()
+    url = (MASSIVE_SNAPSHOT_URL.format(u=urllib.parse.quote(u, safe=":"))
+           + f"?limit=250&expiration_date.lte={last}")
+    rows, spot, pages = [], None, 0
+    while url and pages < 200:
+        d = json.loads(http_get(_massive_url(url, key)))
+        pages += 1
+        for r in d.get("results") or []:
+            det = r.get("details") or {}
+            gk = r.get("greeks") or {}
+            ua = r.get("underlying_asset") or {}
+            px = ua.get("price") or ua.get("value")
+            if px and spot is None:
+                spot = float(px)
+            tk = (det.get("ticker") or "").split(":")[-1]
+            if not tk:
+                continue
+            rows.append({"option": tk,
+                         "open_interest": r.get("open_interest") or 0,
+                         "iv": r.get("implied_volatility") or 0.0,
+                         "gamma": gk.get("gamma") or 0.0,
+                         "delta": gk.get("delta"), "theta": gk.get("theta"),
+                         "vega": gk.get("vega"),
+                         "volume": (r.get("day") or {}).get("volume") or 0})
+        url = d.get("next_url")
+    if not rows or not spot:
+        raise RuntimeError(f"Massive chain {u}: {len(rows)} rows, spot {spot}")
+    if not any(o["gamma"] for o in rows):
+        raise RuntimeError(f"Massive chain {u}: no greeks (plan, or index without I:)")
+    return spot, rows
+
+
 def fetch_chain(sym):
+    if massive_chains_on():
+        try:
+            out = fetch_chain_massive(sym)
+            CHAIN_SRC[sym] = "massive"
+            return out
+        except Exception as exc:
+            logging.warning("Massive chain %s failed (%s), using Cboe", sym, exc)
     payload = json.loads(http_get(CBOE_URL.format(sym=sym)))
     data = payload["data"]
     spot = data.get("current_price") or data.get("close")
+    CHAIN_SRC[sym] = "cboe"
     return float(spot), data.get("options", [])
 
 
@@ -591,6 +676,12 @@ def load_contracts(options, today, m=1.0, src=None, bin_pts=0.0):
             # On 2026-10-01 QQQ traded 84% of its standing book in a session,
             # so a model reading only open interest is reading yesterday.
             vol = int(o.get("volume") or 0)
+            # The other greeks, per share, when the chain has them (Cboe and
+            # Massive both do). None where a row lacks one.
+            dl, vg, th = (o.get("delta"), o.get("vega"), o.get("theta"))
+            dl = float(dl) if dl not in (None, "") else None
+            vg = float(vg) if vg not in (None, "") else None
+            th = float(th) if th not in (None, "") else None
         except (KeyError, ValueError, TypeError):
             continue
         dte = (exp - today).days
@@ -605,6 +696,11 @@ def load_contracts(options, today, m=1.0, src=None, bin_pts=0.0):
                     # open-interest history - has to key on this instead.
                     "k0": strike,
                     "oi": oi, "iv": iv, "gamma": gamma / (m * m), "vol": vol,
+                    # delta is unitless and spot is m-scaled while shares are
+                    # 1/m, so delta * shares * spot keeps the chain's dollars.
+                    # vega and theta are dollars per share already: they are
+                    # multiplied by the REAL contract size, never by shares.
+                    "delta": dl, "vega": vg, "theta": th,
                     "shares": SHARES_PER_CONTRACT / m, "w": 1.0 / m,
                     "src": src})
     return out
@@ -681,6 +777,34 @@ def flow_summary(contracts):
         # means the book on the page is a poor description of the day.
         "turnover": round((cv + pv) / (co + po), 3) if (co + po) else None,
     }
+
+
+def greeks_summary(contracts, spot):
+    """Open-interest-weighted greeks of the standing book, in dollars.
+
+      delta   sum(delta x OI x shares x spot): the book's net dollar delta as
+              held by its owners. Dealers who sold it carry roughly the
+              opposite, the same convention the GEX sign rests on.
+      vega    sum(vega x OI x 100): dollars per 1 vol point.
+      theta   sum(theta x OI x 100): dollars per day of decay.
+    Only rows that carry the greek count; `n` says how many did.
+    """
+    dex = vex = tex = 0.0
+    n = 0
+    for c in contracts:
+        if c.get("delta") is None:
+            continue
+        n += 1
+        dex += c["delta"] * c["oi"] * c["shares"] * spot
+        if c.get("vega") is not None:
+            vex += c["vega"] * c["oi"] * SHARES_PER_CONTRACT
+        if c.get("theta") is not None:
+            tex += c["theta"] * c["oi"] * SHARES_PER_CONTRACT
+    if not n:
+        return None
+    return {"n": n, "delta": dex, "vega": vex, "theta": tex,
+            "delta_str": fmt_dollars(dex), "vega_str": fmt_dollars(vex),
+            "theta_str": fmt_dollars(tex)}
 
 
 def top_walls(per, side, spot, n=None, min_sep=None, ref=None, half=None):
@@ -2585,6 +2709,10 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
                 r["z_str"] = fmt_dollars(r["z"])
 
         out["flow"] = flow_summary(contracts)
+        out["greeks"] = greeks_summary(contracts, spot)
+        out["chain_src"] = sorted({CHAIN_SRC.get(c["chain"], "cboe")
+                                   for c in chains if c.get("options") is not None}) \
+            if isinstance(chains, list) else None
         flow_per = flow_by_strike(contracts, spot)
         for r in out["ladder"]:
             d = flow_per.get(r["strike_pre"])
@@ -3394,6 +3522,14 @@ function panel(s){
          : "")
       +(s.oi_prev_date?`<span class="pre">OI change vs ${s.oi_prev_date}</span>`:"")
       +`</div>`
+      +(s.greeks
+         ? `<div class="flowrow" title="Open-interest-weighted greeks of the book as held by its owners; dealers carry roughly the opposite.">`
+           +`<span>book delta <b>${s.greeks.delta_str}</b></span>`
+           +`<span>vega <b>${s.greeks.vega_str}</b><span class="pre">/vol pt</span></span>`
+           +`<span>theta <b>${s.greeks.theta_str}</b><span class="pre">/day</span></span>`
+           +((s.chain_src||[]).length?`<span class="pre">chains: ${(s.chain_src||[]).join(" + ")}</span>`:"")
+           +`</div>`
+         : "")
     : "";
   const books = s.books||["near","full"];
   const held = s.regimes_from
