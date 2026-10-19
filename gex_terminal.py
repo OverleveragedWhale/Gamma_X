@@ -104,8 +104,20 @@ BAND_DIVISOR = 2.0            # bands reported halved: margin is bi-directional
 # leg is the anchor (LIQ_BASE_SHARE, hand-checked against the margin chain) and
 # other levels scale by the ratio of normal quantiles, the same Z values the
 # realized-vol bands under "risk" use, so the two band families stay comparable.
-LIQ_BASE_SHARE = 0.01                            # share of margin at 99%
-LIQ_LEVELS = (("99%", Z_99), ("99.9%", Z_999))   # label -> normal quantile
+LIQ_BASE_SHARE = 0.01                            # (retired 2026-10-19, see below)
+# Liquidation bands, from 2026-10-19: standard deviations IMPLIED BY THE CME
+# MARGIN. SPAN sets the margin to cover a one-sided adverse move at
+# MARGIN_COVERAGE over the margin period of risk, so
+#     sigma (points/day) = (margin / multiplier) / (z_cover x sqrt(MPOR days))
+# with z_cover the ONE-sided quantile of the coverage (2.326 at 99%). The bands
+# are then two-sided daily confidence intervals around the prior settle:
+#     95% -> 1.960 sigma      99% -> 2.576 sigma
+# Coverage and MPOR can be overridden in config.ini [margins] as COVERAGE and
+# MPOR_DAYS. SPAN also carries stress scenarios and add-ons, so the sigma a
+# margin implies runs well above realized sigma - the panel prints both.
+MARGIN_COVERAGE = 0.99
+MARGIN_MPOR_DAYS = 1.0
+LIQ_LEVELS = (("95%", 1.9600), ("99%", 2.5758))  # label -> two-sided normal quantile
 if any(a[1] >= b[1] for a, b in zip(LIQ_LEVELS, LIQ_LEVELS[1:])):
     raise ValueError("LIQ_LEVELS must ascend in quantile: a wider confidence "
                      "level has to produce a wider band, not a narrower one")
@@ -2179,42 +2191,72 @@ def liq_factor(multiplier):
 
 
 def margin_buffer(inst, idx_close, margins_cfg):
-    """Margin per contract in index points, up and down legs kept apart.
+    """Margin per contract in points, and the liquidation bands it implies.
 
     A futures contract's P&L is points * multiplier, so margin / multiplier is
     exactly how many points the market can move against one contract before the
-    posted margin is gone. Sizing the band off index notional instead measures
-    the move against the cash index and then draws it on a futures axis,
-    stretching the band by the basis.
-
-    `compare` is the requested cross-check, reported beside the band rather
-    than drawn. The two legs are averaged, taken at 1% for the 99%-liquidated
-    level, then converted from ticks to points at TICKS_PER_POINT. The inputs
-    are kept in the payload so the figure can be audited without re-deriving
-    it. Realized sigma is not part of this - it sizes the confidence bands
-    reported separately under "risk", though both families now step between
-    confidence levels on the same normal quantiles.
+    posted margin is gone. SPAN sizes that margin to a one-sided adverse move
+    at MARGIN_COVERAGE (99%) over MARGIN_MPOR_DAYS, which makes it a scaled
+    standard deviation: dividing by z_cover x sqrt(MPOR) recovers the daily
+    sigma the margin implies, and the 95% / 99% bands are 1.96 / 2.576 of it
+    either side of the prior settle (LIQ_LEVELS). Before 2026-10-19 the bands
+    were a flat 12.5% of margin at "99%" (liq_factor, kept for reference).
     """
     fut = inst["future"]
     up = _margin_leg(margins_cfg, fut, "UP")
     down = _margin_leg(margins_cfg, fut, "DOWN")
     mult = inst["multiplier"]
     avg = (up + down) / 2.0
-    tick = liq_factor(mult)
-    # avg -> share at this level -> ticks to points -> liq_factor -> halved,
-    # since the posted margin covers moves in both directions. The share is the
-    # 99% anchor stretched by this level's quantile, so 99% is unchanged and
-    # every wider level comes out wider.
-    liq = []
-    for label, z in LIQ_LEVELS:
-        share = LIQ_BASE_SHARE * z / Z_99
-        liq.append({"label": label, "share": round(share, 6), "z": z,
-                    "points": avg * share / TICKS_PER_POINT * tick / BAND_DIVISOR})
+    cov = float((margins_cfg.get("coverage") if hasattr(margins_cfg, "get") else None)
+                or MARGIN_COVERAGE)
+    mpor = float((margins_cfg.get("mpor_days") if hasattr(margins_cfg, "get") else None)
+                 or MARGIN_MPOR_DAYS)
+    z_cover = norm_ppf(cov)                     # one-sided: 2.326 at 99%
+    scale = z_cover * math.sqrt(mpor)
+    # The margin legs are kept apart: SPAN's up and down scenarios differ, so
+    # the band above the settle is sized off the UP leg and the one below off
+    # the DOWN leg. The single symmetric distance the TradingView paste
+    # carries is their average.
+    sig_up, sig_dn = up / mult / scale, down / mult / scale
+    sig = (sig_up + sig_dn) / 2.0
+    liq = [{"label": label, "z": z,
+            "points": z * sig, "points_up": z * sig_up, "points_down": z * sig_dn}
+           for label, z in LIQ_LEVELS]
     return {"future": fut, "index_close": idx_close,
-            "notional": idx_close * mult, "liq_factor": tick,
+            "notional": idx_close * mult,
             "margin_up": up, "margin_down": down, "margin_avg": avg,
             "points_up": up / mult, "points_down": down / mult,
-            "liq": liq, "compare": avg * 0.01 / TICKS_PER_POINT}
+            "coverage": cov, "mpor_days": mpor, "z_cover": round(z_cover, 4),
+            "sigma_points": sig, "sigma_up": sig_up, "sigma_down": sig_dn,
+            "liq": liq}
+
+
+def norm_ppf(p):
+    """Inverse standard normal CDF (Acklam's rational approximation, |err| <
+    1.2e-9) - enough for a margin coverage level, no scipy needed."""
+    if not 0.0 < p < 1.0:
+        raise ValueError("coverage must be between 0 and 1")
+    a = (-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
+         1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00)
+    b = (-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
+         6.680131188771972e+01, -1.328068155288572e+01)
+    c = (-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+         -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00)
+    d = (7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+         3.754408661907416e+00)
+    lo, hi = 0.02425, 1 - 0.02425
+    if p < lo:
+        q = math.sqrt(-2 * math.log(p))
+        return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / \
+               ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1)
+    if p > hi:
+        q = math.sqrt(-2 * math.log(1 - p))
+        return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / \
+                ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1)
+    q = p - 0.5
+    r = q * q
+    return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / \
+           (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1)
 
 
 # ---------------- assembly ----------------
@@ -2876,14 +2918,17 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
                 "band_hi": round(fut_spot + mb["points_up"], 2),
                 "margin_up": round(mb["margin_up"]),
                 "margin_down": round(mb["margin_down"]),
-                "compare": round(mb["compare"], 2),
-                "compare_avg": round(mb["margin_avg"]),
-                "liq_factor": mb["liq_factor"],
+                "margin_avg": round(mb["margin_avg"]),
+                "coverage": mb["coverage"], "mpor_days": mb["mpor_days"],
+                "z_cover": mb["z_cover"],
+                "sigma_points": round(mb["sigma_points"], 2),
+                "sigma_pct": (round(100 * mb["sigma_points"] / prior_fut["c"], 3)
+                              if prior_fut else None),
                 "liq_anchor": (round(prior_fut["c"], 2) if prior_fut else None),
                 # Printed beside it: the anchor steps once a session, so
                 # without the date a correct hold and a stale feed look alike.
                 "liq_anchor_date": (prior_fut["date"] if prior_fut else None),
-                # anchor,99%,99.9% - the three numbers the TradingView overlay
+                # anchor,95%,99% - the three numbers the TradingView overlay
                 # wants, in the order its paste field parses them.
                 "pine": (",".join(
                     [f"{pine_anchor:.2f}"]
@@ -2896,10 +2941,10 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
                                 if pine_anchor is not None else None),
                 "pine_src": pine_src,
                 "liq": [
-                    {"label": b["label"], "points": round(b["points"], 2),
-                     "lo": (round(prior_fut["c"] - b["points"], 2)
+                    {"label": b["label"], "z": b["z"], "points": round(b["points"], 2),
+                     "lo": (round(prior_fut["c"] - b["points_down"], 2)
                             if prior_fut else None),
-                     "hi": (round(prior_fut["c"] + b["points"], 2)
+                     "hi": (round(prior_fut["c"] + b["points_up"], 2)
                             if prior_fut else None)}
                     for b in mb["liq"]
                 ],
@@ -3003,7 +3048,7 @@ def recompute(previous=None, previous_generated=None):
 
     # One line covering every product, so the overlay is a single copy and a
     # single paste rather than one per chart:
-    #   ES=anchor,99%,99.9%;NQ=...;GC=...
+    #   ES=anchor,95%,99%;NQ=...;GC=...
     #
     # Liquidation bands only, deliberately. The GEX levels are read off the
     # ladder on the page; the chart side that consumes this - and whatever
@@ -3484,10 +3529,11 @@ function panel(s){
           +`${m.liq_anchor_date?m.liq_anchor_date+" ":""}${m.liq_anchor} close: `
           +m.liq.map(b=>`<b style="color:var(--jade)">${b.label} ±${b.points}</b>`
                        +` (${b.lo}–${b.hi})`).join(" · ")
-          +` <span style="opacity:.7">avg ${m.compare_avg} × `
-          +m.liq.map(b=>b.share).join(" / ")
-          +` ÷ 4 × ${m.liq_factor} ÷ 2</span>`
-          +`</span></div>`;
+          +`</span></div>`
+          +`<div class="mrow"><span style="opacity:.8">margin-implied σ <b style="color:var(--ink)">${m.sigma_points} pts`
+          +`${m.sigma_pct!=null?` (${m.sigma_pct}%/day)`:""}</b> = margin pts ÷ (${m.z_cover} × √${m.mpor_days}d), `
+          +`SPAN's ${Math.round((m.coverage||0)*1000)/10}% one-sided coverage; bands = 1.96σ / 2.58σ`
+          +`${rk.sigma_pct!=null?` · realized σ ${rk.sigma_pct}%/day`:""}</span></div>`;
 
     }
   }
