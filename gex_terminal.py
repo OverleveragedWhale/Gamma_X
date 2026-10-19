@@ -118,6 +118,10 @@ LIQ_BASE_SHARE = 0.01                            # (retired 2026-10-19, see belo
 MARGIN_COVERAGE = 0.99
 MARGIN_MPOR_DAYS = 1.0
 LIQ_LEVELS = (("95%", 1.9600), ("99%", 2.5758))  # label -> two-sided normal quantile
+# Micro contracts: same prices, a tenth of the point value. Their margin comes
+# from config.ini [margins] MES_UP / MES_DOWN etc. when set, else a tenth of
+# the full-size margin (flagged as an estimate on the page).
+MICROS = {"ES": ("MES", 5), "NQ": ("MNQ", 2), "GC": ("MGC", 10)}
 # ...and since 2026-10-19 (later the same day) the bands the TradingView paste
 # carries come from REALIZED volatility, sized so ~95% / ~99% of daily closes
 # land inside them. The margin-implied pair above runs ~5x realized and is now
@@ -2344,6 +2348,21 @@ def margin_buffer(inst, idx_close, margins_cfg):
             "liq": liq}
 
 
+def micro_margin(inst, margins_cfg, mb):
+    """The micro contract's symbol, point value and margin legs, or None."""
+    fut = inst["future"]
+    if fut not in MICROS:
+        return None
+    sym, mult = MICROS[fut]
+    try:
+        up, dn, est = _margin_leg(margins_cfg, sym, "UP"), _margin_leg(margins_cfg, sym, "DOWN"), False
+    except KeyError:
+        ratio = mult / inst["multiplier"]
+        up, dn, est = mb["margin_up"] * ratio, mb["margin_down"] * ratio, True
+    return {"symbol": sym, "multiplier": mult, "margin_up": round(up),
+            "margin_down": round(dn), "estimated": est}
+
+
 def norm_ppf(p):
     """Inverse standard normal CDF (Acklam's rational approximation, |err| <
     1.2e-9) - enough for a margin coverage level, no scipy needed."""
@@ -3084,6 +3103,8 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
                     for b in mb["liq"]
                 ],
                 "notional": round(mb["notional"]),
+                "multiplier": inst["multiplier"],
+                "micro": micro_margin(inst, margins_cfg, mb),
                 "set_at": margins_cfg.get("set_at") or "date not recorded",
             }
         except KeyError as exc:
@@ -3424,6 +3445,7 @@ code.pine{background:var(--raised);border:1px solid var(--line);border-radius:4p
     <span>updated <b id="upd">--</b></span>
     <span><span id="cdlab">next refresh</span> <b id="cd">--</b></span>
     <button id="refresh">Refresh now</button>
+    <span id="gxsize"></span>
     <a class="navlink" href="setups.html">Setups &rarr;</a><a class="navlink" href="scorecard.html" style="margin-left:0">Scorecard &rarr;</a>
   </div>
 </header>
@@ -3435,6 +3457,33 @@ code.pine{background:var(--raised);border:1px solid var(--line);border-radius:4p
 const PAGE_BUILD = "__PAGE_BUILD__";
 const REFRESH_SECONDS = __REFRESH_SECONDS__;
 const SNAPSHOT_DATA = __SNAPSHOT_DATA__;
+// Contract size, shared by the dashboard, setups and scorecard (same origin):
+// micros trade at the same prices, so every level is unchanged and only the
+// dollars scale - MES $5, MNQ $2, MGC $10 a point, a tenth of ES/NQ/GC.
+const GX_MICRO = {ES:{sym:"MES",f:0.1}, NQ:{sym:"MNQ",f:0.1}, GC:{sym:"MGC",f:0.1}};
+function gxSize(){ try{ return localStorage.getItem("gx_size")==="micro" ? "micro" : "mini"; }catch(e){ return "mini"; } }
+function gxF(sym){ return gxSize()==="micro" && GX_MICRO[sym] ? GX_MICRO[sym].f : 1; }
+function gxName(sym){ return gxSize()==="micro" && GX_MICRO[sym] ? GX_MICRO[sym].sym : sym; }
+function gxToggleHtml(){
+  const m = gxSize()==="micro";
+  return `<span class="gxsize" style="display:inline-flex;border:1px solid rgba(255,255,255,.15);border-radius:4px;overflow:hidden;font-size:11.5px">`
+    + `<button onclick="gxSet('mini')" style="background:${m?"none":"rgba(217,164,65,.18)"};color:inherit;border:0;padding:5px 9px;cursor:pointer;font:inherit">Mini</button>`
+    + `<button onclick="gxSet('micro')" style="background:${m?"rgba(217,164,65,.18)":"none"};color:inherit;border:0;padding:5px 9px;cursor:pointer;font:inherit">Micro</button></span>`;
+}
+function gxSet(v){ try{ localStorage.setItem("gx_size", v); }catch(e){} if(typeof gxRepaint==="function") gxRepaint(); }
+// Every *_usd number in a payload, scaled for the size; the symbol comes from
+// the nearest "symbol" field or an ES/NQ/GC key above it.
+function gxScale(o, sym){
+  if(Array.isArray(o)) return o.map(x=>gxScale(x, sym));
+  if(!o || typeof o!=="object") return o;
+  const s = o.symbol || sym, out = {};
+  for(const [k,v] of Object.entries(o)){
+    if(typeof v==="number" && /(^|_)usd$|^usd$/.test(k)) out[k] = Math.round(v*gxF(s));
+    else out[k] = gxScale(v, GX_MICRO[k] ? k : s);
+  }
+  return out;
+}
+
 const MAX_PAIN_DAILY_DAYS = __MAX_PAIN_DAILY_DAYS__;
 // A published snapshot has its figures baked in so it renders standalone, and
 // also polls data.json, which the publisher writes beside index.html. That is
@@ -3659,6 +3708,19 @@ function panel(s){
         +`<b style="color:var(--ink)">+${m.points_up}/−${m.points_down} pts</b>`
         +` → band ${m.band_lo}–${m.band_hi}`
         +` · set ${m.set_at}</span></div>`;
+    {
+      // Per contract, for the size picked in the header: same prices, the
+      // dollars scale with the point value.
+      const mic = gxSize()==="micro" && m.micro ? m.micro : null;
+      const pv = mic ? mic.multiplier : m.multiplier;
+      const mu = mic ? mic.margin_up : m.margin_up, md = mic ? mic.margin_down : m.margin_down;
+      const vb = (m.vol_bands||[]);
+      if(pv) marg+=`<div class="mrow"><span>per <b style="color:var(--ink)">${mic?mic.symbol:m.future}</b> contract: `
+        +`<b style="color:var(--ink)">$${pv}</b>/pt · margin $${(mu||0).toLocaleString()} up / $${(md||0).toLocaleString()} down`
+        +(mic&&mic.estimated?` <span style="opacity:.7">(est. ⅒ of ${m.future}; set ${mic.symbol}_UP/_DOWN in config.ini)</span>`:"")
+        +(vb.length?` · ${vb.map(b=>`${b.label} band ≈ $${Math.round(b.points*pv).toLocaleString()}`).join(" · ")}`:"")
+        +`</span></div>`;
+    }
     if((m.vol_bands||[]).length){
       const vm=m.vol_model||{};
       marg+=`<div class="mrow"><span>liquidation bands (daily close inside ~95% / ~99% of sessions), off the `
@@ -3826,8 +3888,10 @@ function checkBuild(d){
   return true;
 }
 
+function gxRepaint(){ load(); }
 async function load(){
   try{
+    const gs=document.getElementById("gxsize"); if(gs) gs.innerHTML=gxToggleHtml();
     const d = await fetchData();
     if(checkBuild(d)) return;
     secs=d.seconds_to_refresh;

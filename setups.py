@@ -705,12 +705,39 @@ tr.dim td{opacity:.55}
 <header>
   <h1>Gamma<span class="g">/</span>Setups<b style="color:var(--brass)">*</b></h1>
   <div class="meta" id="meta"></div>
+  <span id="gxsize"></span>
   <a class="navlink" href="scorecard.html">Scorecard</a><a class="navlink" href="./" style="margin-left:0">Dashboard</a>
 </header>
 <div id="root"></div>
 </div>
 <script>
 const SETUPS_DATA = null;
+// Contract size, shared by the dashboard, setups and scorecard (same origin):
+// micros trade at the same prices, so every level is unchanged and only the
+// dollars scale - MES $5, MNQ $2, MGC $10 a point, a tenth of ES/NQ/GC.
+const GX_MICRO = {ES:{sym:"MES",f:0.1}, NQ:{sym:"MNQ",f:0.1}, GC:{sym:"MGC",f:0.1}};
+function gxSize(){ try{ return localStorage.getItem("gx_size")==="micro" ? "micro" : "mini"; }catch(e){ return "mini"; } }
+function gxF(sym){ return gxSize()==="micro" && GX_MICRO[sym] ? GX_MICRO[sym].f : 1; }
+function gxName(sym){ return gxSize()==="micro" && GX_MICRO[sym] ? GX_MICRO[sym].sym : sym; }
+function gxToggleHtml(){
+  const m = gxSize()==="micro";
+  return `<span class="gxsize" style="display:inline-flex;border:1px solid rgba(255,255,255,.15);border-radius:4px;overflow:hidden;font-size:11.5px">`
+    + `<button onclick="gxSet('mini')" style="background:${m?"none":"rgba(217,164,65,.18)"};color:inherit;border:0;padding:5px 9px;cursor:pointer;font:inherit">Mini</button>`
+    + `<button onclick="gxSet('micro')" style="background:${m?"rgba(217,164,65,.18)":"none"};color:inherit;border:0;padding:5px 9px;cursor:pointer;font:inherit">Micro</button></span>`;
+}
+function gxSet(v){ try{ localStorage.setItem("gx_size", v); }catch(e){} if(typeof gxRepaint==="function") gxRepaint(); }
+// Every *_usd number in a payload, scaled for the size; the symbol comes from
+// the nearest "symbol" field or an ES/NQ/GC key above it.
+function gxScale(o, sym){
+  if(Array.isArray(o)) return o.map(x=>gxScale(x, sym));
+  if(!o || typeof o!=="object") return o;
+  const s = o.symbol || sym, out = {};
+  for(const [k,v] of Object.entries(o)){
+    if(typeof v==="number" && /(^|_)usd$|^usd$/.test(k)) out[k] = Math.round(v*gxF(s));
+    else out[k] = gxScale(v, GX_MICRO[k] ? k : s);
+  }
+  return out;
+}
 const VERDICT = {"ok":"v-ok","thin":"v-thin","no edge":"v-noedge"};
 const ACTION = {fade:{call:"sell call wall",put:"buy put wall"},
                 breakout:{call:"buy break above",put:"sell break below"}};
@@ -763,7 +790,7 @@ function eventRows(evs, mult){
 
 function recordTable(rec){
   if(!rec||!rec.length) return `<div class="empty">No finished sessions yet. The record starts with the first session this page sees through to the close.</div>`;
-  const rows = rec.map(r=>`<tr><td>${esc(r.symbol)}</td><td>${esc(r.setup)}</td><td>${regimeChip(r.regime)}</td>`
+  const rows = rec.map(r=>`<tr><td>${esc(gxName(r.symbol))}</td><td>${esc(r.setup)}</td><td>${regimeChip(r.regime)}</td>`
     +`<td class="num">${r.n}</td><td class="num">${r.won}</td>`
     +`<td class="num"><b class="${r.avg_r>=0?"pos":"neg"}">${rFmt(r.avg_r)}</b></td>`
     +`<td class="num">${usd(r.avg_usd)}</td><td class="num">${rFmt(r.backtest_r)}</td></tr>`).join("");
@@ -795,7 +822,7 @@ function sweepTradeRows(ts, live){
   if(!ts.length) return "";
   const rows = ts.map(t=>{
     const st = {open:"s-open",won:"s-won",lost:"s-lost"}[t.status]||"";
-    return `<tr>${live?"":`<td>${esc(t.date)}</td><td>${esc(t.symbol)}</td>`}<td>${esc(t.level_name)} ${fx(t.level)}</td>`
+    return `<tr>${live?"":`<td>${esc(t.date)}</td><td>${esc(gxName(t.symbol))}</td>`}<td>${esc(t.level_name)} ${fx(t.level)}</td>`
       +`<td class="${t.direction>0?"side-c":"side-p"}">${SIDE(t.direction)}</td><td>${chip(t.status,st)}</td>`
       +`<td>${regimeChip(t.regime)}</td><td class="num">${esc(t.time)}</td>`
       +`<td class="num">${fx(t.entry)}</td><td class="num">${fx(t.stop)}</td><td class="num">${fx(t.target)}</td>`
@@ -856,7 +883,7 @@ function renderLondon(d){
     const lv = (b.levels||[]).map(l=>`<tr><td>${esc(l.name)}</td><td class="side-${l.kind==="high"?"p":"c"}">${l.kind==="high"?"short a sweep above":"long a sweep below"}</td>`
       +`<td class="num">${fx(l.level)}</td><td class="num">${l.dist_pts==null?"—":(l.dist_pts>0?"+":"")+fx(l.dist_pts)}</td>`
       +`<td>${l.gex?chip(`${l.gex} ${fx(l.gex_level)}`,"v-ok"):`<span class="sub">nearest gamma level ${fx(l.gex_level)}, ${fx(l.gex_dist)} away</span>`}</td></tr>`).join("");
-    html += `<div class="panel"><div class="phead"><span class="sym">${esc(s.symbol)}</span> ${regimeChip(m.regime)}`
+    html += `<div class="panel"><div class="phead"><span class="sym">${esc(gxName(s.symbol))}</span> ${regimeChip(m.regime)}`
       + `<span class="sub">map ${esc(m.frozen_at)} ET · flip ${fx(m.flip)}`
       + (b.last!=null?` · last ${fx(b.last)} (${esc(b.bars_to)} bar)`:"") + `</span></div>`
       + (s.error?`<div class="err">${esc(s.error)}</div>`:"")
@@ -869,7 +896,7 @@ function renderLondon(d){
   const rec = L.record||{}, hist = L.history||[];
   html += `<div class="panel"><div class="phead"><span class="sym" style="font-size:16px">Forward test</span>`
     + `<span class="sub">live results since this tab went up</span></div>`
-    + (Object.keys(rec).length ? Object.entries(rec).map(([k,v])=>`<div><b>${esc(k)}</b> ${statLine(v)}</div>`).join("")
+    + (Object.keys(rec).length ? Object.entries(rec).map(([k,v])=>`<div><b>${esc(gxName(k))}</b> ${statLine(v)}</div>`).join("")
        : `<div class="empty">No finished sessions yet.</div>`)
     + (hist.length ? `<div class="k">Every live trade</div>` + sweepTradeRows(hist.slice().reverse(), false) : "")
     + `</div>`;
@@ -906,7 +933,7 @@ function renderSetups(d, win){
     : `The session map freezes at ${esc(w.map_from)} ET on trading days.`) + `</div>`;
   for(const s of syms){
     const m = s.map||{};
-    html += `<div class="panel"><div class="phead"><span class="sym">${esc(s.symbol)}</span>`
+    html += `<div class="panel"><div class="phead"><span class="sym">${esc(gxName(s.symbol))}</span>`
       + chip(`rules: 1:1, ${fx(m.points,0)} pts` + (evening ? "" : ", fades to breakeven at +0.5R"))
       + (m.traded===false ? ` ${chip("reference, not traded")}` : "")
       + ` ${regimeChip(m.regime)}`
@@ -944,9 +971,11 @@ function renderSetups(d, win){
 
 let CUR = SETUPS_DATA, WIN = null;
 function pickWin(w){ WIN = w; paint(CUR); }
+function gxRepaint(){ paint(CUR); }
 function paint(d){
   CUR = d;
-  document.getElementById("root").innerHTML = renderSetups(d, WIN);
+  const gs = document.getElementById("gxsize"); if(gs) gs.innerHTML = gxToggleHtml();
+  document.getElementById("root").innerHTML = renderSetups(d ? gxScale(d) : d, WIN);
   document.getElementById("meta").innerHTML = d
     ? `<span>updated <b>${esc(d.generated)}</b></span>` : "";
 }

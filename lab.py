@@ -153,6 +153,7 @@ tr.pick:hover td{background:rgba(255,255,255,.04)}
 <header>
   <h1>Gamma<span class="g">/</span>Scorecard<b style="color:var(--brass)">*</b></h1>
   <div class="meta" id="meta"></div>
+  <span id="gxsize"></span>
   <div class="navs"><a class="navlink" href="setups.html">Setups</a><a class="navlink" href="./">Dashboard</a></div>
 </header>
 <div class="tabs" id="tabs"></div>
@@ -161,6 +162,32 @@ tr.pick:hover td{background:rgba(255,255,255,.04)}
 </div>
 <script>
 const LAB_DATA = null;
+// Contract size, shared by the dashboard, setups and scorecard (same origin):
+// micros trade at the same prices, so every level is unchanged and only the
+// dollars scale - MES $5, MNQ $2, MGC $10 a point, a tenth of ES/NQ/GC.
+const GX_MICRO = {ES:{sym:"MES",f:0.1}, NQ:{sym:"MNQ",f:0.1}, GC:{sym:"MGC",f:0.1}};
+function gxSize(){ try{ return localStorage.getItem("gx_size")==="micro" ? "micro" : "mini"; }catch(e){ return "mini"; } }
+function gxF(sym){ return gxSize()==="micro" && GX_MICRO[sym] ? GX_MICRO[sym].f : 1; }
+function gxName(sym){ return gxSize()==="micro" && GX_MICRO[sym] ? GX_MICRO[sym].sym : sym; }
+function gxToggleHtml(){
+  const m = gxSize()==="micro";
+  return `<span class="gxsize" style="display:inline-flex;border:1px solid rgba(255,255,255,.15);border-radius:4px;overflow:hidden;font-size:11.5px">`
+    + `<button onclick="gxSet('mini')" style="background:${m?"none":"rgba(217,164,65,.18)"};color:inherit;border:0;padding:5px 9px;cursor:pointer;font:inherit">Mini</button>`
+    + `<button onclick="gxSet('micro')" style="background:${m?"rgba(217,164,65,.18)":"none"};color:inherit;border:0;padding:5px 9px;cursor:pointer;font:inherit">Micro</button></span>`;
+}
+function gxSet(v){ try{ localStorage.setItem("gx_size", v); }catch(e){} if(typeof gxRepaint==="function") gxRepaint(); }
+// Every *_usd number in a payload, scaled for the size; the symbol comes from
+// the nearest "symbol" field or an ES/NQ/GC key above it.
+function gxScale(o, sym){
+  if(Array.isArray(o)) return o.map(x=>gxScale(x, sym));
+  if(!o || typeof o!=="object") return o;
+  const s = o.symbol || sym, out = {};
+  for(const [k,v] of Object.entries(o)){
+    if(typeof v==="number" && /(^|_)usd$|^usd$/.test(k)) out[k] = Math.round(v*gxF(s));
+    else out[k] = gxScale(v, GX_MICRO[k] ? k : s);
+  }
+  return out;
+}
 // Sweep grids, in points: the values the tables try for each symbol.
 const GRID = {NQ:[10,120,5], GC:[2,30,1], ES:[4,40,2]};
 const MIN_N = 10;                 // fewer trades than this: shown, but dimmed
@@ -395,7 +422,7 @@ function renderSweeps(d, S){
     + `writes them to sweeps_trades.json each weekend (or by hand from the Actions tab), and this tab replays them at the rule's `
     + `stop and at fixed stops once they are there.</div>`;
   const sym = (sw.target||{})[S.sym] ? S.sym : "ES";
-  const mult = ((d.multipliers||{})[sym]) || ({ES:50,NQ:20})[sym] || 1;
+  const mult = (((d.multipliers||{})[sym]) || ({ES:50,NQ:20})[sym] || 1) * gxF(sym);
   const target = sw.target[sym];
   const all = sw.trades.filter(t=>t.variant===(S.variant||"london") && t.symbol===sym);
   const bt = all.filter(t=>t.date < sw.live_from), live = all.filter(t=>t.date >= sw.live_from);
@@ -432,7 +459,7 @@ function renderLab(d, S){
   if(S && S.win==="sweeps") return renderSweeps(d, S);
   if(!d || !(d.trades||[]).length)
     return `<div class="panel empty">No scored trades yet. The weekly calibration writes them.</div>`;
-  const mult = (d.multipliers||{})[S.sym] || 1;
+  const mult = ((d.multipliers||{})[S.sym] || 1) * gxF(S.sym);
   const trades = filtered(d, S);
   const st = run(trades, +S.stop, +S.target, S, mult);
   const t = times(d, S.win);
@@ -445,8 +472,8 @@ function renderLab(d, S){
     + statBox("Win rate", pc(st.win))
     + statBox("Avg R", rFmt(st.r), cls(st.r))
     + statBox("Avg points", sgn(st.avg), cls(st.avg))
-    + statBox("Per trade, 1 lot", usd(st.per), cls(st.per))
-    + statBox("Total, 1 lot", usd(st.usd), cls(st.usd))
+    + statBox(`Per trade, 1 ${esc(gxName(S.sym))}`, usd(st.per), cls(st.per))
+    + statBox(`Total, 1 ${esc(gxName(S.sym))}`, usd(st.usd), cls(st.usd))
     + statBox("Max drawdown", usd(st.dd), "neg")
     + `</div>`
     + (st.n && st.n<MIN_N ? `<div class="warn">Only ${st.n} trades: too few to tell a value from luck.</div>` : "")
@@ -482,7 +509,7 @@ function controls(d){
     const ss = Object.keys(sw.target||{}).sort();
     const vs = Object.entries(sw.labels||{});
     document.getElementById("controls").innerHTML =
-        `<label>Symbol<select onchange="set('sym',this.value)">${opts(ss.map(s=>[s,s]), S.sym)}</select></label>`
+        `<label>Symbol<select onchange="set('sym',this.value)">${opts(ss.map(s=>[s,gxName(s)]), S.sym)}</select></label>`
       + `<label>Version<select onchange="set('variant',this.value)">${opts(vs, S.variant)}</select></label>`
       + `<label>Breakeven<select onchange="set('be',this.value)">${opts(BE_OPTS, S.be)}</select></label>`;
     return;
@@ -494,7 +521,7 @@ function controls(d){
   const num = (k, label) => `<label>${label}<input type="number" min="0" step="${step}" value="${esc(S[k])}" onchange="set('${k}',this.value)"></label>`;
   const date = (k, label) => `<label>${label}<input type="date" value="${esc(S[k])}" onchange="set('${k}',this.value)"></label>`;
   document.getElementById("controls").innerHTML =
-      sel("sym","Symbol", syms.map(s=>[s, s + ((d.reference||[]).includes(s)?" (reference, not traded)":"")]))
+      sel("sym","Symbol", syms.map(s=>[s, gxName(s) + ((d.reference||[]).includes(s)?" (reference, not traded)":"")]))
     + sel("setup","Setup", [["all","Both"],["fade","Fade"],["breakout","Breakout"]])
     + sel("regime","Gamma regime", [["all","Any"],["negative","Negative"],["positive","Positive"]])
     + sel("flip","Entry vs flip", [["all","Any"],["below","Below flip"],["above","Above flip"]])
@@ -530,8 +557,10 @@ function set(k, v){
   paint();
 }
 function pick(s, t){ S.stop = s; S.target = t; S.link = s===t; paint(); }
+function gxRepaint(){ paint(); }
 function paint(){
   const d = LAB_DATA;
+  const gs = document.getElementById("gxsize"); if(gs) gs.innerHTML = gxToggleHtml();
   try{ history.replaceState(null, "", "#" + new URLSearchParams(Object.entries(S).map(([k,v])=>[k,String(v)])).toString()); }catch(e){}
   if(d){
     document.getElementById("meta").textContent = `trades scored ${d.scored_at||"—"} · page ${d.generated||"—"}`;
