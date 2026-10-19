@@ -2710,9 +2710,8 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
 
         out["flow"] = flow_summary(contracts)
         out["greeks"] = greeks_summary(contracts, spot)
-        out["chain_src"] = sorted({CHAIN_SRC.get(c["chain"], "cboe")
-                                   for c in chains if c.get("options") is not None}) \
-            if isinstance(chains, list) else None
+        out["chain_src"] = sorted({CHAIN_SRC.get(c["chain"], "cboe") for c in chains
+                                   if c.get("chain") in CHAIN_SRC})
         flow_per = flow_by_strike(contracts, spot)
         for r in out["ladder"]:
             d = flow_per.get(r["strike_pre"])
