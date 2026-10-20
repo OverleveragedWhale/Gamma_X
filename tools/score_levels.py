@@ -138,7 +138,8 @@ def structure_of(sym, book):
     """Every level the terminal could have targeted: all ladder rows, both
     sides, plus the book's flip - the same set trade_plans() chooses from."""
     out = []
-    ladder = sym.get("ladder")
+    # ladder_raw: the plain wall selection (the page shows a sticky one).
+    ladder = sym.get("ladder_raw") or sym.get("ladder")
     if ladder:
         out = [float(w["strike"]) for w in ladder if w.get("strike") is not None]
     else:                                   # pre-2026-09-29 shape
@@ -170,7 +171,8 @@ def levels_of(sym, book, top, select="net"):
     r = regimes.get(book) or {}
     out["flip"] = r.get("flip")
 
-    ladder = sym.get("ladder")
+    # ladder_raw: the plain wall selection (the page shows a sticky one).
+    ladder = sym.get("ladder_raw") or sym.get("ladder")
     if ladder:
         for side in ("call", "put"):
             rows = []

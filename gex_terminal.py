@@ -1089,7 +1089,7 @@ def flow_exposures(contracts, spot, today, book_date=None):
 
 
 def build_ladder(per_by_book, books, spot, ref_spot, prior, disp,
-                 n=None, min_sep=None):
+                 n=None, min_sep=None, sticky=None):
     """One price ladder carrying every book's net gamma at the same strike.
 
     Three separate tables could not be read against each other - the same
@@ -1132,7 +1132,10 @@ def build_ladder(per_by_book, books, spot, ref_spot, prior, disp,
                 continue
             # The book that owns this strike most strongly decides its name.
             best = max(vals, key=abs)
-            scored.append((abs(best), k, "call" if best > 0 else "put"))
+            # An incumbent (sticky) strike competes at STICKY_MARGIN x its
+            # size, so a neighbour must beat it clearly to take the row.
+            boost = STICKY_MARGIN if (sticky and round(k, 2) in sticky) else 1.0
+            scored.append((abs(best) * boost, k, "call" if best > 0 else "put"))
         scored.sort(key=lambda t: -t[0])
 
         kept = []
@@ -1857,6 +1860,16 @@ def _newest_cash_close_once(sym, today):
 
 _OI_DIR = None
 _OI_PENDING = {}
+# Sticky walls (display only). Strikes within min_sep collapse into one ladder
+# row named after the biggest; near spot that "biggest" is mostly 0-2 DTE
+# gamma, which piles onto whichever strike is closest, so the row hopped
+# between neighbours run to run (ES 7781 -> 7787 -> 7781 on 2026-10-16/19;
+# ~100 of 104 near-spot rows that vanished intraday). A strike on the previous
+# run's ladder, same session, now keeps its row unless a neighbour carries
+# STICKY_MARGIN times its gamma. The rules and backtests read `ladder_raw`,
+# the unsticky selection they were measured on.
+STICKY_MARGIN = 1.25
+_STICKY = {}          # future -> (book date iso, {strike_pre, ...}), set per run
 
 
 def set_oi_dir(path):
@@ -2874,15 +2887,25 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
         sep = inst.get("wall_sep")
         per_by_book = {k: gex_by_strike(v, gspot, book_date)
                        for k, v in buckets.items()}
-        out["ladder"] = build_ladder(
-            per_by_book,
-            list(buckets), gspot, ref_spot, prior_lv, disp,
+        lad_kw = dict(
             n=inst.get("wall_count"),
             # wall_sep is quoted in PRIMARY chain points and min_sep wants a
             # fraction of spot, and that fraction is the same number before and
             # after conversion - so it divides by the chain spot, not the
             # futures one.
             min_sep=(sep / spot_chain) if (sep and spot_chain) else None)
+        raw = build_ladder(per_by_book, list(buckets), gspot, ref_spot,
+                           prior_lv, disp, **lad_kw)
+        # What the rules read: the plain selection, only the fields they use.
+        out["ladder_raw"] = [{"side": r["side"], "strike": r["strike"],
+                              "books": {b: {"net": c["net"]} for b, c in r["books"].items()}}
+                             for r in raw]
+        inc_date, inc = _STICKY.get(future) or (None, None)
+        if inc and inc_date == book_date.isoformat():
+            out["ladder"] = build_ladder(per_by_book, list(buckets), gspot, ref_spot,
+                                         prior_lv, disp, sticky=inc, **lad_kw)
+        else:
+            out["ladder"] = raw
 
         # Volume profile, and which GEX levels coincide with it. The page
         # already told you to "lean on volume profile / prior levels" when
@@ -3160,7 +3183,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
 
 
 # Everything built from the chain's greeks, carried as a unit by hold_regimes.
-HELD_KEYS = ("regimes", "books", "ladder", "flow", "vp", "oi_prev_date")
+HELD_KEYS = ("regimes", "books", "ladder", "ladder_raw", "flow", "vp", "oi_prev_date")
 
 
 def hold_regimes(syms, previous, previous_generated):
@@ -3221,6 +3244,14 @@ def recompute(previous=None, previous_generated=None):
     margins_cfg = load_margins()
     closes_cfg = load_closes()
     calib = load_calibration()
+    # Last run's displayed walls, for the sticky ladder (same session only:
+    # each symbol's 0DTE book date names the session it was built for).
+    _STICKY.clear()
+    for p in previous or []:
+        if p and p.get("ok") and p.get("ladder") and (p.get("zero") or {}).get("date"):
+            _STICKY[p.get("future") or p["symbol"]] = (
+                p["zero"]["date"], {round(r["strike_pre"], 2) for r in p["ladder"]
+                                    if r.get("strike_pre") is not None})
 
     # Instruments are independent (different symbols/URLs) and each one is
     # network-bound (Cboe chain + 3 Yahoo calls), so run them concurrently
