@@ -1,64 +1,67 @@
 
-=== day: Any prior level, 09:50-11:30  (map at or before 09:50, 40 symbol-sessions)
+=== day: Any prior level, 09:50-11:30  (map at or before 09:50, 42 symbol-sessions)
 
-ES  10 trades on 7 days  (target 10, stop 2-5)
+ES  12 trades on 8 days  (target 10, stop 2-5)
   gate                         n  won  win%  exp R  $ total  max DD  | exit 12:00: exp R, $
-  all                         10    1   10%  -0.37     -438    -488  | -0.37     -438
-  negative gamma               3    0    0%  -1.00     -338    -338  | -1.00     -338
-  positive gamma               7    1   14%  -0.10     -100    -312  | -0.10     -100
+  all                         12    1    8%  -0.39     -600    -638  | -0.39     -600
+  negative gamma               5    0    0%  -0.80     -488    -488  | -0.80     -488
+  positive gamma               7    1   14%  -0.10     -113    -312  | -0.10     -113
   at a gamma level             1    0    0%   0.00        0       0  |  0.00        0
-  not at a gamma level         9    1   11%  -0.41     -438    -488  | -0.41     -438
+  not at a gamma level        11    1    9%  -0.42     -600    -638  | -0.42     -600
   gamma level + positive       1    0    0%   0.00        0       0  |  0.00        0
   prior day (PDH/PDL)          3    1   33%   1.11      500       0  |  1.11      500
-  overnight (ON/A/L)           7    0    0%  -1.00     -938    -938  | -1.00     -938
+  overnight (ON/A/L)           9    0    0%  -0.89   -1,100  -1,100  | -0.89   -1,100
 
-NQ  2 trades on 2 days  (target 40, stop 8-30)
+NQ  3 trades on 3 days  (target 40, stop 8-30)
   gate                         n  won  win%  exp R  $ total  max DD  | exit 12:00: exp R, $
-  all                          2    1   50%   0.72      798       0  |  0.72      798
+  all                          3    2   67%   0.98    1,597       0  |  0.98    1,597
+  negative gamma               1    1  100%   1.48      799       0  |  1.48      799
   positive gamma               2    1   50%   0.72      798       0  |  0.72      798
   at a gamma level             1    1  100%   1.45      798       0  |  1.45      798
-  not at a gamma level         1    0    0%   0.00        0       0  |  0.00        0
+  not at a gamma level         2    1   50%   0.74      799       0  |  0.74      799
   gamma level + positive       1    1  100%   1.45      798       0  |  1.45      798
-  overnight (ON/A/L)           2    1   50%   0.72      798       0  |  0.72      798
+  overnight (ON/A/L)           3    2   67%   0.98    1,597       0  |  0.98    1,597
 
 === london: Asia range swept in London, 03:00-08:00  (map at or before 03:00, 38 symbol-sessions)
 
 ES  10 trades on 10 days  (target 10, stop 2-5)
   gate                         n  won  win%  exp R  $ total  max DD  | exit 08:00: exp R, $
-  all                         10    2   20%   0.01      475    -312  |  0.01      475
+  all                         10    2   20%  -0.00      477    -312  | -0.00      477
   negative gamma               2    1   50%   0.93      388    -112  |  0.93      388
-  positive gamma               8    1   12%  -0.22       87    -412  | -0.22       87
+  positive gamma               8    1   12%  -0.24       89    -412  | -0.24       89
   at a gamma level             1    0    0%  -1.00     -100    -100  | -1.00     -100
-  not at a gamma level         9    2   22%   0.12      575    -212  |  0.12      575
+  not at a gamma level         9    2   22%   0.11      577    -212  |  0.11      577
   gamma level + positive       1    0    0%  -1.00     -100    -100  | -1.00     -100
-  overnight (ON/A/L)          10    2   20%   0.01      475    -312  |  0.01      475
+  overnight (ON/A/L)          10    2   20%  -0.00      477    -312  | -0.00      477
 
-NQ  8 trades on 8 days  (target 40, stop 8-30)
+NQ  9 trades on 9 days  (target 40, stop 8-30)
   gate                         n  won  win%  exp R  $ total  max DD  | exit 08:00: exp R, $
-  all                          8    3   38%   0.37    1,129    -670  |  0.37    1,129
-  negative gamma               2    1   50%   0.96      500    -300  |  0.96      500
-  positive gamma               6    2   33%   0.18      628    -970  |  0.18      628
-  at a gamma level             1    0    0%  -1.00     -300    -300  | -1.00     -300
-  not at a gamma level         7    3   43%   0.57    1,429    -670  |  0.57    1,429
-  gamma level + negative       1    0    0%  -1.00     -300    -300  | -1.00     -300
-  overnight (ON/A/L)           8    3   38%   0.37    1,129    -670  |  0.37    1,129
+  all                          9    3   33%   0.24      979    -830  |  0.24      979
+  negative gamma               2    1   50%   1.04      511    -290  |  1.04      511
+  positive gamma               7    2   29%   0.01      468  -1,130  |  0.01      468
+  at a gamma level             2    0    0%  -1.00     -450    -450  | -1.00     -450
+  not at a gamma level         7    3   43%   0.59    1,429    -670  |  0.59    1,429
+  gamma level + negative       1    0    0%  -1.00     -290    -290  | -1.00     -290
+  gamma level + positive       1    0    0%  -1.00     -160    -160  | -1.00     -160
+  overnight (ON/A/L)           9    3   33%   0.24      979    -830  |  0.24      979
 
-=== nyopen: London range swept at the NY open, 09:30-11:30  (map at or before 09:30, 40 symbol-sessions)
+=== nyopen: London range swept at the NY open, 09:30-11:30  (map at or before 09:30, 42 symbol-sessions)
 
-ES  5 trades on 4 days  (target 10, stop 2-5)
+ES  6 trades on 5 days  (target 10, stop 2-5)
   gate                         n  won  win%  exp R  $ total  max DD  | exit 12:00: exp R, $
-  all                          5    0    0%  -0.80     -538    -538  | -0.80     -538
-  negative gamma               4    0    0%  -0.75     -350    -350  | -0.75     -350
+  all                          6    0    0%  -0.83     -688    -688  | -0.83     -688
+  negative gamma               5    0    0%  -0.80     -500    -500  | -0.80     -500
   positive gamma               1    0    0%  -1.00     -188    -188  | -1.00     -188
-  at a gamma level             3    0    0%  -1.00     -388    -388  | -1.00     -388
-  not at a gamma level         2    0    0%  -0.50     -150    -150  | -0.50     -150
-  gamma level + negative       2    0    0%  -1.00     -200    -200  | -1.00     -200
+  at a gamma level             3    0    0%  -1.00     -400    -400  | -1.00     -400
+  not at a gamma level         3    0    0%  -0.67     -288    -288  | -0.67     -288
+  gamma level + negative       2    0    0%  -1.00     -212    -212  | -1.00     -212
   gamma level + positive       1    0    0%  -1.00     -188    -188  | -1.00     -188
-  overnight (ON/A/L)           5    0    0%  -0.80     -538    -538  | -0.80     -538
+  overnight (ON/A/L)           6    0    0%  -0.83     -688    -688  | -0.83     -688
 
-NQ  2 trades on 2 days  (target 40, stop 8-30)
+NQ  3 trades on 3 days  (target 40, stop 8-30)
   gate                         n  won  win%  exp R  $ total  max DD  | exit 12:00: exp R, $
-  all                          2    0    0%  -0.50     -250    -250  | -0.50     -250
+  all                          3    1   33%   0.16      549    -250  |  0.16      549
+  negative gamma               1    1  100%   1.48      799       0  |  1.48      799
   positive gamma               2    0    0%  -0.50     -250    -250  | -0.50     -250
-  not at a gamma level         2    0    0%  -0.50     -250    -250  | -0.50     -250
-  overnight (ON/A/L)           2    0    0%  -0.50     -250    -250  | -0.50     -250
+  not at a gamma level         3    1   33%   0.16      549    -250  |  0.16      549
+  overnight (ON/A/L)           3    1   33%   0.16      549    -250  |  0.16      549
