@@ -116,6 +116,15 @@ LIQ_BASE_SHARE = 0.01                            # (retired 2026-10-19, see belo
 # MPOR_DAYS. SPAN also carries stress scenarios and add-ons, so the sigma a
 # margin implies runs well above realized sigma - the panel prints both.
 MARGIN_COVERAGE = 0.99
+# The ORIGINAL liquidation bands (until 2026-10-19), restored alongside the
+# realized-vol pair at CN's request: a flat 12.5% of margin, in points, at
+# "99%", and that stretched by the one-sided 99.9/99 quantile ratio at "99.9%".
+#     old99 = (margin / multiplier) / 8
+# Same construction as Rocket Scooter's Risk Interval (RI = margin / point
+# value / 8 reproduces the published ES 58.75 and NQ 211.25 from round
+# $23,500 / $33,800 margins), so old99 is carried as "ri" and Best Zones draws
+# RI multiples off it. Up/down legs averaged, as before.
+OLD_BAND_SHARE = 0.125
 MARGIN_MPOR_DAYS = 1.0
 LIQ_LEVELS = (("95%", 1.9600), ("99%", 2.5758))  # label -> two-sided normal quantile
 # Micro contracts: same prices, a tenth of the point value. Their margin comes
@@ -2345,7 +2354,11 @@ def margin_buffer(inst, idx_close, margins_cfg):
             "points_up": up / mult, "points_down": down / mult,
             "coverage": cov, "mpor_days": mpor, "z_cover": round(z_cover, 4),
             "sigma_points": sig, "sigma_up": sig_up, "sigma_down": sig_dn,
-            "liq": liq}
+            "liq": liq,
+            "old": {"ri": avg / mult * OLD_BAND_SHARE,
+                    "ri_up": up / mult * OLD_BAND_SHARE,
+                    "ri_down": down / mult * OLD_BAND_SHARE,
+                    "x999": avg / mult * OLD_BAND_SHARE * Z_999 / Z_99}}
 
 
 def micro_margin(inst, margins_cfg, mb):
@@ -3073,14 +3086,21 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
                 # Printed beside it: the anchor steps once a session, so
                 # without the date a correct hold and a stale feed look alike.
                 "liq_anchor_date": (prior_fut["date"] if prior_fut else None),
-                # anchor,95%,99% - the three numbers the TradingView overlay
-                # wants, in the order its paste field parses them: the
-                # REALIZED-vol close bands about the 16:59 anchor, each the
-                # larger of its down/up distance.
+                # anchor,95%,99%,RI,RI 99.9% - what Best Zones parses, in
+                # order: the REALIZED-vol close bands about the 16:59 anchor
+                # (each the larger of its down/up distance), then the original
+                # 12.5%-of-margin bands (OLD_BAND_SHARE). Older copies of the
+                # script read only the first three fields and ignore the rest.
                 "pine": (",".join(
                     [f"{pine_anchor:.2f}"]
-                    + [f"{b['points']:.2f}" for b in vol_bands(vmodel, pine_anchor, vtick)])
+                    + [f"{b['points']:.2f}" for b in vol_bands(vmodel, pine_anchor, vtick)]
+                    + [f"{mb['old']['ri']:.2f}", f"{mb['old']['x999']:.2f}"])
                     if (pine_anchor is not None and vmodel) else None),
+                "old": {"ri": round(mb["old"]["ri"], 2),
+                        "ri_tick": round_out(mb["old"]["ri"], vtick, False),
+                        "ri_up": round(mb["old"]["ri_up"], 2),
+                        "ri_down": round(mb["old"]["ri_down"], 2),
+                        "x999": round(mb["old"]["x999"], 2)},
                 "vol_model": ({"method": vmodel["method"], "note": vnote,
                                "sigma_pct": round(100 * vmodel["sigma"], 3),
                                "n": vmodel["n"], "source": vmodel.get("source"),
@@ -3204,7 +3224,7 @@ def recompute(previous=None, previous_generated=None):
 
     # One line covering every product, so the overlay is a single copy and a
     # single paste rather than one per chart:
-    #   ES=anchor,95%,99%;NQ=...;GC=...
+    #   ES=anchor,95%,99%,RI,RI99.9;NQ=...;GC=...
     #
     # Liquidation bands only, deliberately. The GEX levels are read off the
     # ladder on the page; the chart side that consumes this - and whatever
@@ -3732,6 +3752,12 @@ function panel(s){
           +(vm.method==="fhs"?` × fat-tail quantiles ${m.vol_bands.map(b=>b.q).join(" / ")} from ${vm.n} sessions of ${vm.source} through ${vm.through}`
                              :` × normal quantiles (${vm.note||"no long history"})`)
           +`</span></div>`;
+    }
+    if(m.old&&m.old.ri){
+      const a=m.pine_anchor!=null?m.pine_anchor:m.liq_anchor;
+      marg+=`<div class="mrow"><span>original bands (12.5% of margin · Rocket Scooter RI method): `
+          +`<b style="color:var(--brass)">RI ±${m.old.ri}</b> (${(a-m.old.ri).toFixed(2)}–${(a+m.old.ri).toFixed(2)}) · `
+          +`99.9% ±${m.old.x999} · up/down legs ${m.old.ri_up} / ${m.old.ri_down}</span></div>`;
     }
     if((m.liq||[]).length&&m.liq[0].points!==undefined){
       marg+=`<div class="mrow"><span style="opacity:.75">margin-implied, for reference: `
