@@ -1,0 +1,49 @@
+name: Volume at RI levels (research)
+
+# tools/volume_levels.py over Massive bars; writes backtests/volume_levels.md
+# back to the branch it ran on. Bars stay in the runner cache.
+
+on:
+  push:
+    branches: [volume-research]
+    paths:
+      - tools/volume_levels.py
+      - .github/workflows/volume-research.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+      MASSIVE_MIN_INTERVAL: "1"
+      BACKTEST_YEARS: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install numpy
+      - uses: actions/cache@v4
+        with:
+          path: .bars_cache
+          key: bars-${{ github.run_id }}
+          restore-keys: bars-
+      - name: Study
+        run: |
+          set -euo pipefail
+          python tools/volume_levels.py --out backtests/volume_levels.md
+          cat backtests/volume_levels.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Commit
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898729+github-actions[bot]@users.noreply.github.com"
+          git add backtests/volume_levels.md
+          git diff --cached --quiet && exit 0
+          git commit -m "volume levels study ($(date -u +%F))"
+          git pull --rebase --quiet origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

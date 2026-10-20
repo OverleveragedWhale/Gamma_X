@@ -149,9 +149,10 @@ def session_of(t):
     return (t + timedelta(hours=6)).date()
 
 
-def continuous(root, start, end=None):
+def continuous(root, start, end=None, with_volume=False):
     """[(datetime ET, high, low, close)] 5-minute, front month by volume,
-    difference back-adjusted to the newest contract."""
+    difference back-adjusted to the newest contract. with_volume appends
+    each bar's volume as a fifth field."""
     end = end or date.today() + timedelta(days=1)
     cons = contracts_between(root, start, end)
     vol = {}                                 # session date -> {ticker: volume}
@@ -182,7 +183,8 @@ def continuous(root, start, end=None):
         rows = []
         for c in aggs(tk, s, e):
             t = _et(c["window_start"])
-            rows.append((t, float(c["high"]), float(c["low"]), float(c["close"])))
+            rows.append((t, float(c["high"]), float(c["low"]), float(c["close"]),
+                         float(c.get("volume") or 0)))
         raw[tk] = sorted(rows)
     # roll offsets: at a switch old -> new on session d, the gap between the
     # two contracts' closes at the last common bar of the session before
@@ -193,18 +195,18 @@ def continuous(root, start, end=None):
         if i and front[days[i - 1]] != front[sd]:
             old, new = front[days[i - 1]], front[sd]
             prev = days[i - 1]
-            o = {t: c for t, _, _, c in raw.get(old, []) if session_of(t).isoformat() == prev}
-            n = {t: c for t, _, _, c in raw.get(new, []) if session_of(t).isoformat() == prev}
+            o = {r[0]: r[3] for r in raw.get(old, []) if session_of(r[0]).isoformat() == prev}
+            n = {r[0]: r[3] for r in raw.get(new, []) if session_of(r[0]).isoformat() == prev}
             common = sorted(set(o) & set(n))
             if common:
                 offset += n[common[-1]] - o[common[-1]]
     out = []
     for tk, rows in raw.items():
-        for t, h, l, c in rows:
+        for t, h, l, c, v in rows:
             sd = session_of(t).isoformat()
             if front.get(sd) == tk and sd >= start.isoformat():
                 k = adj[sd]
-                out.append((t, h + k, l + k, c + k))
+                out.append((t, h + k, l + k, c + k, v) if with_volume else (t, h + k, l + k, c + k))
     out.sort()
     return out
 
