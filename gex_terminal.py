@@ -120,10 +120,10 @@ MARGIN_COVERAGE = 0.99
 # realized-vol pair at CN's request: a flat 12.5% of margin, in points, at
 # "99%", and that stretched by the one-sided 99.9/99 quantile ratio at "99.9%".
 #     old99 = (margin / multiplier) / 8
-# Same construction as Rocket Scooter's Risk Interval (RI = margin / point
-# value / 8 reproduces the published ES 58.75 and NQ 211.25 from round
-# $23,500 / $33,800 margins), so old99 is carried as "ri" and Best Zones draws
-# RI multiples off it. Up/down legs averaged, as before.
+# Carried as "ri" because it is a candidate for Rocket Scooter's Risk Interval:
+# margin / point value / 8 gives the published ES 58.75 and NQ 211.25 IF those
+# margins were $23,500 / $33,800 (unverified). Best Zones draws RI multiples
+# off it. Up/down legs averaged, as before.
 OLD_BAND_SHARE = 0.125
 MARGIN_MPOR_DAYS = 1.0
 LIQ_LEVELS = (("95%", 1.9600), ("99%", 2.5758))  # label -> two-sided normal quantile
