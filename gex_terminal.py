@@ -77,6 +77,12 @@ EXTRA_CHAIN_TOL = 0.01
 # while the walls barely see it - so they get a book of their own.
 ZERO_RANGE_PCT = 3.0          # strikes kept for the 0DTE table, +/- spot
 ZERO_ROWS = 8                 # rows the 0DTE table shows
+# During regular hours (09:30-16:00 ET) the table shows only strikes carrying
+# real flow: at least this share of the LARGEST strike's flow, today's or the
+# last window's. Values under it show as a dash. A strike with a sliver of
+# volume beside a wall reads as confirmation it is not. Scale-free, so the
+# same rule serves SPX, QQQ and GLD. Outside RTH the table is unfiltered.
+ZERO_MIN_REL = 0.25
 WALL_COUNT = 10              # default walls per side; instruments override
                              # it with wall_count. GC runs a shorter list:
                              # gold call open interest genuinely sits far out
@@ -1256,7 +1262,7 @@ def zero_dte(contracts, spot, ref_spot, book_date):
     return out
 
 
-def zero_recent(syms, previous, previous_generated):
+def zero_recent(syms, previous, previous_generated, rth=False):
     """Add the last window's 0DTE flow and pick the rows the table shows.
 
     The window is this snapshot against the previous one, same session only.
@@ -1292,25 +1298,41 @@ def zero_recent(syms, previous, previous_generated):
         flow_net = {k: d[2] - d[3] for k, d in cur.items()}
         gex_net = {k: d[0] - d[1] for k, d in cur.items()}
         lead = recent and any(v[0] for v in recent.values())
-        by_flow = sorted(cur, key=lambda k: abs(recent[k][0]) if lead
-                         else abs(flow_net[k]), reverse=True)
-        pick = by_flow[:ZERO_ROWS - 3]
-        for k in sorted(cur, key=lambda k: abs(gex_net[k]), reverse=True):
-            if len(pick) >= ZERO_ROWS:
-                break
-            if k not in pick:
-                pick.append(k)
+        top_f = max((abs(v) for v in flow_net.values()), default=0.0)
+        top_r = max((abs(v[0]) for v in recent.values()), default=0.0) if recent else 0.0
+        big_f = lambda k: top_f > 0 and abs(flow_net[k]) >= ZERO_MIN_REL * top_f
+        big_r = lambda k: top_r > 0 and k in recent and abs(recent[k][0]) >= ZERO_MIN_REL * top_r
+        if rth:
+            # Only strikes with real flow, largest first; no open-interest fill.
+            keep = [k for k in cur if big_f(k) or big_r(k)]
+            score = lambda k: max(abs(flow_net[k]) / top_f if top_f else 0.0,
+                                  abs(recent[k][0]) / top_r if (top_r and k in recent) else 0.0)
+            pick = sorted(keep, key=score, reverse=True)[:ZERO_ROWS]
+            z["filter"] = {"rel": ZERO_MIN_REL, "shown": len(pick),
+                           "hidden": sum(1 for k in cur if flow_net[k] or (k in recent and recent[k][0])) - len(pick)}
+        else:
+            by_flow = sorted(cur, key=lambda k: abs(recent[k][0]) if lead
+                             else abs(flow_net[k]), reverse=True)
+            pick = by_flow[:ZERO_ROWS - 3]
+            for k in sorted(cur, key=lambda k: abs(gex_net[k]), reverse=True):
+                if len(pick) >= ZERO_ROWS:
+                    break
+                if k not in pick:
+                    pick.append(k)
         rows = []
         for k in sorted(pick, key=float, reverse=True):
             d = cur[k]
             vol_k = d[4] + d[5]
+            show_f = not rth or big_f(k)
+            show_r = k in recent and (not rth or big_r(k))
             rows.append({
                 "strike": float(k),
                 "dist": round(100 * (float(k) - spot) / spot, 2) if spot else None,
                 "gex": gex_net[k], "gex_str": fmt_dollars(gex_net[k]),
-                "flow": flow_net[k], "flow_str": fmt_dollars(flow_net[k]),
-                "recent": recent[k][0] if k in recent else None,
-                "recent_str": fmt_dollars(recent[k][0]) if k in recent else None,
+                "flow": flow_net[k] if show_f else None,
+                "flow_str": fmt_dollars(flow_net[k]) if show_f else None,
+                "recent": recent[k][0] if show_r else None,
+                "recent_str": fmt_dollars(recent[k][0]) if show_r else None,
                 "turnover": round(vol_k / d[6], 1) if d[6] else None,
             })
         z["rows"] = rows
@@ -3220,7 +3242,7 @@ def recompute(previous=None, previous_generated=None):
     for t in threads:
         t.join()
     hold_regimes(syms, previous, previous_generated)
-    zero_recent(syms, previous, previous_generated)
+    zero_recent(syms, previous, previous_generated, rth=(status == "OPEN"))
 
     # One line covering every product, so the overlay is a single copy and a
     # single paste rather than one per chart:
@@ -3614,13 +3636,18 @@ function zeroSection(s){
     +`<td class="num">${(+r.strike).toFixed(0)}</td>`
     +`<td class="num">${r.dist>0?"+":""}${r.dist}%</td>`
     +`<td class="num ${r.gex>=0?"pos":"neg"}">${r.gex_str}</td>`
-    +`<td class="num ${r.flow>=0?"pos":"neg"}">${r.flow_str}</td>`
+    +`<td class="num ${(r.flow||0)>=0?"pos":"neg"}">${r.flow_str||"\u2014"}</td>`
     +`<td class="num ${(r.recent||0)>=0?"pos":"neg"}">${r.recent_str||"\u2014"}</td>`
     +`<td class="num">${r.turnover!=null?r.turnover+"\u00d7":"\u2014"}</td>`
     +`</tr>`).join("");
   const since = z.recent_since?`Since ${hhmm(z.recent_since)}`:"Last window";
+  const f=z.filter;
+  const filt = f ? `<div class="zsum" style="opacity:.8">Regular hours: only strikes with at least `
+    + `${Math.round(f.rel*100)}% of the largest strike's flow (today's or since the last snapshot)`
+    + (f.hidden>0?` · ${f.hidden} smaller hidden`:"") + `</div>` : "";
   return `<div class="zero"><div class="k">0DTE<b>*</b>, expiring ${z.date}</div>`
-    + `<div class="zsum">${sum}</div>`
+    + `<div class="zsum">${sum}</div>` + filt
+    + (f && !rows ? `<div class="zsum">No strike carries meaningful 0DTE flow yet.</div>` : "")
     + (rows?`<table><thead><tr><th class="num">Strike</th><th class="num">Dist</th>`
       + `<th class="num" title="Today's expiry, from yesterday's open interest">OI GEX</th>`
       + `<th class="num" title="Gamma-weighted volume traded today, netted">Flow today</th>`
