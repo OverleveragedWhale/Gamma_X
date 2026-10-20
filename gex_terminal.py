@@ -3131,16 +3131,16 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
                 # Printed beside it: the anchor steps once a session, so
                 # without the date a correct hold and a stale feed look alike.
                 "liq_anchor_date": (prior_fut["date"] if prior_fut else None),
-                # anchor,95%,99%,RI,RI 99.9% - what Best Zones parses, in
-                # order: the REALIZED-vol close bands about the 16:59 anchor
-                # (each the larger of its down/up distance), then the original
-                # 12.5%-of-margin bands (OLD_BAND_SHARE). Older copies of the
-                # script read only the first three fields and ignore the rest.
+                # anchor,RI,RI 99.9%,95%,99% - what Best Zones parses, in
+                # order: the original 12.5%-of-margin bands (OLD_BAND_SHARE)
+                # first, so a copy of the script that reads only three fields
+                # draws RI, then the REALIZED-vol close bands about the 16:59
+                # anchor (each the larger of its down/up distance).
                 "pine": (",".join(
-                    [f"{pine_anchor:.2f}"]
-                    + [f"{b['points']:.2f}" for b in vol_bands(vmodel, pine_anchor, vtick)]
-                    + [f"{mb['old']['ri']:.2f}", f"{mb['old']['x999']:.2f}"])
-                    if (pine_anchor is not None and vmodel) else None),
+                    [f"{pine_anchor:.2f}", f"{mb['old']['ri']:.2f}", f"{mb['old']['x999']:.2f}"]
+                    + ([f"{b['points']:.2f}" for b in vol_bands(vmodel, pine_anchor, vtick)]
+                       if vmodel else []))
+                    if pine_anchor is not None else None),
                 "old": {"ri": round(mb["old"]["ri"], 2),
                         "ri_tick": round_out(mb["old"]["ri"], vtick, False),
                         "ri_up": round(mb["old"]["ri_up"], 2),
@@ -3277,7 +3277,7 @@ def recompute(previous=None, previous_generated=None):
 
     # One line covering every product, so the overlay is a single copy and a
     # single paste rather than one per chart:
-    #   ES=anchor,95%,99%,RI,RI99.9;NQ=...;GC=...
+    #   ES=anchor,RI,RI99.9,95%,99%;NQ=...;GC=...
     #
     # Liquidation bands only, deliberately. The GEX levels are read off the
     # ladder on the page; the chart side that consumes this - and whatever
