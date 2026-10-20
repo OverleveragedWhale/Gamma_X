@@ -170,7 +170,8 @@ def build_symbol_map(sym, inst, calib, stamp, win="day"):
     """
     top = calib.get("top") or 2
     lv = sl.levels_of(sym, g.PLAN_BOOK, top, "nearest")
-    regime = ((sym.get("regimes") or {}).get(g.PLAN_BOOK) or {}).get("regime")
+    book = (sym.get("regimes") or {}).get(g.PLAN_BOOK) or {}
+    regime = book.get("regime")
     name = sym["symbol"]
     pts = sl.RULE_POINTS.get(name)
     rules = ((calib.get(WINDOWS[win]["rules"]) or {}).get(name) or {})
@@ -181,6 +182,7 @@ def build_symbol_map(sym, inst, calib, stamp, win="day"):
             "points": pts, "contract": (sym.get("contract") or {}).get("symbol"),
             "multiplier": inst["multiplier"], "frozen_at": stamp,
             "regime": regime, "spot_at_map": sym.get("spot"),
+            "net_gex": book.get("net_gex"), "net_gex_str": book.get("net_gex_str"),
             "basis": sym.get("gamma_basis"),
             "flip": lv.get("flip"), "walls": walls}
 
@@ -317,6 +319,31 @@ def record_session(history, session, maps, now, win="day"):
 
 
 # ------------------------------------------------------------------ run
+LIVE_GEX_MAX_AGE = timedelta(minutes=45)
+
+
+def live_gex(payload, name, now):
+    """Total gamma exposure for `name` from THIS run's snapshot, so the frozen
+    map's walls stay put while the GEX beside them moves through the session.
+    None when the snapshot is stale or its greeks are held from an earlier
+    run - an old figure labelled as current is worse than none."""
+    stamp = (payload.get("generated") or "").replace(" ET", "")
+    try:
+        at = datetime.strptime(stamp[:16], "%Y-%m-%d %H:%M")
+    except ValueError:
+        return None
+    if not timedelta(0) <= now - at <= LIVE_GEX_MAX_AGE:
+        return None
+    sym = next((x for x in payload.get("symbols") or [] if x.get("symbol") == name), None)
+    if not (sym and sym.get("ok")) or sym.get("regimes_from"):
+        return None
+    book = (sym.get("regimes") or {}).get(g.PLAN_BOOK) or {}
+    if book.get("net_gex") is None:
+        return None
+    return {"net_gex": book["net_gex"], "net_gex_str": book.get("net_gex_str"),
+            "regime": book.get("regime"), "flip": book.get("flip"), "at": stamp[11:16]}
+
+
 def step_window(win, ws, history, payload, calib, insts, now):
     """Advance one session window by one run. Returns (window, history)."""
     spec = WINDOWS[win]
@@ -354,6 +381,8 @@ def step_window(win, ws, history, payload, calib, insts, now):
         day = datetime.fromisoformat(session).date()
         for name, smap in maps.items():
             entry = {"symbol": name, "map": smap, "events": []}
+            if not session_over:
+                entry["live_gex"] = live_gex(payload, name, now)
             try:
                 bars = session_bars(smap["contract"], day, now,
                                     map_start(win, smap), win)
@@ -806,6 +835,17 @@ function daySweeps(d, s){
     + `<div class="scroll"><table><thead><tr><th>Level</th><th>Trade</th><th class="num">Price</th><th class="num">From last</th><th>Gamma confluence</th></tr></thead><tbody>${lv}</tbody></table></div>`;
 }
 
+// Walls and flip stay as frozen; total GEX is this run's, so a session that
+// has swung through zero shows it. Rules keep the frozen regime.
+function gexNow(s){
+  const m = s.map||{}, L = s.live_gex;
+  const atMap = m.net_gex_str ? ` (${esc(m.net_gex_str)} at map)` : "";
+  if(!L) return m.net_gex_str ? ` · net GEX ${esc(m.net_gex_str)} at map` : "";
+  const flipped = L.regime && m.regime && L.regime!==m.regime;
+  return ` · net GEX <b style="color:var(--ink)">${esc(L.net_gex_str)}</b> at ${esc(L.at)}${atMap}`
+    + (flipped ? ` ${chip(`now ${L.regime} gamma · rules use ${m.regime}`, L.regime==="negative"?"g-neg":"g-pos")}` : "");
+}
+
 function pineBox(str, what){
   if(!str) return "";
   return `<div class="panel"><div class="k">TradingView · GX Session Sweeps → Gamma map string (${esc(what)})</div>`
@@ -887,6 +927,7 @@ function renderSetups(d, win){
       + ` ${regimeChip(m.regime)}`
       + (m.basis==="live" ? ` ${chip("gamma at live price")}` : "")
       + `<span class="sub">map frozen ${esc(m.frozen_at)} ET · flip ${fx(m.flip)}`
+      + gexNow(s)
       + (s.last!=null?` · last ${fx(s.last)} (${esc(s.bars_to)} bar)`:"")+`</span></div>`
       + (s.error?`<div class="err">${esc(s.error)}</div>`:"");
     html += (evening ? "" : daySweeps(d, s));
