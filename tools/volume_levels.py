@@ -175,6 +175,50 @@ HEAD = ("| test | sessions | level hits at 1.00 | score at 1.00 | edge vs placeb
 
 
 # ------------------------------------------------------------- tests
+YAHOO = ("https://query1.finance.yahoo.com/v8/finance/chart/"
+         "{sym}?range=60d&interval=5m&includePrePost=true")
+
+
+def yahoo_rows(series):
+    """~60 days of 5-minute bars with volume, ET (continuous front month)."""
+    import json as _json
+    from datetime import timezone
+    import gex_terminal as g
+    res = _json.loads(g.http_get(YAHOO.format(sym=series)))["chart"]["result"][0]
+    q = res["indicators"]["quote"][0]
+    out = []
+    for i, ts in enumerate(res.get("timestamp") or []):
+        hi, lo, cl, v = q["high"][i], q["low"][i], q["close"][i], q["volume"][i]
+        if None in (hi, lo, cl):
+            continue
+        t = datetime.fromtimestamp(ts, timezone.utc).astimezone(mb.ET).replace(tzinfo=None)
+        out.append((t, float(hi), float(lo), float(cl), float(v or 0)))
+    return sorted(out)
+
+
+def test_ri_now(L):
+    """Our RI (config.ini margin / multiplier / 8, the terminal's 'RI') on
+    Yahoo's last ~60 days. Margins were near-constant over the window
+    (config history: ES 24.8-24.9k, NQ 42.3-42.7k average)."""
+    import gex_terminal as g
+    cfg = g.load_margins()
+    inst = {i["future"]: i for i in g.INSTRUMENTS}
+    L += ["## Test 1b - this terminal's RI (margin / point value / 8), last ~60 days", "",
+          "Yahoo continuous front month with volume. Same score and placebo.", "", HEAD]
+    for sym in ("ES", "NQ"):
+        ri = g.margin_buffer(inst[sym], 1, cfg)["old"]["ri"]
+        rows = yahoo_rows(f"{sym}=F")
+        w = HALF_W[sym]
+        for rth in (False, True):
+            sess = build(rows, rth)
+            for which, an in ((1, "16:00 close"), (2, "17:00 last bar")):
+                r = summarize(ladder_scores(sess, lambda i, s: [k * s * ri for k in MULTS], w, which=which))
+                L.append(f"| {sym} RI {ri:.2f} · {'RTH' if rth else 'full session'} profile · {an} | {fmt(r)} |")
+                if not rth and which == 1:
+                    L.append(f"| {sym} curve (full, 16:00) | {curve(r['mean'])} | | | | | |")
+    L.append("")
+
+
 def test_ri(L):
     L += ["## Test 1 - published RI multiples, H26 contract period", "",
           "Edge = score at s=1.00 minus the mean score of the same ladder at scales 0.50-0.90 and "
@@ -199,15 +243,17 @@ def test_ri(L):
     L.append("")
 
 
-def test_bands(L, years):
+def test_bands(L, years, source="massive"):
     import band_coverage as bc
     import gex_terminal as g
     labels = (("90%", 0.90), ("95%", 0.95), ("99%", 0.99))
-    L += ["## Test 2 - realized-vol band edges, continuous front month", "",
+    L += [f"## Test 2{'b' if source == 'yahoo' else ''} - realized-vol band edges, continuous front month"
+          + (" (Yahoo, last ~60 days)" if source == "yahoo" else ""), "",
           "Band forecast at each prior close from the cash index (EWMA x fat-tail quantile), "
           "drawn about the prior session's last bar. Same score and placebo as test 1.", "", HEAD]
     for sym, idx in (("ES", "^GSPC"), ("NQ", "^NDX")):
-        rows = mb.continuous(sym, date.today() - timedelta(days=int(years * 365)), with_volume=True)
+        rows = (yahoo_rows(f"{sym}=F") if source == "yahoo" else
+                mb.continuous(sym, date.today() - timedelta(days=int(years * 365)), with_volume=True))
         sess = build(rows, rth=False)
         # walk-forward band fractions by session date
         old = g.BAND_LEVELS
@@ -234,14 +280,16 @@ def main():
     ap.add_argument("--out", default="volume_levels.md")
     ap.add_argument("--years", type=float, default=float(os.environ.get("BACKTEST_YEARS", "2") or 2))
     a = ap.parse_args()
-    if not mb.enabled():
-        print("MASSIVE_API_KEY is not set")
-        return 1
     L = ["# Volume at RI multiples and band edges", "",
          f"Run {datetime.now():%Y-%m-%d %H:%M}. Score = log(volume density within ±w of the level / "
          f"density 2w-5w either side); w = {HALF_W['ES']} pts ES, {HALF_W['NQ']} pts NQ. "
          "Curve columns: mean score by scale.", ""]
-    for fn in (test_ri, lambda L: test_bands(L, a.years)):
+    tests = [test_ri_now, lambda L: test_bands(L, a.years, "yahoo")]
+    if mb.enabled():
+        tests += [test_ri, lambda L: test_bands(L, a.years)]
+    else:
+        L += ["*MASSIVE_API_KEY not set: tests 1 (published H26 RI) and 2 (bands over 2 years) skipped.*", ""]
+    for fn in tests:
         try:
             fn(L)
         except Exception as exc:          # one test failing should not lose the other
