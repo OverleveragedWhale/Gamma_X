@@ -131,6 +131,12 @@ MARGIN_COVERAGE = 0.99
 # margins were $23,500 / $33,800 (unverified). Best Zones draws RI multiples
 # off it. Up/down legs averaged, as before.
 OLD_BAND_SHARE = 0.125
+# RI margin scale (CN, 2026-10-21): the full-size margin is grossed up for the
+# smaller contracts on the same index - ES/NQ by 11% (Micro 1/10 + E-nano
+# 1/100), GC by 10% (Micro gold only; no E-nano gold). So
+#     RI = margin x factor / multiplier / 8
+# Override per product in config.ini [margins] as RI_FACTOR_ES etc.
+RI_MARGIN_FACTOR = {"ES": 1.11, "NQ": 1.11, "GC": 1.10}
 MARGIN_MPOR_DAYS = 1.0
 LIQ_LEVELS = (("95%", 1.9600), ("99%", 2.5758))  # label -> two-sided normal quantile
 # Micro contracts: same prices, a tenth of the point value. Their margin comes
@@ -2379,6 +2385,12 @@ def margin_buffer(inst, idx_close, margins_cfg):
     # the DOWN leg. The single symmetric distance the TradingView paste
     # carries is their average.
     sig_up, sig_dn = up / mult / scale, down / mult / scale
+    rf = RI_MARGIN_FACTOR.get(fut, 1.0)
+    try:
+        if hasattr(margins_cfg, "get") and margins_cfg.get(f"ri_factor_{fut.lower()}"):
+            rf = float(margins_cfg.get(f"ri_factor_{fut.lower()}"))
+    except (TypeError, ValueError):
+        pass
     sig = (sig_up + sig_dn) / 2.0
     liq = [{"label": label, "z": z,
             "points": z * sig, "points_up": z * sig_up, "points_down": z * sig_dn}
@@ -2390,10 +2402,11 @@ def margin_buffer(inst, idx_close, margins_cfg):
             "coverage": cov, "mpor_days": mpor, "z_cover": round(z_cover, 4),
             "sigma_points": sig, "sigma_up": sig_up, "sigma_down": sig_dn,
             "liq": liq,
-            "old": {"ri": avg / mult * OLD_BAND_SHARE,
-                    "ri_up": up / mult * OLD_BAND_SHARE,
-                    "ri_down": down / mult * OLD_BAND_SHARE,
-                    "x999": avg / mult * OLD_BAND_SHARE * Z_999 / Z_99}}
+            "old": {"ri": avg * rf / mult * OLD_BAND_SHARE,
+                    "ri_up": up * rf / mult * OLD_BAND_SHARE,
+                    "ri_down": down * rf / mult * OLD_BAND_SHARE,
+                    "x999": avg * rf / mult * OLD_BAND_SHARE * Z_999 / Z_99,
+                    "factor": rf}}
 
 
 def micro_margin(inst, margins_cfg, mb):
@@ -3145,7 +3158,8 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
                         "ri_tick": round_out(mb["old"]["ri"], vtick, False),
                         "ri_up": round(mb["old"]["ri_up"], 2),
                         "ri_down": round(mb["old"]["ri_down"], 2),
-                        "x999": round(mb["old"]["x999"], 2)},
+                        "x999": round(mb["old"]["x999"], 2),
+                        "factor": mb["old"]["factor"]},
                 "vol_model": ({"method": vmodel["method"], "note": vnote,
                                "sigma_pct": round(100 * vmodel["sigma"], 3),
                                "n": vmodel["n"], "source": vmodel.get("source"),
@@ -3813,7 +3827,7 @@ function panel(s){
     }
     if(m.old&&m.old.ri){
       const a=m.pine_anchor!=null?m.pine_anchor:m.liq_anchor;
-      marg+=`<div class="mrow"><span>original bands (12.5% of margin · Rocket Scooter RI method): `
+      marg+=`<div class="mrow"><span>original bands (12.5% of margin${m.old.factor&&m.old.factor!==1?` × ${m.old.factor} for micro/nano`:""} · Rocket Scooter RI method): `
           +`<b style="color:var(--brass)">RI ±${m.old.ri}</b> (${(a-m.old.ri).toFixed(2)}–${(a+m.old.ri).toFixed(2)}) · `
           +`99.9% ±${m.old.x999} · up/down legs ${m.old.ri_up} / ${m.old.ri_down}</span></div>`;
     }
