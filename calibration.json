@@ -7,16 +7,16 @@
   "stop_pctile": 75,
   "entry": "09:50",
   "close": "16:00",
-  "sessions": 60,
-  "days": 20,
+  "sessions": 75,
+  "days": 25,
   "from": "2026-09-21",
-  "to": "2026-10-16",
-  "scored_at": "2026-10-17",
+  "to": "2026-10-23",
+  "scored_at": "2026-10-24",
   "symbols": {
     "ES": {
       "call": {
-        "sessions": 20,
-        "n_levels": 30,
+        "sessions": 25,
+        "n_levels": 40,
         "fade": {
           "n": 8,
           "stop_pct": 0.1,
@@ -58,7 +58,7 @@
               "exp_plan": 0.0
             }
           },
-          "rate": 0.267
+          "rate": 0.2
         },
         "breakout": {
           "n": 7,
@@ -87,7 +87,7 @@
           "win_plan": 0.714,
           "wall": {
             "n": 7,
-            "exp": 0.233,
+            "exp": 0.228,
             "win": 0.286,
             "avg_target_r": 4.79
           },
@@ -101,67 +101,67 @@
               "exp_plan": 0.5
             }
           },
-          "rate": 0.233
+          "rate": 0.175
         }
       },
       "put": {
-        "sessions": 20,
-        "n_levels": 35,
+        "sessions": 25,
+        "n_levels": 42,
         "fade": {
-          "n": 13,
-          "stop_pct": 0.315,
+          "n": 17,
+          "stop_pct": 0.269,
           "exp": {
-            "1": -0.561,
-            "1.5": -0.522,
-            "2": -0.484
+            "1": -0.276,
+            "1.5": -0.186,
+            "2": -0.196
           },
           "win": {
-            "1": 0.077,
-            "1.5": 0.077,
-            "2": 0.077
+            "1": 0.294,
+            "1.5": 0.235,
+            "2": 0.176
           },
           "by_era": {
             "single": {
               "n": 8,
-              "exp_plan": -0.224
+              "exp_plan": -0.207
             },
             "multi": {
-              "n": 5,
-              "exp_plan": -1.0
+              "n": 9,
+              "exp_plan": -0.167
             }
           },
-          "exp_plan": -0.522,
-          "win_plan": 0.077,
+          "exp_plan": -0.186,
+          "win_plan": 0.235,
           "wall": {
-            "n": 13,
-            "exp": -0.479,
-            "win": 0.077,
-            "avg_target_r": 1.56
+            "n": 17,
+            "exp": -0.012,
+            "win": 0.235,
+            "avg_target_r": 1.9
           },
           "by_open": {
             "in": {
-              "n": 10,
-              "exp_plan": -0.379
+              "n": 12,
+              "exp_plan": -0.263
             },
             "out": {
-              "n": 3,
-              "exp_plan": -1.0
+              "n": 5,
+              "exp_plan": 0.0
             }
           },
-          "rate": 0.371
+          "rate": 0.405
         },
         "breakout": {
-          "n": 11,
-          "stop_pct": 0.176,
+          "n": 14,
+          "stop_pct": 0.133,
           "exp": {
-            "1": 0.091,
-            "1.5": 0.364,
-            "2": 0.636
+            "1": 0.143,
+            "1.5": 0.429,
+            "2": 0.286
           },
           "win": {
-            "1": 0.545,
-            "1.5": 0.545,
-            "2": 0.545
+            "1": 0.571,
+            "1.5": 0.571,
+            "2": 0.429
           },
           "by_era": {
             "single": {
@@ -169,36 +169,36 @@
               "exp_plan": 0.25
             },
             "multi": {
-              "n": 5,
-              "exp_plan": 0.5
+              "n": 8,
+              "exp_plan": 0.562
             }
           },
-          "exp_plan": 0.364,
-          "win_plan": 0.545,
+          "exp_plan": 0.429,
+          "win_plan": 0.571,
           "wall": {
-            "n": 11,
-            "exp": 0.255,
-            "win": 0.364,
-            "avg_target_r": 2.17
+            "n": 14,
+            "exp": 0.329,
+            "win": 0.357,
+            "avg_target_r": 2.66
           },
           "by_open": {
             "in": {
-              "n": 8,
+              "n": 10,
               "exp_plan": 0.25
             },
             "out": {
-              "n": 3,
-              "exp_plan": 0.667
+              "n": 4,
+              "exp_plan": 0.875
             }
           },
-          "rate": 0.314
+          "rate": 0.333
         }
       }
     },
     "GC": {
       "call": {
-        "sessions": 20,
-        "n_levels": 35,
+        "sessions": 25,
+        "n_levels": 45,
         "fade": {
           "n": 7,
           "stop_pct": 0.172,
@@ -236,15 +236,15 @@
               "exp_plan": 0.938
             }
           },
-          "rate": 0.2
+          "rate": 0.156
         },
         "breakout": {
           "n": 6,
           "stop_pct": 0.346,
           "exp": {
-            "1": -0.321,
-            "1.5": -0.474,
-            "2": -0.474
+            "1": -0.319,
+            "1.5": -0.472,
+            "2": -0.472
           },
           "win": {
             "1": 0.167,
@@ -254,59 +254,59 @@
           "by_era": {
             "single": {
               "n": 6,
-              "exp_plan": -0.474
+              "exp_plan": -0.472
             }
           },
-          "exp_plan": -0.474,
+          "exp_plan": -0.472,
           "win_plan": 0.0,
           "wall": {
             "n": 6,
-            "exp": -0.474,
+            "exp": -0.472,
             "win": 0.0,
             "avg_target_r": 1.84
           },
           "by_open": {
             "in": {
               "n": 3,
-              "exp_plan": -0.809
+              "exp_plan": -0.804
             },
             "out": {
               "n": 3,
               "exp_plan": -0.14
             }
           },
-          "rate": 0.171
+          "rate": 0.133
         }
       },
       "put": {
-        "sessions": 20,
-        "n_levels": 33,
+        "sessions": 25,
+        "n_levels": 38,
         "fade": {
-          "n": 12,
+          "n": 13,
           "stop_pct": 0.213,
           "exp": {
-            "1": 0.333,
-            "1.5": 0.588,
-            "2": 0.593
+            "1": 0.385,
+            "1.5": 0.656,
+            "2": 0.701
           },
           "win": {
-            "1": 0.667,
-            "1.5": 0.583,
-            "2": 0.417
+            "1": 0.692,
+            "1.5": 0.615,
+            "2": 0.462
           },
           "by_era": {
             "single": {
-              "n": 12,
-              "exp_plan": 0.588
+              "n": 13,
+              "exp_plan": 0.656
             }
           },
-          "exp_plan": 0.588,
-          "win_plan": 0.583,
+          "exp_plan": 0.656,
+          "win_plan": 0.615,
           "wall": {
-            "n": 12,
-            "exp": 0.999,
-            "win": 0.5,
-            "avg_target_r": 4.24
+            "n": 13,
+            "exp": 0.841,
+            "win": 0.462,
+            "avg_target_r": 4.2
           },
           "by_open": {
             "in": {
@@ -314,38 +314,38 @@
               "exp_plan": 0.667
             },
             "out": {
-              "n": 6,
-              "exp_plan": 0.509
+              "n": 7,
+              "exp_plan": 0.647
             }
           },
-          "rate": 0.364
+          "rate": 0.342
         },
         "breakout": {
-          "n": 10,
+          "n": 11,
           "stop_pct": 0.19,
           "exp": {
-            "1": -0.169,
-            "1.5": -0.219,
-            "2": -0.205
+            "1": -0.061,
+            "1.5": -0.061,
+            "2": -0.0
           },
           "win": {
-            "1": 0.4,
-            "1.5": 0.3,
-            "2": 0.2
+            "1": 0.455,
+            "1.5": 0.364,
+            "2": 0.273
           },
           "by_era": {
             "single": {
-              "n": 10,
-              "exp_plan": -0.219
+              "n": 11,
+              "exp_plan": -0.061
             }
           },
-          "exp_plan": -0.219,
-          "win_plan": 0.3,
+          "exp_plan": -0.061,
+          "win_plan": 0.364,
           "wall": {
-            "n": 10,
-            "exp": -0.283,
-            "win": 0.2,
-            "avg_target_r": 2.86
+            "n": 11,
+            "exp": -0.071,
+            "win": 0.182,
+            "avg_target_r": 3.23
           },
           "by_open": {
             "in": {
@@ -353,30 +353,30 @@
               "exp_plan": -0.375
             },
             "out": {
-              "n": 6,
-              "exp_plan": -0.115
+              "n": 7,
+              "exp_plan": 0.119
             }
           },
-          "rate": 0.303
+          "rate": 0.289
         }
       }
     },
     "NQ": {
       "call": {
-        "sessions": 20,
-        "n_levels": 35,
+        "sessions": 25,
+        "n_levels": 44,
         "fade": {
-          "n": 13,
+          "n": 16,
           "stop_pct": 0.25,
           "exp": {
-            "1": -0.126,
-            "1.5": -0.164,
-            "2": -0.049
+            "1": -0.04,
+            "1.5": -0.009,
+            "2": 0.148
           },
           "win": {
-            "1": 0.308,
-            "1.5": 0.231,
-            "2": 0.231
+            "1": 0.375,
+            "1.5": 0.312,
+            "2": 0.312
           },
           "by_era": {
             "single": {
@@ -384,42 +384,42 @@
               "exp_plan": -0.062
             },
             "multi": {
-              "n": 5,
-              "exp_plan": -0.328
+              "n": 8,
+              "exp_plan": 0.045
             }
           },
-          "exp_plan": -0.164,
-          "win_plan": 0.231,
+          "exp_plan": -0.009,
+          "win_plan": 0.312,
           "wall": {
-            "n": 13,
-            "exp": 0.096,
-            "win": 0.231,
-            "avg_target_r": 2.22
+            "n": 16,
+            "exp": 0.16,
+            "win": 0.312,
+            "avg_target_r": 2.08
           },
           "by_open": {
             "out": {
-              "n": 7,
-              "exp_plan": -0.685
+              "n": 8,
+              "exp_plan": -0.411
             },
             "in": {
-              "n": 5,
-              "exp_plan": 0.231
+              "n": 7,
+              "exp_plan": 0.236
             }
           },
-          "rate": 0.371
+          "rate": 0.364
         },
         "breakout": {
-          "n": 12,
+          "n": 14,
           "stop_pct": 0.179,
           "exp": {
-            "1": 0.344,
-            "1.5": 0.219,
-            "2": 0.178
+            "1": 0.294,
+            "1.5": 0.223,
+            "2": 0.008
           },
           "win": {
-            "1": 0.583,
-            "1.5": 0.417,
-            "2": 0.333
+            "1": 0.571,
+            "1.5": 0.429,
+            "2": 0.286
           },
           "by_era": {
             "single": {
@@ -427,46 +427,46 @@
               "exp_plan": 0.071
             },
             "multi": {
-              "n": 5,
-              "exp_plan": 0.426
+              "n": 7,
+              "exp_plan": 0.374
             }
           },
-          "exp_plan": 0.219,
-          "win_plan": 0.417,
+          "exp_plan": 0.223,
+          "win_plan": 0.429,
           "wall": {
-            "n": 11,
-            "exp": 0.081,
-            "win": 0.364,
-            "avg_target_r": 2.27
+            "n": 13,
+            "exp": 0.075,
+            "win": 0.385,
+            "avg_target_r": 2.1
           },
           "by_open": {
             "out": {
               "n": 7,
-              "exp_plan": 0.622
+              "exp_plan": 0.62
             },
             "in": {
-              "n": 5,
-              "exp_plan": -0.345
+              "n": 7,
+              "exp_plan": -0.174
             }
           },
-          "rate": 0.343
+          "rate": 0.318
         }
       },
       "put": {
-        "sessions": 20,
-        "n_levels": 32,
+        "sessions": 25,
+        "n_levels": 38,
         "fade": {
-          "n": 10,
-          "stop_pct": 0.242,
+          "n": 12,
+          "stop_pct": 0.237,
           "exp": {
-            "1": 0.16,
-            "1.5": 0.369,
-            "2": 0.48
+            "1": 0.135,
+            "1.5": 0.385,
+            "2": 0.563
           },
           "win": {
             "1": 0.5,
-            "1.5": 0.4,
-            "2": 0.3
+            "1.5": 0.5,
+            "2": 0.417
           },
           "by_era": {
             "single": {
@@ -474,42 +474,42 @@
               "exp_plan": 0.875
             },
             "multi": {
-              "n": 6,
-              "exp_plan": 0.031
+              "n": 8,
+              "exp_plan": 0.14
             }
           },
-          "exp_plan": 0.369,
-          "win_plan": 0.4,
+          "exp_plan": 0.385,
+          "win_plan": 0.5,
           "wall": {
-            "n": 10,
-            "exp": 0.434,
-            "win": 0.3,
-            "avg_target_r": 1.68
+            "n": 12,
+            "exp": 0.441,
+            "win": 0.417,
+            "avg_target_r": 1.67
           },
           "by_open": {
             "in": {
               "n": 7,
-              "exp_plan": 0.658
+              "exp_plan": 0.66
             },
             "out": {
-              "n": 3,
-              "exp_plan": -0.305
+              "n": 5,
+              "exp_plan": 0.0
             }
           },
-          "rate": 0.312
+          "rate": 0.316
         },
         "breakout": {
-          "n": 9,
-          "stop_pct": 0.202,
+          "n": 10,
+          "stop_pct": 0.209,
           "exp": {
-            "1": -0.303,
-            "1.5": -0.137,
-            "2": -0.249
+            "1": -0.372,
+            "1.5": -0.222,
+            "2": -0.322
           },
           "win": {
-            "1": 0.333,
-            "1.5": 0.333,
-            "2": 0.222
+            "1": 0.3,
+            "1.5": 0.3,
+            "2": 0.2
           },
           "by_era": {
             "single": {
@@ -517,29 +517,29 @@
               "exp_plan": -0.167
             },
             "multi": {
-              "n": 6,
-              "exp_plan": -0.122
+              "n": 7,
+              "exp_plan": -0.245
             }
           },
-          "exp_plan": -0.137,
-          "win_plan": 0.333,
+          "exp_plan": -0.222,
+          "win_plan": 0.3,
           "wall": {
-            "n": 9,
-            "exp": -0.467,
-            "win": 0.111,
-            "avg_target_r": 2.04
+            "n": 10,
+            "exp": -0.529,
+            "win": 0.1,
+            "avg_target_r": 1.88
           },
           "by_open": {
             "in": {
               "n": 6,
-              "exp_plan": -0.122
+              "exp_plan": -0.12
             },
             "out": {
-              "n": 3,
-              "exp_plan": -0.167
+              "n": 4,
+              "exp_plan": -0.375
             }
           },
-          "rate": 0.281
+          "rate": 0.263
         }
       }
     }
@@ -549,76 +549,76 @@
       "range": {
         "all": {
           "all": {
-            "n": 20,
-            "exp_plan": -0.074
+            "n": 25,
+            "exp_plan": 0.04
           }
         },
         "open_vs_flip": {
           "above": {
             "n": 14,
-            "exp_plan": 0.324
+            "exp_plan": 0.5
           },
           "below": {
-            "n": 6,
-            "exp_plan": -1.0
+            "n": 11,
+            "exp_plan": -0.545
           }
         },
         "regime": {
           "positive": {
             "n": 16,
-            "exp_plan": 0.084
+            "exp_plan": 0.24
           },
           "negative": {
-            "n": 4,
-            "exp_plan": -0.705
+            "n": 9,
+            "exp_plan": -0.316
           }
         },
         "wall_in_path": {
           "clear": {
-            "n": 8,
-            "exp_plan": -0.008
+            "n": 9,
+            "exp_plan": 0.436
           },
           "blocked": {
-            "n": 12,
-            "exp_plan": -0.118
+            "n": 16,
+            "exp_plan": -0.183
           }
         }
       },
       "mid": {
         "all": {
           "all": {
-            "n": 20,
-            "exp_plan": 0.0
+            "n": 25,
+            "exp_plan": 0.1
           }
         },
         "open_vs_flip": {
           "above": {
             "n": 14,
-            "exp_plan": 0.071
+            "exp_plan": 0.25
           },
           "below": {
-            "n": 6,
-            "exp_plan": -0.167
+            "n": 11,
+            "exp_plan": -0.091
           }
         },
         "regime": {
           "positive": {
             "n": 16,
-            "exp_plan": -0.062
+            "exp_plan": 0.094
           },
           "negative": {
-            "n": 4,
-            "exp_plan": 0.25
+            "n": 9,
+            "exp_plan": 0.111
           }
         },
         "wall_in_path": {
           "clear": {
-            "n": 8,
-            "exp_plan": 0.25
+            "n": 9,
+            "exp_plan": 0.667
           },
           "blocked": {
-            "n": 12,
-            "exp_plan": -0.167
+            "n": 16,
+            "exp_plan": -0.219
           }
         }
       }
@@ -627,76 +627,76 @@
       "range": {
         "all": {
           "all": {
-            "n": 20,
-            "exp_plan": -0.119
+            "n": 25,
+            "exp_plan": 0.036
           }
         },
         "open_vs_flip": {
           "above": {
-            "n": 5,
-            "exp_plan": 0.105
+            "n": 7,
+            "exp_plan": -0.02
           },
           "below": {
-            "n": 15,
-            "exp_plan": -0.194
+            "n": 18,
+            "exp_plan": 0.058
           }
         },
         "regime": {
           "positive": {
-            "n": 10,
-            "exp_plan": 0.19
+            "n": 12,
+            "exp_plan": 0.103
           },
           "negative": {
-            "n": 10,
-            "exp_plan": -0.428
+            "n": 13,
+            "exp_plan": -0.026
           }
         },
         "wall_in_path": {
           "clear": {
-            "n": 6,
-            "exp_plan": -0.525
+            "n": 10,
+            "exp_plan": -0.081
           },
           "blocked": {
-            "n": 14,
-            "exp_plan": 0.055
+            "n": 15,
+            "exp_plan": 0.114
           }
         }
       },
       "mid": {
         "all": {
           "all": {
-            "n": 20,
-            "exp_plan": -0.198
+            "n": 25,
+            "exp_plan": 0.007
           }
         },
         "open_vs_flip": {
           "above": {
-            "n": 5,
-            "exp_plan": 0.0
+            "n": 7,
+            "exp_plan": -0.052
           },
           "below": {
-            "n": 15,
-            "exp_plan": -0.264
+            "n": 18,
+            "exp_plan": 0.03
           }
         },
         "regime": {
           "positive": {
-            "n": 10,
-            "exp_plan": -0.146
+            "n": 12,
+            "exp_plan": -0.152
           },
           "negative": {
-            "n": 10,
-            "exp_plan": -0.25
+            "n": 13,
+            "exp_plan": 0.154
           }
         },
         "wall_in_path": {
           "clear": {
-            "n": 6,
-            "exp_plan": -0.167
+            "n": 10,
+            "exp_plan": 0.163
           },
           "blocked": {
-            "n": 14,
-            "exp_plan": -0.212
+            "n": 15,
+            "exp_plan": -0.097
           }
         }
       }
@@ -705,8 +705,8 @@
       "range": {
         "all": {
           "all": {
-            "n": 20,
-            "exp_plan": -0.047
+            "n": 25,
+            "exp_plan": 0.012
           }
         },
         "open_vs_flip": {
@@ -715,8 +715,8 @@
             "exp_plan": 0.312
           },
           "below": {
-            "n": 13,
-            "exp_plan": -0.24
+            "n": 18,
+            "exp_plan": -0.104
           }
         },
         "regime": {
@@ -725,14 +725,14 @@
             "exp_plan": 0.333
           },
           "negative": {
-            "n": 9,
-            "exp_plan": -0.511
+            "n": 14,
+            "exp_plan": -0.239
           }
         },
         "wall_in_path": {
           "blocked": {
-            "n": 15,
-            "exp_plan": -0.176
+            "n": 20,
+            "exp_plan": -0.069
           },
           "clear": {
             "n": 5,
@@ -743,38 +743,38 @@
       "mid": {
         "all": {
           "all": {
-            "n": 20,
-            "exp_plan": -0.133
+            "n": 25,
+            "exp_plan": 0.094
           }
         },
         "open_vs_flip": {
           "above": {
             "n": 7,
-            "exp_plan": 0.407
+            "exp_plan": 0.406
           },
           "below": {
-            "n": 13,
-            "exp_plan": -0.423
+            "n": 18,
+            "exp_plan": -0.028
           }
         },
         "regime": {
           "positive": {
             "n": 11,
-            "exp_plan": 0.35
+            "exp_plan": 0.349
           },
           "negative": {
-            "n": 9,
-            "exp_plan": -0.722
+            "n": 14,
+            "exp_plan": -0.107
           }
         },
         "wall_in_path": {
           "blocked": {
-            "n": 15,
-            "exp_plan": -0.306
+            "n": 20,
+            "exp_plan": 0.021
           },
           "clear": {
             "n": 5,
-            "exp_plan": 0.387
+            "exp_plan": 0.386
           }
         }
       }
@@ -783,76 +783,76 @@
       "range": {
         "all": {
           "all": {
-            "n": 60,
-            "exp_plan": -0.08
+            "n": 75,
+            "exp_plan": 0.029
           }
         },
         "open_vs_flip": {
           "above": {
-            "n": 26,
-            "exp_plan": 0.278
+            "n": 28,
+            "exp_plan": 0.323
           },
           "below": {
-            "n": 34,
-            "exp_plan": -0.354
+            "n": 47,
+            "exp_plan": -0.145
           }
         },
         "regime": {
           "positive": {
-            "n": 37,
-            "exp_plan": 0.187
+            "n": 39,
+            "exp_plan": 0.224
           },
           "negative": {
-            "n": 23,
-            "exp_plan": -0.508
+            "n": 36,
+            "exp_plan": -0.181
           }
         },
         "wall_in_path": {
           "clear": {
-            "n": 19,
-            "exp_plan": -0.08
+            "n": 24,
+            "exp_plan": 0.2
           },
           "blocked": {
-            "n": 41,
-            "exp_plan": -0.08
+            "n": 51,
+            "exp_plan": -0.051
           }
         }
       },
       "mid": {
         "all": {
           "all": {
-            "n": 60,
-            "exp_plan": -0.11
+            "n": 75,
+            "exp_plan": 0.067
           }
         },
         "open_vs_flip": {
           "above": {
-            "n": 26,
-            "exp_plan": 0.148
+            "n": 28,
+            "exp_plan": 0.213
           },
           "below": {
-            "n": 34,
-            "exp_plan": -0.308
+            "n": 47,
+            "exp_plan": -0.02
           }
         },
         "regime": {
           "positive": {
-            "n": 37,
-            "exp_plan": 0.037
+            "n": 39,
+            "exp_plan": 0.09
           },
           "negative": {
-            "n": 23,
-            "exp_plan": -0.348
+            "n": 36,
+            "exp_plan": 0.042
           }
         },
         "wall_in_path": {
           "clear": {
-            "n": 19,
-            "exp_plan": 0.154
+            "n": 24,
+            "exp_plan": 0.399
           },
           "blocked": {
-            "n": 41,
-            "exp_plan": -0.233
+            "n": 51,
+            "exp_plan": -0.089
           }
         }
       }
@@ -863,9 +863,9 @@
       "points": 10.0,
       "fade": {
         "all": {
-          "n": 21,
-          "won": 6,
-          "exp": -0.067
+          "n": 25,
+          "won": 8,
+          "exp": -0.016
         },
         "positive": {
           "n": 16,
@@ -878,21 +878,21 @@
           "exp": 0.167
         },
         "below": {
-          "n": 9,
-          "won": 1,
-          "exp": -0.378
+          "n": 13,
+          "won": 3,
+          "exp": -0.184
         },
         "negative": {
-          "n": 5,
-          "won": 0,
-          "exp": -0.6
+          "n": 9,
+          "won": 2,
+          "exp": -0.222
         }
       },
       "breakout": {
         "all": {
-          "n": 18,
-          "won": 11,
-          "exp": 0.222
+          "n": 21,
+          "won": 13,
+          "exp": 0.238
         },
         "positive": {
           "n": 13,
@@ -905,14 +905,14 @@
           "exp": 0.333
         },
         "below": {
-          "n": 9,
-          "won": 5,
-          "exp": 0.111
+          "n": 12,
+          "won": 7,
+          "exp": 0.167
         },
         "negative": {
-          "n": 5,
-          "won": 2,
-          "exp": -0.2
+          "n": 8,
+          "won": 4,
+          "exp": 0.0
         }
       }
     },
@@ -920,9 +920,9 @@
       "points": 40.0,
       "fade": {
         "all": {
-          "n": 23,
-          "won": 12,
-          "exp": 0.217
+          "n": 28,
+          "won": 14,
+          "exp": 0.214
         },
         "positive": {
           "n": 13,
@@ -935,41 +935,41 @@
           "exp": 0.111
         },
         "below": {
-          "n": 14,
-          "won": 8,
-          "exp": 0.286
+          "n": 19,
+          "won": 10,
+          "exp": 0.263
         },
         "negative": {
-          "n": 10,
-          "won": 5,
+          "n": 15,
+          "won": 7,
           "exp": 0.2
         }
       },
       "breakout": {
         "all": {
-          "n": 21,
-          "won": 10,
-          "exp": -0.015
+          "n": 24,
+          "won": 11,
+          "exp": -0.054
         },
         "positive": {
           "n": 12,
           "won": 6,
-          "exp": 0.057
+          "exp": 0.058
         },
         "above": {
           "n": 9,
           "won": 3,
-          "exp": -0.257
+          "exp": -0.256
         },
         "below": {
-          "n": 12,
-          "won": 7,
-          "exp": 0.167
+          "n": 15,
+          "won": 8,
+          "exp": 0.067
         },
         "negative": {
-          "n": 9,
-          "won": 4,
-          "exp": -0.111
+          "n": 12,
+          "won": 5,
+          "exp": -0.167
         }
       }
     },
@@ -977,56 +977,56 @@
       "points": 10.0,
       "fade": {
         "all": {
-          "n": 19,
-          "won": 9,
-          "exp": 0.355
+          "n": 20,
+          "won": 10,
+          "exp": 0.386
         },
         "positive": {
           "n": 7,
           "won": 2,
-          "exp": 0.107
+          "exp": 0.104
         },
         "above": {
           "n": 6,
           "won": 3,
-          "exp": 0.292
+          "exp": 0.288
         },
         "below": {
-          "n": 13,
-          "won": 6,
-          "exp": 0.385
+          "n": 14,
+          "won": 7,
+          "exp": 0.429
         },
         "negative": {
-          "n": 12,
-          "won": 7,
-          "exp": 0.5
+          "n": 13,
+          "won": 8,
+          "exp": 0.538
         }
       },
       "breakout": {
         "all": {
-          "n": 16,
-          "won": 3,
-          "exp": -0.504
+          "n": 17,
+          "won": 4,
+          "exp": -0.413
         },
         "positive": {
           "n": 6,
           "won": 0,
-          "exp": -0.752
+          "exp": -0.748
         },
         "above": {
           "n": 5,
           "won": 0,
-          "exp": -0.702
+          "exp": -0.698
         },
         "below": {
-          "n": 11,
-          "won": 3,
-          "exp": -0.414
+          "n": 12,
+          "won": 4,
+          "exp": -0.294
         },
         "negative": {
-          "n": 10,
-          "won": 3,
-          "exp": -0.355
+          "n": 11,
+          "won": 4,
+          "exp": -0.23
         }
       }
     }
@@ -1093,56 +1093,56 @@
       "points": 10.0,
       "fade": {
         "all": {
-          "n": 9,
-          "won": 2,
-          "exp": -0.486
+          "n": 13,
+          "won": 4,
+          "exp": -0.338
         },
         "positive": {
-          "n": 5,
-          "won": 1,
-          "exp": -0.474
+          "n": 6,
+          "won": 2,
+          "exp": -0.233
         },
         "above": {
           "n": 3,
           "won": 1,
-          "exp": -0.123
+          "exp": -0.132
         },
         "negative": {
-          "n": 4,
-          "won": 1,
-          "exp": -0.5
+          "n": 7,
+          "won": 2,
+          "exp": -0.429
         },
         "below": {
-          "n": 6,
-          "won": 1,
-          "exp": -0.667
+          "n": 10,
+          "won": 3,
+          "exp": -0.4
         }
       },
       "breakout": {
         "all": {
-          "n": 9,
-          "won": 5,
-          "exp": 0.422
+          "n": 13,
+          "won": 6,
+          "exp": 0.14
         },
         "positive": {
-          "n": 5,
+          "n": 6,
           "won": 3,
-          "exp": 0.45
+          "exp": 0.212
         },
         "above": {
           "n": 3,
           "won": 1,
-          "exp": 0.083
+          "exp": 0.092
         },
         "negative": {
-          "n": 4,
-          "won": 2,
-          "exp": 0.388
+          "n": 7,
+          "won": 3,
+          "exp": 0.079
         },
         "below": {
-          "n": 6,
-          "won": 4,
-          "exp": 0.592
+          "n": 10,
+          "won": 5,
+          "exp": 0.155
         }
       }
     },
@@ -1150,9 +1150,9 @@
       "points": 40.0,
       "fade": {
         "all": {
-          "n": 12,
-          "won": 3,
-          "exp": -0.5
+          "n": 14,
+          "won": 5,
+          "exp": -0.286
         },
         "positive": {
           "n": 7,
@@ -1165,21 +1165,21 @@
           "exp": -0.333
         },
         "below": {
-          "n": 6,
-          "won": 1,
-          "exp": -0.667
+          "n": 8,
+          "won": 3,
+          "exp": -0.25
         },
         "negative": {
-          "n": 5,
-          "won": 1,
-          "exp": -0.6
+          "n": 7,
+          "won": 3,
+          "exp": -0.143
         }
       },
       "breakout": {
         "all": {
-          "n": 12,
+          "n": 14,
           "won": 9,
-          "exp": 0.5
+          "exp": 0.286
         },
         "positive": {
           "n": 7,
@@ -1192,14 +1192,14 @@
           "exp": 0.333
         },
         "below": {
-          "n": 6,
+          "n": 8,
           "won": 5,
-          "exp": 0.667
+          "exp": 0.25
         },
         "negative": {
-          "n": 5,
+          "n": 7,
           "won": 4,
-          "exp": 0.6
+          "exp": 0.143
         }
       }
     }
