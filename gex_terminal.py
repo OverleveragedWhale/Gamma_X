@@ -204,6 +204,13 @@ YAHOO_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
 YAHOO_INTRADAY_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
                       "{sym}?range=5d&interval=5m&includePrePost=true")
 SESSION_END_HHMM = "17:00"     # CME maintenance halt; last print before it
+# The RATIO's futures leg is read at the chain's own close, 16:00 ET, not at
+# 16:59. The cash/ETF close and the future have to be one moment: on
+# 2026-10-28 NQ fell ~0.65% between 16:00 and 16:59 on after-hours earnings
+# while QQQ's close stayed at 16:00, and the 16:59 pairing took m from ~41.32
+# to 41.0086 - every converted NQ level about 220 points low. The liquidation
+# anchor keeps the 16:59 close; it is in futures terms and needs no pairing.
+RATIO_CLOSE_HHMM = "16:00"
 YAHOO_COOKIE_URL = "https://fc.yahoo.com"
 YAHOO_CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
 YAHOO_QUOTE_URL = ("https://query1.finance.yahoo.com/v7/finance/quote"
@@ -1674,7 +1681,7 @@ _SESSION_CLOSE = {}
 SESSION_CLOSE_TRIES = 3
 
 
-def session_close(sym, session_date):
+def session_close(sym, session_date, end_hhmm=SESSION_END_HHMM):
     """The 16:59 futures close for `session_date` - the session's last print.
 
     Yahoo's DAILY bar is a calendar day, 00:00 to 23:55 ET, not a trading
@@ -1686,12 +1693,12 @@ def session_close(sym, session_date):
     last bar on the session's own date before 17:00 is the close. Cached per
     session, which cannot change once the session has ended.
     """
-    key = (sym, session_date)
+    key = (sym, session_date, end_hhmm)
     if key in _SESSION_CLOSE:
         return _SESSION_CLOSE[key]
 
     for attempt in range(SESSION_CLOSE_TRIES):
-        last = _session_close_once(sym, session_date)
+        last = _session_close_once(sym, session_date, end_hhmm)
         if last is not None:
             # Successes only. A miss is a bad response, not a fact about the
             # session; caching it pinned every later caller in the same process
@@ -1708,7 +1715,7 @@ def session_close(sym, session_date):
     return None
 
 
-def _session_close_once(sym, session_date):
+def _session_close_once(sym, session_date, end_hhmm=SESSION_END_HHMM):
     """One attempt at the 16:59 print. None when the response has no bars for
     that session, which is a transient feed fault rather than an answer."""
     result = json.loads(http_get(YAHOO_INTRADAY_URL.format(sym=quote(sym))))
@@ -1723,8 +1730,8 @@ def _session_close_once(sym, session_date):
         stamp = datetime.fromtimestamp(ts + off, timezone.utc).replace(tzinfo=None)
         if stamp.date().isoformat() != session_date:
             continue
-        if stamp.strftime("%H:%M") >= SESSION_END_HHMM:
-            break                     # past the halt: the next session's tape
+        if stamp.strftime("%H:%M") >= end_hhmm:
+            break                     # past the cut-off (the halt, or 16:00)
         last = float(close)
 
     return last
@@ -2168,7 +2175,7 @@ def prior_cash_session(sym, today, rows=None):
     return prior
 
 
-def settled_close(sym, row):
+def settled_close(sym, row, end_hhmm=SESSION_END_HHMM):
     """A daily bar's close, replaced by the session's real 16:59 print.
 
     Yahoo's daily close is the 23:55 calendar-day print, which for a future is
@@ -2179,7 +2186,7 @@ def settled_close(sym, row):
     if not row:
         return None
     try:
-        close = session_close(sym, row["date"])
+        close = session_close(sym, row["date"], end_hhmm)
     except Exception:
         logging.info("intraday close unavailable for %s %s", sym, row["date"])
         close = None
@@ -2627,7 +2634,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
         # gap between two different clocks, which can be large enough for the
         # gate to reject outright. A real cash index stops printing at its own
         # close, so it stays on the daily bar.
-        idx_close = (settled_close(idx_sym, idx_prior) if idx_sym == ratio_sym
+        idx_close = (settled_close(idx_sym, idx_prior, RATIO_CLOSE_HHMM) if idx_sym == ratio_sym
                      else (idx_prior["c"] if idx_prior else None))
     except Exception:
         logging.exception("index close fetch failed for %s (%s)", future, idx_sym)
@@ -2656,12 +2663,13 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
             fut_sym = sym
             fut_completed = [r for r in fut_rows if r["date"] < today.isoformat()]
             fut_settled = settled_futures(fut_rows, now)
-            # The ratio's futures leg is the 16:59 close, not the daily bar:
-            # the bar spans the calendar day and closes on the evening reopen,
-            # which puts the overnight drift into every converted level. The
-            # chain leg is a cash
-            # close, so the two are within an hour of each other rather than
-            # eight.
+            # The ratio's futures leg is the 16:00 print (RATIO_CLOSE_HHMM),
+            # not the daily bar: the bar spans the calendar day and closes on
+            # the evening reopen, which puts the overnight drift into every
+            # converted level. It was the 16:59 close until 2026-10-29, which
+            # still left an hour of after-hours move in the ratio - 0.75% on an
+            # earnings evening. The chain leg is the 16:00 cash close, so the
+            # two are now the same moment.
             # Pin the futures leg to the chain leg's session BY DATE, not to
             # "newest completed". Both use prior_session against the same
             # `today`, but that only aligns them when both feeds have posted
@@ -2678,7 +2686,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
                                 if r["date"] <= prior["date"]), None)
             if fut_row is None:
                 fut_row = fut_completed[-1]
-            fc = settled_close(sym, fut_row)
+            fc = settled_close(sym, fut_row, RATIO_CLOSE_HHMM)
         except Exception:
             logging.info("%s: futures history %s unavailable", future, sym)
             continue
