@@ -211,11 +211,6 @@ SESSION_END_HHMM = "17:00"     # CME maintenance halt; last print before it
 # to 41.0086 - every converted NQ level about 220 points low. The liquidation
 # anchor keeps the 16:59 close; it is in futures terms and needs no pairing.
 RATIO_CLOSE_HHMM = "16:00"
-# The paste anchor (RI and the other Best Zones bands) is the DAILY SETTLEMENT,
-# per CN 2026-10-29 - what RI is quoted off. CME's settlement windows: equity
-# index 14:59:30-15:00:00 CT (16:00 ET), COMEX gold 13:29-13:30 ET. Read as
-# the last 5-minute print before that time, a close proxy for the window VWAP.
-SETTLE_HHMM = {"ES": "16:00", "NQ": "16:00", "GC": "13:30"}
 YAHOO_COOKIE_URL = "https://fc.yahoo.com"
 YAHOO_CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
 YAHOO_QUOTE_URL = ("https://query1.finance.yahoo.com/v7/finance/quote"
@@ -3062,8 +3057,8 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
     sigma = realized_sigma(completed)
     prior_fut = completed[-1] if completed else None
 
-    # The TradingView overlay - and only it - anchors on the daily SETTLEMENT
-    # (SETTLE_HHMM; the 16:59 close until 2026-10-29).
+    # The TradingView overlay - and only it - anchors on the 16:59 close, for
+    # every symbol (CN 2026-10-29, after briefly trying the CME settlement).
     # settled_futures above fixed WHICH session the anchor comes from; this
     # fixes WHICH PRICE inside it. prior_fut carries Yahoo's daily bar, which
     # spans 00:00-23:55 ET and so closes on the evening reopen rather than at
@@ -3074,12 +3069,10 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
     pine_anchor, pine_src = None, None
     if prior_fut:
         try:
-            pine_anchor = session_close(fut_sym, prior_fut["date"],
-                                        SETTLE_HHMM.get(future, SESSION_END_HHMM))
+            pine_anchor = session_close(fut_sym, prior_fut["date"])
         except Exception:
             logging.info("%s: intraday close unavailable for %s", future, fut_sym)
-        pine_src = (f"settle {SETTLE_HHMM.get(future, SESSION_END_HHMM)}"
-                    if pine_anchor is not None else "daily bar")
+        pine_src = "16:59" if pine_anchor is not None else "daily bar"
         if pine_anchor is None:
             pine_anchor = prior_fut["c"]
     # What the option market is charging for a day, against what the future
@@ -4039,7 +4032,7 @@ async function load(){
       const note = srcs.length
         ? (stale.length
             ? `<span class="pnote warn">${stale.join("/")} on daily bar, no intraday</span>`
-            : `<span class="pnote">anchored on settlement (${[...new Set(srcs)].join(" / ")} ET)</span>`)
+            : `<span class="pnote">16:59 close</span>`)
         : "";
       pineEl.innerHTML=`<span class="k">TradingView liquidation bands</span>`
         +`<code class="pine" id="pinestr" title="click to select" `
