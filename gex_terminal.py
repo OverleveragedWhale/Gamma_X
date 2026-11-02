@@ -3508,7 +3508,9 @@ tr.spotrow td{color:var(--ink);font-weight:700;letter-spacing:.06em;
   color:var(--muted);max-width:72ch}
 .zero .caveat b,.zero .k b{color:var(--brass);font-weight:500}
 /* 0DTE */
-.zero{margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
+.zero{margin-top:16px;padding-top:12px;border-top:1px solid var(--line);min-width:0}
+/* the table scrolls inside its own block, like the ladder and book tables */
+.zero .ztab{min-width:0;overflow-x:auto;-webkit-overflow-scrolling:touch}
 .zero .k{font-size:10px;letter-spacing:.13em;text-transform:uppercase;
   color:var(--muted);margin-bottom:5px}
 .zero .zsum{font-size:11.5px;color:var(--muted);margin-bottom:6px;line-height:1.5}
@@ -3722,12 +3724,12 @@ function zeroSection(s){
   return `<div class="zero"><div class="k">0DTE<b>*</b>, expiring ${z.date}</div>`
     + `<div class="zsum">${sum}</div>` + filt
     + (f && !rows ? `<div class="zsum">No strike carries meaningful 0DTE flow yet.</div>` : "")
-    + (rows?`<table><thead><tr><th class="num">Strike</th><th class="num">Dist</th>`
+    + (rows?`<div class="ztab"><table><thead><tr><th class="num">Strike</th><th class="num">Dist</th>`
       + `<th class="num" title="Today's expiry, from yesterday's open interest">OI GEX</th>`
       + `<th class="num" title="Gamma-weighted volume traded today, netted">Flow today</th>`
       + `<th class="num" title="Gamma-weighted volume traded between the previous snapshot and this one">${since}</th>`
       + `<th class="num" title="Today's volume against open interest at this strike">Turnover</th>`
-      + `</tr></thead><tbody>${rows}</tbody></table>`:"")
+      + `</tr></thead><tbody>${rows}</tbody></table></div>`:"")
     + `<div class="caveat"><b>*</b> Volume shows where contracts traded, not who `
     + `bought or sold or whether positions opened or closed; signs follow the GEX `
     + `convention, calls + and puts \u2212. Open interest is yesterday's close, so `
