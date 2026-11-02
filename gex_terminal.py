@@ -3400,8 +3400,8 @@ h1 .g{color:var(--brass)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 .status.closed .dot{background:var(--muted)}
 .status.weekend .dot{background:var(--brass)}
-.meta{margin-left:auto;display:flex;gap:18px;align-items:baseline;
-  font-size:12px;color:var(--muted)}
+.meta{margin-left:auto;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;
+  font-size:12px;color:var(--muted);min-width:0}
 .meta b{color:var(--ink);font-weight:600}
 button{font:inherit;font-size:12px;color:var(--ink);background:var(--raised);
   border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer;
@@ -3456,7 +3456,7 @@ button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
 .books tbody tr:last-child td{border-bottom:none}
 /* summary and profile share the row; the profile takes what is left */
 .topline{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap}
-.vp{display:flex;gap:18px;flex:0 1 auto}
+.vp{display:flex;flex-wrap:wrap;gap:18px;flex:0 1 auto;min-width:0;max-width:100%}
 .vpcol{min-width:150px}
 .vp .k{font-size:10px;letter-spacing:.13em;text-transform:uppercase;
   color:var(--muted);margin-bottom:5px;white-space:nowrap}
@@ -3553,6 +3553,9 @@ code.pine{background:var(--raised);border:1px solid var(--line);border-radius:4p
 .navlink{color:var(--brass);text-decoration:none;border:1px solid var(--brass);
   border-radius:4px;padding:5px 10px;font-size:12px;letter-spacing:.06em}
 .navlink:hover{background:rgba(217,164,65,.1)}
+/* Setups / Scorecard stacked, so the header fits a phone without zooming */
+.navstack{display:flex;flex-direction:column;gap:6px;align-items:stretch}
+.navstack .navlink{text-align:center;white-space:nowrap}
 @media(prefers-reduced-motion:reduce){.dot.pulse{animation:none}.flash{animation:none}}
 </style></head>
 <body><div class="wrap">
@@ -3564,7 +3567,7 @@ code.pine{background:var(--raised);border:1px solid var(--line);border-radius:4p
     <span><span id="cdlab">next refresh</span> <b id="cd">--</b></span>
     <button id="refresh">Refresh now</button>
     <span id="gxsize"></span>
-    <a class="navlink" href="setups.html">Setups &rarr;</a><a class="navlink" href="scorecard.html" style="margin-left:0">Scorecard &rarr;</a>
+    <div class="navstack"><a class="navlink" href="setups.html">Setups &rarr;</a><a class="navlink" href="scorecard.html">Scorecard &rarr;</a></div>
   </div>
 </header>
 <div id="panels"></div>
