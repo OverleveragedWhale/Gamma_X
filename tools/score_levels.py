@@ -333,7 +333,7 @@ def bars(sym):
         hi, lo, cl = q["high"][i], q["low"][i], q["close"][i]
         if hi is None or lo is None or cl is None:
             continue
-        t = datetime.fromtimestamp(ts + off, timezone.utc).replace(tzinfo=None)
+        t = g.yahoo_et(ts, off)
         by_day[t.date()].append((t.strftime("%H:%M"), float(hi), float(lo),
                                  float(cl)))
     _BARS[sym] = dict(by_day)

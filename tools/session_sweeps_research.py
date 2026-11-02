@@ -54,7 +54,7 @@ def load(series):
         hi, lo, cl = q["high"][i], q["low"][i], q["close"][i]
         if None in (hi, lo, cl):
             continue
-        t = datetime.fromtimestamp(ts + off, timezone.utc).replace(tzinfo=None)
+        t = g.yahoo_et(ts, off)
         out.append((t, float(hi), float(lo), float(cl)))
     return out
 

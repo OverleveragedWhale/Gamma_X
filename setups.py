@@ -116,7 +116,7 @@ def session_bars(series, day, now, start=MAP_AT, win="day"):
         hi, lo, cl = q["high"][i], q["low"][i], q["close"][i]
         if hi is None or lo is None or cl is None:
             continue
-        t = datetime.fromtimestamp(ts + off, timezone.utc).replace(tzinfo=None)
+        t = g.yahoo_et(ts, off)
         if not begin <= t < end:
             continue
         if t + timedelta(minutes=BAR_MIN) > now:

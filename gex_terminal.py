@@ -279,6 +279,22 @@ if ZoneInfo:
     except Exception:
         pass
 
+def yahoo_et(ts, off=0):
+    """A Yahoo epoch timestamp as naive America/New_York time.
+
+    Yahoo's meta gmtoffset is the exchange's offset NOW, not at each bar, so
+    adding it shifts every bar on the other side of a DST change by an hour.
+    On 2026-11-01 (EDT -> EST) that moved the futures daily bars - stamped at
+    local midnight - onto the previous date, so the ratio read Thursday's close
+    as Friday's (NQ m 41.31 -> 42.32, every level ~1,000 pts high) and the
+    band anchor fell back to the live price. The real zone gives each bar its
+    own offset; the fixed offset is only the fallback without tzdata.
+    """
+    if ET is not None:
+        return datetime.fromtimestamp(ts, ET).replace(tzinfo=None)
+    return datetime.fromtimestamp(ts + off, timezone.utc).replace(tzinfo=None)
+
+
 logging.basicConfig(filename=LOG_PATH, level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s")
 
@@ -1661,7 +1677,7 @@ def fetch_rows(sym, max_rows=PRIOR_SESSION_ROWS, url=YAHOO_URL):
         bar = (q["open"][n], q["high"][n], q["low"][n], q["close"][n])
         if any(v is None for v in bar):           # holidays come back as nulls
             continue
-        rows.append({"date": datetime.fromtimestamp(ts + off, timezone.utc).replace(tzinfo=None).date().isoformat(),
+        rows.append({"date": yahoo_et(ts, off).date().isoformat(),
                      "o": float(bar[0]), "h": float(bar[1]),
                      "l": float(bar[2]), "c": float(bar[3])})
     if len(rows) < 2:
@@ -1727,7 +1743,7 @@ def _session_close_once(sym, session_date, end_hhmm=SESSION_END_HHMM):
     for ts, close in zip(result.get("timestamp") or [], closes):
         if close is None:
             continue
-        stamp = datetime.fromtimestamp(ts + off, timezone.utc).replace(tzinfo=None)
+        stamp = yahoo_et(ts, off)
         if stamp.date().isoformat() != session_date:
             continue
         if stamp.strftime("%H:%M") >= end_hhmm:
@@ -1839,7 +1855,7 @@ def _newest_cash_close_once(sym, today):
         close = closes[n] if n < len(closes) else None
         if close is None:
             continue
-        stamp = datetime.fromtimestamp(ts + off, timezone.utc).replace(tzinfo=None)
+        stamp = yahoo_et(ts, off)
         day = stamp.date().isoformat()
         if day >= iso:                       # never the session in progress
             continue
@@ -2031,7 +2047,7 @@ def vp_bars(sym):
         lo = lows[n] if n < len(lows) else None
         if not v or hi is None or lo is None:
             continue
-        stamp = datetime.fromtimestamp(ts + off, timezone.utc).replace(tzinfo=None)
+        stamp = yahoo_et(ts, off)
         key = (stamp.date()
                + timedelta(days=1 if stamp.hour >= FUT_SESSION_OPEN_HOUR else 0))
         by.setdefault(key, []).append((float(lo), float(hi), float(v)))
@@ -2244,7 +2260,11 @@ def settled_futures(rows, now):
     weekend gap into sigma inflated it by ~6%.
     """
     cutoff = futures_trade_date(now).isoformat()
-    return [r for r in rows if r["date"] < cutoff]
+    # A bar dated Saturday or Sunday is the Sunday-evening open of Monday's
+    # session, never a settled session: counting it put the band anchor on the
+    # live price every Sunday night (2026-11-01: "daily bar", anchor = spot).
+    return [r for r in rows if r["date"] < cutoff
+            and date.fromisoformat(r["date"]).weekday() < 5]
 
 
 # ---------------- margin buffer ----------------
