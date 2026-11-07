@@ -1294,6 +1294,50 @@ def zero_dte(contracts, spot, ref_spot, book_date):
     return out
 
 
+TOP_VOL_N = 3
+
+
+def top_volume(contracts, book_date, spot):
+    """The TOP_VOL_N strikes by contracts traded, for three expiries:
+
+      0dte     the session's own expiry (book_date)
+      weekly   the next Friday expiry after it that is not monthly opex
+      monthly  the next monthly opex (third Friday) after it
+
+    Volume is calls + puts in primary-chain contract-equivalents (w), so a
+    merged SPX+SPY book does not count a SPY contract as a SPX one. Cboe's
+    volume is the session's cumulative count, so outside regular hours this
+    is the last session's tape. Strikes are in futures terms, as the ladder.
+    """
+    exps = sorted({c["exp"] for c in contracts if c["exp"] >= book_date})
+    pick = {"0dte": book_date if book_date in exps else None,
+            "weekly": next((e for e in exps if e > book_date and e.weekday() == 4
+                            and not is_monthly_opex(e)), None),
+            "monthly": next((e for e in exps if e > book_date and is_monthly_opex(e)), None)}
+    out = {}
+    for key, exp in pick.items():
+        if exp is None:
+            out[key] = {"none": True}
+            continue
+        per, tot = {}, 0.0
+        for c in contracts:
+            if c["exp"] != exp or not c["vol"]:
+                continue
+            v = c["vol"] * c.get("w", 1.0)
+            d = per.setdefault(c["strike"], [0.0, 0.0])
+            d[0 if c["cp"] == "C" else 1] += v
+            tot += v
+        top = sorted(per.items(), key=lambda kv: kv[1][0] + kv[1][1], reverse=True)[:TOP_VOL_N]
+        out[key] = {"exp": exp.isoformat(), "dte": (exp - book_date).days,
+                    "total": round(tot),
+                    "rows": [{"rank": i + 1, "strike": round(k, 2),
+                              "dist": round(100 * (k - spot) / spot, 2) if spot else None,
+                              "call": round(cv), "put": round(pv), "vol": round(cv + pv),
+                              "share": round(100 * (cv + pv) / tot, 1) if tot else None}
+                             for i, (k, (cv, pv)) in enumerate(top)]}
+    return out
+
+
 def zero_recent(syms, previous, previous_generated, rth=False):
     """Add the last window's 0DTE flow and pick the rows the table shows.
 
@@ -2974,6 +3018,16 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
                 r["both"] = len(src) > 1
 
         out["zero"] = zero_dte(book, gspot, ref_spot, book_date)
+        out["topvol"] = top_volume(contracts, book_date, ref_spot)
+        # Mark the ladder's walls that are also a top-volume strike.
+        tags = {}
+        for key, lab in (("0dte", "0DTE"), ("weekly", "wkly"), ("monthly", "mthly")):
+            for row in out["topvol"][key].get("rows") or []:
+                tags.setdefault(round(row["strike"], 2), []).append(f"vol {lab} #{row['rank']}")
+        for r in out["ladder"]:
+            t = tags.get(round(r["strike_pre"], 2))
+            if t:
+                r["topvol"] = t
         zs = out["zero"].get("strikes") or {}
         for r in out["ladder"]:
             d = zs.get(f"{r['strike_pre']:.2f}")
@@ -3226,7 +3280,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
 
 
 # Everything built from the chain's greeks, carried as a unit by hold_regimes.
-HELD_KEYS = ("regimes", "books", "ladder", "ladder_raw", "flow", "vp", "oi_prev_date")
+HELD_KEYS = ("regimes", "books", "ladder", "ladder_raw", "flow", "vp", "oi_prev_date", "topvol")
 
 
 def hold_regimes(syms, previous, previous_generated):
@@ -3517,6 +3571,11 @@ tr.spotrow td{color:var(--ink);font-weight:700;letter-spacing:.06em;
 .zero .zsum b{color:var(--ink);font-weight:500}
 .zero table{width:auto;min-width:480px}
 .zero td,.zero th{padding:3px 12px 3px 0}
+.zero .tvsub{margin:10px 0 3px;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.tvrank{display:inline-block;min-width:22px;text-align:center;border:1px solid var(--line);border-radius:3px;font-size:10.5px}
+.zero tr.tv1 .tvrank{border-color:var(--brass);color:var(--brass);background:rgba(217,164,65,.12)}
+.zero tr.tv1 td{color:var(--ink)}
+.chip.tvchip{color:var(--brass);border-color:rgba(217,164,65,.45)}
 .active-con{font-size:10px;letter-spacing:.1em;padding:2px 7px;margin-left:10px;
   border:1px solid var(--jade);border-radius:3px;color:var(--jade);vertical-align:middle}
 .con-on{color:var(--jade)}
@@ -3695,51 +3754,34 @@ function bookSummary(s,regimes,books){
 // traded since the last snapshot. Measured, it is ~90% of the session's flow
 // and a fraction of the open interest the walls are built from, so it gets
 // its own read instead of being averaged into the books.
-function zeroSection(s){
-  const z=s.zero;
-  if(!z) return "";
-  if(z.none) return `<div class="zero"><div class="k">0DTE</div>`
-    + `<div class="zsum">Nothing on this book expires in the session (${z.date}).</div></div>`;
-  const hhmm = t => t ? String(t).slice(11,16) : "";
+function topVolSection(s){
+  const t=s.topvol;
+  if(!t) return "";
   const eq = `${chainName(s)}-equivalent contracts`;
-  const sum = `Net GEX <b class="${(z.net_gex||0)>=0?"pos":"neg"}">${z.net_str}</b>`
-    + ` \u00b7 ${z.gex_share}% of the book's gamma`
-    + ` \u00b7 <b>${(z.vol||0).toLocaleString()}</b> ${eq} traded`
-    + (z.turnover!=null?`, <b>${z.turnover}\u00d7</b> open interest`:"")
-    + ` \u00b7 ${z.flow_share}% of today's flow`
-    + (z.recent_since
-        ? ` \u00b7 since ${hhmm(z.recent_since)}: <b class="${(z.recent_net||0)>=0?"pos":"neg"}">${z.recent_str}</b>`
-          + ` on ${(z.recent_vol||0).toLocaleString()} contracts`
-        : ` \u00b7 first snapshot of the session, no recent window yet`);
-  const rows=(z.rows||[]).map(r=>`<tr>`
-    +`<td class="num">${(+r.strike).toFixed(0)}</td>`
-    +`<td class="num">${r.dist>0?"+":""}${r.dist}%</td>`
-    +`<td class="num ${r.gex>=0?"pos":"neg"}">${r.gex_str}</td>`
-    +`<td class="num ${(r.flow||0)>=0?"pos":"neg"}">${r.flow_str||"\u2014"}</td>`
-    +`<td class="num ${(r.recent||0)>=0?"pos":"neg"}">${r.recent_str||"\u2014"}</td>`
-    +`<td class="num">${r.turnover!=null?r.turnover+"\u00d7":"\u2014"}</td>`
-    +`</tr>`).join("");
-  const since = z.recent_since?`Since ${hhmm(z.recent_since)}`:"Last window";
-  const f=z.filter;
-  const filt = f ? `<div class="zsum" style="opacity:.8">Regular hours: only strikes with at least `
-    + `${Math.round(f.rel*100)}% of the largest strike's flow (today's or since the last snapshot)`
-    + (f.hidden>0?` · ${f.hidden} smaller hidden`:"") + `</div>` : "";
-  return `<div class="zero"><div class="k">0DTE<b>*</b>, expiring ${z.date}</div>`
-    + `<div class="zsum">${sum}</div>` + filt
-    + (f && !rows ? `<div class="zsum">No strike carries meaningful 0DTE flow yet.</div>` : "")
-    + (rows?`<div class="ztab"><table><thead><tr><th class="num">Strike</th><th class="num">Dist</th>`
-      + `<th class="num" title="Today's expiry, from yesterday's open interest">OI GEX</th>`
-      + `<th class="num" title="Gamma-weighted volume traded today, netted">Flow today</th>`
-      + `<th class="num" title="Gamma-weighted volume traded between the previous snapshot and this one">${since}</th>`
-      + `<th class="num" title="Today's volume against open interest at this strike">Turnover</th>`
-      + `</tr></thead><tbody>${rows}</tbody></table></div>`:"")
-    + `<div class="caveat"><b>*</b> Volume shows where contracts traded, not who `
-    + `bought or sold or whether positions opened or closed; signs follow the GEX `
-    + `convention, calls + and puts \u2212. Open interest is yesterday's close, so `
-    + `positions opened today are not in OI GEX \u2014 turnover well above 1\u00d7 `
-    + `means the standing 0DTE book has changed hands since. Cboe's feed runs about `
-    + `15 minutes behind, and the window column is the change in its cumulative `
-    + `volume between this snapshot and the previous one.</div></div>`;
+  const head = `<thead><tr><th>Rank</th><th class="num">Strike</th><th class="num">Dist</th>`
+    + `<th class="num">Calls</th><th class="num">Puts</th><th class="num">Total \u00b7 share</th></tr></thead>`;
+  const block=(key,title)=>{
+    const b=t[key]||{};
+    if(b.none||!(b.rows||[]).length)
+      return `<div class="tvsub">${title} \u00b7 no expiry listed</div>`;
+    return `<div class="tvsub">${title} \u00b7 ${b.exp} (${b.dte}d) \u00b7 ${(b.total||0).toLocaleString()} traded</div>`
+      + `<div class="ztab"><table>${head}<tbody>`
+      + b.rows.map(r=>`<tr class="tv${r.rank}">`
+        +`<td><span class="tvrank">#${r.rank}</span></td>`
+        +`<td class="num">${(+r.strike).toFixed(s.symbol==="GC"?1:0)}</td>`
+        +`<td class="num">${r.dist>0?"+":""}${r.dist}%</td>`
+        +`<td class="num pos">${r.call.toLocaleString()}</td>`
+        +`<td class="num neg">${r.put.toLocaleString()}</td>`
+        +`<td class="num"><b>${r.vol.toLocaleString()}</b>${r.share!=null?` <span class="pre">${r.share}%</span>`:""}</td>`
+        +`</tr>`).join("")
+      + `</tbody></table></div>`;
+  };
+  return `<div class="zero"><div class="k">Highest volume strikes<b>*</b></div>`
+    + block("0dte","0DTE") + block("weekly","Weekly") + block("monthly","Monthly")
+    + `<div class="caveat"><b>*</b> Contracts traded at each strike (calls + puts, ${eq}), top 3 for each `
+    + `expiry; share is of that expiry's volume. Volume is the session's cumulative count from Cboe, about 15 minutes `
+    + `behind, so outside regular hours it is the last session's. It shows where size traded, not who bought or sold. `
+    + `Walls on the ladder that are also one of these strikes carry a <span class="chip tvchip">vol</span> tag.</div></div>`;
 }
 
 // The combined ladder: one row per strike, one column per book, so "is this
@@ -3752,6 +3794,8 @@ function ladderRow(w,books){
   // it as well as gamma, a wall in a volume hole has only the gamma.
   if(w.vp) chips+=` <span class="chip vp">${w.vp}</span>`;
   if(w.both) chips+=` <span class="chip src">${w.src}</span>`;
+  // One of the three highest-volume strikes of the 0DTE, weekly or monthly expiry.
+  for(const tv of (w.topvol||[])) chips+=` <span class="chip tvchip">${tv}</span>`;
   // Call-dominated in one book, put-dominated in another. The cell colours
   // already say it, but only if you are looking at that row - the chip and
   // the row tint make it findable while scanning.
@@ -3939,7 +3983,7 @@ function panel(s){
     ${contractRow(s.contract)}
     ${s.scale_note?`<div class="scale">levels: ${s.scale_note}</div>`:""}
     ${body}
-    ${zeroSection(s)}
+    ${topVolSection(s)}
     ${maxPain}
     ${marg}
   </div>`;
