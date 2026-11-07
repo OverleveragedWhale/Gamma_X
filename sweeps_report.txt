@@ -1,5 +1,5 @@
 
-=== day: Any prior level, 09:50-11:30  (map at or before 09:50, 60 symbol-sessions)
+=== day: Any prior level, 09:50-11:30  (map at or before 09:50, 70 symbol-sessions)
 
 ES  13 trades on 9 days  (target 10, stop 2-5)
   gate                         n  won  win%  exp R  $ total  max DD  | exit 12:00: exp R, $
@@ -23,18 +23,18 @@ NQ  5 trades on 5 days  (target 40, stop 8-30)
   gamma level + positive       1    1  100%   1.45      798       0  |  1.45      798
   overnight (ON/A/L)           5    2   40%   0.19    1,142    -455  |  0.19    1,142
 
-=== london: Asia range swept in London, 03:00-08:00  (map at or before 03:00, 56 symbol-sessions)
+=== london: Asia range swept in London, 03:00-08:00  (map at or before 03:00, 66 symbol-sessions)
 
-ES  14 trades on 14 days  (target 10, stop 2-5)
+ES  15 trades on 15 days  (target 10, stop 2-5)
   gate                         n  won  win%  exp R  $ total  max DD  | exit 08:00: exp R, $
-  all                         14    3   21%   0.05      577    -475  |  0.06      615
-  negative gamma               6    2   33%   0.42      489    -275  |  0.46      526
+  all                         15    4   27%   0.26    1,077    -475  |  0.28    1,114
+  negative gamma               7    3   43%   0.84      988    -275  |  0.87    1,026
   positive gamma               8    1   12%  -0.24       89    -412  | -0.24       89
-  at a gamma level             3    1   33%   0.22      238    -262  |  0.22      238
+  at a gamma level             4    2   50%   1.00      738    -262  |  1.00      738
   not at a gamma level        11    2   18%  -0.00      339    -450  |  0.02      377
-  gamma level + negative       2    1   50%   0.83      338    -162  |  0.83      338
+  gamma level + negative       3    2   67%   1.67      838    -162  |  1.67      838
   gamma level + positive       1    0    0%  -1.00     -100    -100  | -1.00     -100
-  overnight (ON/A/L)          14    3   21%   0.05      577    -475  |  0.06      615
+  overnight (ON/A/L)          15    4   27%   0.26    1,077    -475  |  0.28    1,114
 
 NQ  13 trades on 13 days  (target 40, stop 8-30)
   gate                         n  won  win%  exp R  $ total  max DD  | exit 08:00: exp R, $
@@ -47,7 +47,7 @@ NQ  13 trades on 13 days  (target 40, stop 8-30)
   gamma level + positive       1    0    0%  -1.00     -160    -160  | -1.00     -160
   overnight (ON/A/L)          13    4   31%   0.14      848    -930  |  0.14      848
 
-=== nyopen: London range swept at the NY open, 09:30-11:30  (map at or before 09:30, 60 symbol-sessions)
+=== nyopen: London range swept at the NY open, 09:30-11:30  (map at or before 09:30, 70 symbol-sessions)
 
 ES  8 trades on 7 days  (target 10, stop 2-5)
   gate                         n  won  win%  exp R  $ total  max DD  | exit 12:00: exp R, $
