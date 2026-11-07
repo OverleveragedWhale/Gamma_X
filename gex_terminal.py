@@ -1295,14 +1295,18 @@ def zero_dte(contracts, spot, ref_spot, book_date):
 
 
 TOP_VOL_N = 3
+# Only strikes within this % of spot rank: far-OTM tail hedges (SPY 580 puts
+# with ES at 7400, 2026-11-07) trade size but are not levels price can reach.
+TOP_VOL_RANGE_PCT = 5.0
 
 
 def top_volume(contracts, book_date, spot):
     """The TOP_VOL_N strikes by contracts traded, for three expiries:
 
-      0dte     the session's own expiry (book_date)
-      weekly   the next Friday expiry after it that is not monthly opex
-      monthly  the next monthly opex (third Friday) after it
+      0dte     the first expiry on or after the session (book_date) - on a
+               weekend, Monday's
+      weekly   the next Friday expiry after that, not monthly opex
+      monthly  the next monthly opex (third Friday) after that
 
     Volume is calls + puts in primary-chain contract-equivalents (w), so a
     merged SPX+SPY book does not count a SPY contract as a SPX one. Cboe's
@@ -1310,10 +1314,13 @@ def top_volume(contracts, book_date, spot):
     is the last session's tape. Strikes are in futures terms, as the ladder.
     """
     exps = sorted({c["exp"] for c in contracts if c["exp"] >= book_date})
-    pick = {"0dte": book_date if book_date in exps else None,
-            "weekly": next((e for e in exps if e > book_date and e.weekday() == 4
+    first = exps[0] if exps else None
+    pick = {"0dte": first,
+            "weekly": next((e for e in exps if first and e > first and e.weekday() == 4
                             and not is_monthly_opex(e)), None),
-            "monthly": next((e for e in exps if e > book_date and is_monthly_opex(e)), None)}
+            "monthly": next((e for e in exps if first and e > first and is_monthly_opex(e)), None)}
+    lo = spot * (1 - TOP_VOL_RANGE_PCT / 100.0) if spot else float("-inf")
+    hi = spot * (1 + TOP_VOL_RANGE_PCT / 100.0) if spot else float("inf")
     out = {}
     for key, exp in pick.items():
         if exp is None:
@@ -1324,11 +1331,13 @@ def top_volume(contracts, book_date, spot):
             if c["exp"] != exp or not c["vol"]:
                 continue
             v = c["vol"] * c.get("w", 1.0)
+            tot += v
+            if not lo <= c["strike"] <= hi:
+                continue
             d = per.setdefault(c["strike"], [0.0, 0.0])
             d[0 if c["cp"] == "C" else 1] += v
-            tot += v
         top = sorted(per.items(), key=lambda kv: kv[1][0] + kv[1][1], reverse=True)[:TOP_VOL_N]
-        out[key] = {"exp": exp.isoformat(), "dte": (exp - book_date).days,
+        out[key] = {"exp": exp.isoformat(), "dte": max((exp - book_date).days, 0),
                     "total": round(tot),
                     "rows": [{"rank": i + 1, "strike": round(k, 2),
                               "dist": round(100 * (k - spot) / spot, 2) if spot else None,
@@ -3665,6 +3674,7 @@ function gxScale(o, sym){
 }
 
 const MAX_PAIN_DAILY_DAYS = __MAX_PAIN_DAILY_DAYS__;
+const TOP_VOL_RANGE_PCT = __TOP_VOL_RANGE_PCT__;
 // A published snapshot has its figures baked in so it renders standalone, and
 // also polls data.json, which the publisher writes beside index.html. That is
 // what lets a static page follow later snapshots without the viewer reloading.
@@ -3779,7 +3789,8 @@ function topVolSection(s){
   return `<div class="zero"><div class="k">Highest volume strikes<b>*</b></div>`
     + block("0dte","0DTE") + block("weekly","Weekly") + block("monthly","Monthly")
     + `<div class="caveat"><b>*</b> Contracts traded at each strike (calls + puts, ${eq}), top 3 for each `
-    + `expiry; share is of that expiry's volume. Volume is the session's cumulative count from Cboe, about 15 minutes `
+    + `expiry among strikes within \u00b1${TOP_VOL_RANGE_PCT}% of price; share is of that expiry's whole volume. `
+    + `"0DTE" is the next expiry, Monday's on a weekend. Volume is the session's cumulative count from Cboe, about 15 minutes `
     + `behind, so outside regular hours it is the last session's. It shows where size traded, not who bought or sold. `
     + `Walls on the ladder that are also one of these strikes carry a <span class="chip tvchip">vol</span> tag.</div></div>`;
 }
@@ -4166,6 +4177,7 @@ PAGE_BUILD = hashlib.sha256(PAGE.encode()).hexdigest()[:12]
 PAGE = PAGE.replace("__PAGE_BUILD__", PAGE_BUILD)
 PAGE = PAGE.replace("__REFRESH_SECONDS__", str(REFRESH_SECONDS))
 PAGE = PAGE.replace("__MAX_PAIN_DAILY_DAYS__", str(MAX_PAIN_DAILY_DAYS))
+PAGE = PAGE.replace("__TOP_VOL_RANGE_PCT__", f"{TOP_VOL_RANGE_PCT:g}")
 PAGE = PAGE.replace("__SNAPSHOT_DATA__", "null")
 # stray-char guard from hand-authored CSS var line
 PAGE = PAGE.replace("--muted:#7f8 da0;", "")
