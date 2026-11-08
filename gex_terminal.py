@@ -1356,6 +1356,44 @@ def top_volume(contracts, book_date, spot):
     return out
 
 
+TOP_VOL_REFRESH_HHMM = "18:00"
+
+
+def daily_topvol(syms, previous, now):
+    """The top-volume table refreshes ONCE a day, on the first run at or after
+    18:00 ET - the run nearest the close of the day's options tape (CN,
+    2026-11-08). Every other run keeps the table it published, so it does not
+    churn intraday as cumulative volume builds. With nothing published yet, or
+    only an older table, this run's stands. Then tags the ladder's walls."""
+    h, mi = map(int, TOP_VOL_REFRESH_HHMM.split(":"))
+    cut = now.replace(hour=h, minute=mi, second=0, microsecond=0)
+    if now < cut:
+        cut -= timedelta(days=1)
+    prev = {p.get("symbol"): p for p in previous or [] if p}
+    for s in syms:
+        p = prev.get(s.get("symbol")) or {}
+        at = p.get("topvol_at")
+        try:
+            held = bool(p.get("topvol") and at and datetime.strptime(at, "%Y-%m-%d %H:%M") >= cut)
+        except ValueError:
+            held = False
+        if held:
+            s["topvol"], s["topvol_at"] = p["topvol"], at
+        elif s.get("topvol"):
+            s["topvol_at"] = now.strftime("%Y-%m-%d %H:%M")
+        tags = {}
+        for key, lab in (("0dte", "0DTE"), ("weekly", "wkly"), ("monthly", "mthly")):
+            for fld, side in (("rows", ""), ("calls", " C"), ("puts", " P")):
+                for row in (s.get("topvol") or {}).get(key, {}).get(fld) or []:
+                    tags.setdefault(round(row["strike"], 2), []).append(
+                        f"vol {lab}{side} #{row['rank']}")
+        for r in s.get("ladder") or []:
+            r.pop("topvol", None)
+            t = tags.get(round(r.get("strike_pre", r["strike"]), 2))
+            if t:
+                r["topvol"] = t
+
+
 def zero_recent(syms, previous, previous_generated, rth=False):
     """Add the last window's 0DTE flow and pick the rows the table shows.
 
@@ -3037,17 +3075,6 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
 
         out["zero"] = zero_dte(book, gspot, ref_spot, book_date)
         out["topvol"] = top_volume(contracts, book_date, ref_spot)
-        # Mark the ladder's walls that are also a top-volume strike.
-        tags = {}
-        for key, lab in (("0dte", "0DTE"), ("weekly", "wkly"), ("monthly", "mthly")):
-            for fld, side in (("rows", ""), ("calls", " C"), ("puts", " P")):
-                for row in out["topvol"][key].get(fld) or []:
-                    tags.setdefault(round(row["strike"], 2), []).append(
-                        f"vol {lab}{side} #{row['rank']}")
-        for r in out["ladder"]:
-            t = tags.get(round(r["strike_pre"], 2))
-            if t:
-                r["topvol"] = t
         zs = out["zero"].get("strikes") or {}
         for r in out["ladder"]:
             d = zs.get(f"{r['strike_pre']:.2f}")
@@ -3300,7 +3327,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
 
 
 # Everything built from the chain's greeks, carried as a unit by hold_regimes.
-HELD_KEYS = ("regimes", "books", "ladder", "ladder_raw", "flow", "vp", "oi_prev_date", "topvol")
+HELD_KEYS = ("regimes", "books", "ladder", "ladder_raw", "flow", "vp", "oi_prev_date", "topvol", "topvol_at")
 
 
 def hold_regimes(syms, previous, previous_generated):
@@ -3391,6 +3418,7 @@ def recompute(previous=None, previous_generated=None):
         t.join()
     hold_regimes(syms, previous, previous_generated)
     zero_recent(syms, previous, previous_generated, rth=(status == "OPEN"))
+    daily_topvol(syms, previous, now)
 
     # One line covering every product, so the overlay is a single copy and a
     # single paste rather than one per chart:
@@ -3801,7 +3829,9 @@ function topVolSection(s){
     return `<div class="tvsub">${title} \u00b7 ${b.exp} (${b.dte}d) \u00b7 ${(b.total||0).toLocaleString()} traded</div>`
       + `<div class="ztab"><table>${head}<tbody>${body}</tbody></table></div>`;
   };
-  return `<div class="zero"><div class="k">Highest volume strikes<b>*</b></div>`
+  return `<div class="zero"><div class="k">Highest volume strikes<b>*</b>`
+    + (s.topvol_at?` <span class="pre" style="letter-spacing:0;text-transform:none">\u00b7 as of ${String(s.topvol_at).slice(5)} ET, refreshed daily after 18:00</span>`:"")
+    + `</div>`
     + block("0dte","0DTE") + block("weekly","Weekly") + block("monthly","Monthly")
     + `<div class="caveat"><b>*</b> Contracts traded (${eq}) for each expiry, among strikes within `
     + `\u00b1${TOP_VOL_RANGE_PCT}% of price. <b>Calls + puts</b> ranks strikes by both sides together (share is of the `
