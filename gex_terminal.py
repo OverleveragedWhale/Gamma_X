@@ -1337,13 +1337,22 @@ def top_volume(contracts, book_date, spot):
             d = per.setdefault(c["strike"], [0.0, 0.0])
             d[0 if c["cp"] == "C" else 1] += v
         top = sorted(per.items(), key=lambda kv: kv[1][0] + kv[1][1], reverse=True)[:TOP_VOL_N]
+        # The single contracts that traded most: calls and puts ranked apart,
+        # so a strike carried by one side is not hidden behind a mixed one.
+        def side(i, per=per):
+            ks = sorted(((k, v[i]) for k, v in per.items() if v[i] > 0),
+                        key=lambda kv: kv[1], reverse=True)[:TOP_VOL_N]
+            return [{"rank": n + 1, "strike": round(k, 2), "vol": round(v),
+                     "dist": round(100 * (k - spot) / spot, 2) if spot else None}
+                    for n, (k, v) in enumerate(ks)]
         out[key] = {"exp": exp.isoformat(), "dte": max((exp - book_date).days, 0),
                     "total": round(tot),
                     "rows": [{"rank": i + 1, "strike": round(k, 2),
                               "dist": round(100 * (k - spot) / spot, 2) if spot else None,
                               "call": round(cv), "put": round(pv), "vol": round(cv + pv),
                               "share": round(100 * (cv + pv) / tot, 1) if tot else None}
-                             for i, (k, (cv, pv)) in enumerate(top)]}
+                             for i, (k, (cv, pv)) in enumerate(top)],
+                    "calls": side(0), "puts": side(1)}
     return out
 
 
@@ -3031,8 +3040,10 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
         # Mark the ladder's walls that are also a top-volume strike.
         tags = {}
         for key, lab in (("0dte", "0DTE"), ("weekly", "wkly"), ("monthly", "mthly")):
-            for row in out["topvol"][key].get("rows") or []:
-                tags.setdefault(round(row["strike"], 2), []).append(f"vol {lab} #{row['rank']}")
+            for fld, side in (("rows", ""), ("calls", " C"), ("puts", " P")):
+                for row in out["topvol"][key].get(fld) or []:
+                    tags.setdefault(round(row["strike"], 2), []).append(
+                        f"vol {lab}{side} #{row['rank']}")
         for r in out["ladder"]:
             t = tags.get(round(r["strike_pre"], 2))
             if t:
@@ -3768,31 +3779,36 @@ function topVolSection(s){
   const t=s.topvol;
   if(!t) return "";
   const eq = `${chainName(s)}-equivalent contracts`;
-  const head = `<thead><tr><th>Rank</th><th class="num">Strike</th><th class="num">Dist</th>`
-    + `<th class="num">Calls</th><th class="num">Puts</th><th class="num">Total \u00b7 share</th></tr></thead>`;
+  const dp = s.symbol==="GC"?1:0;
+  const fk = r => r ? `${(+r.strike).toFixed(dp)} <span class="pre">${r.dist>0?"+":""}${r.dist}%</span>` : "\u2014";
+  const head = `<thead><tr><th>Rank</th><th class="num">Calls + puts</th><th class="num">Vol</th>`
+    + `<th class="num">Top calls</th><th class="num">Call vol</th>`
+    + `<th class="num">Top puts</th><th class="num">Put vol</th></tr></thead>`;
   const block=(key,title)=>{
     const b=t[key]||{};
     if(b.none||!(b.rows||[]).length)
       return `<div class="tvsub">${title} \u00b7 no expiry listed</div>`;
+    const n=Math.max((b.rows||[]).length,(b.calls||[]).length,(b.puts||[]).length);
+    let body="";
+    for(let i=0;i<n;i++){
+      const r=(b.rows||[])[i], c=(b.calls||[])[i], p=(b.puts||[])[i];
+      body+=`<tr class="tv${i+1}"><td><span class="tvrank">#${i+1}</span></td>`
+        +`<td class="num">${fk(r)}</td>`
+        +`<td class="num">${r?`<b>${r.vol.toLocaleString()}</b>${r.share!=null?` <span class="pre">${r.share}%</span>`:""}`:"\u2014"}</td>`
+        +`<td class="num pos">${fk(c)}</td><td class="num pos">${c?c.vol.toLocaleString():"\u2014"}</td>`
+        +`<td class="num neg">${fk(p)}</td><td class="num neg">${p?p.vol.toLocaleString():"\u2014"}</td></tr>`;
+    }
     return `<div class="tvsub">${title} \u00b7 ${b.exp} (${b.dte}d) \u00b7 ${(b.total||0).toLocaleString()} traded</div>`
-      + `<div class="ztab"><table>${head}<tbody>`
-      + b.rows.map(r=>`<tr class="tv${r.rank}">`
-        +`<td><span class="tvrank">#${r.rank}</span></td>`
-        +`<td class="num">${(+r.strike).toFixed(s.symbol==="GC"?1:0)}</td>`
-        +`<td class="num">${r.dist>0?"+":""}${r.dist}%</td>`
-        +`<td class="num pos">${r.call.toLocaleString()}</td>`
-        +`<td class="num neg">${r.put.toLocaleString()}</td>`
-        +`<td class="num"><b>${r.vol.toLocaleString()}</b>${r.share!=null?` <span class="pre">${r.share}%</span>`:""}</td>`
-        +`</tr>`).join("")
-      + `</tbody></table></div>`;
+      + `<div class="ztab"><table>${head}<tbody>${body}</tbody></table></div>`;
   };
   return `<div class="zero"><div class="k">Highest volume strikes<b>*</b></div>`
     + block("0dte","0DTE") + block("weekly","Weekly") + block("monthly","Monthly")
-    + `<div class="caveat"><b>*</b> Contracts traded at each strike (calls + puts, ${eq}), top 3 for each `
-    + `expiry among strikes within \u00b1${TOP_VOL_RANGE_PCT}% of price; share is of that expiry's whole volume. `
-    + `"0DTE" is the next expiry, Monday's on a weekend. Volume is the session's cumulative count from Cboe, about 15 minutes `
-    + `behind, so outside regular hours it is the last session's. It shows where size traded, not who bought or sold. `
-    + `Walls on the ladder that are also one of these strikes carry a <span class="chip tvchip">vol</span> tag.</div></div>`;
+    + `<div class="caveat"><b>*</b> Contracts traded (${eq}) for each expiry, among strikes within `
+    + `\u00b1${TOP_VOL_RANGE_PCT}% of price. <b>Calls + puts</b> ranks strikes by both sides together (share is of the `
+    + `expiry's whole volume); <b>Top calls</b> and <b>Top puts</b> rank the single call and put contracts that traded most. `
+    + `"0DTE" is the next expiry, Monday's on a weekend. Volume is the session's cumulative count from Cboe, about 15 `
+    + `minutes behind, so outside regular hours it is the last session's. It shows where size traded, not who bought or `
+    + `sold. Walls on the ladder that are also one of these strikes carry a <span class="chip tvchip">vol</span> tag.</div></div>`;
 }
 
 // The combined ladder: one row per strike, one column per book, so "is this
