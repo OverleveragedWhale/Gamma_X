@@ -1391,6 +1391,7 @@ def daily_topvol(syms, previous, now):
     churn intraday as cumulative volume builds. With nothing published yet, or
     only an older table, this run's stands. Then tags the ladder's walls."""
     h, mi = map(int, TOP_VOL_REFRESH_HHMM.split(":"))
+    now = now.replace(tzinfo=None)      # now_et() is zone-aware; stamps are naive ET
     cut = now.replace(hour=h, minute=mi, second=0, microsecond=0)
     if now < cut:
         cut -= timedelta(days=1)
