@@ -1300,7 +1300,7 @@ TOP_VOL_N = 3
 TOP_VOL_RANGE_PCT = 5.0
 
 
-def top_volume(contracts, book_date, spot):
+def top_volume(contracts, book_date, spot, gspot=None):
     """The TOP_VOL_N strikes by contracts traded, for three expiries:
 
       0dte     the first expiry on or after the session (book_date) - on a
@@ -1312,7 +1312,23 @@ def top_volume(contracts, book_date, spot):
     merged SPX+SPY book does not count a SPY contract as a SPX one. Cboe's
     volume is the session's cumulative count, so outside regular hours this
     is the last session's tape. Strikes are in futures terms, as the ladder.
+
+    Each strike also carries its net GEX (calls + / puts -, from open interest,
+    evaluated at gspot): `gex` for that expiry's contracts at the strike, and
+    `gex_all` for every expiry in the book at the strike.
     """
+    gspot = gspot or spot
+    gex_exp, gex_all = {}, {}
+    for c in contracts:
+        g = contract_gex(c["gamma"], c["oi"], gspot) * (1 if c["cp"] == "C" else -1)
+        gex_all[c["strike"]] = gex_all.get(c["strike"], 0.0) + g
+        key = (c["exp"], c["strike"])
+        gex_exp[key] = gex_exp.get(key, 0.0) + g
+
+    def gx(exp, k):
+        a, b = gex_exp.get((exp, k), 0.0), gex_all.get(k, 0.0)
+        return {"gex": round(a), "gex_str": fmt_dollars(a),
+                "gex_all": round(b), "gex_all_str": fmt_dollars(b)}
     exps = sorted({c["exp"] for c in contracts if c["exp"] >= book_date})
     first = exps[0] if exps else None
     pick = {"0dte": first,
@@ -1339,24 +1355,33 @@ def top_volume(contracts, book_date, spot):
         top = sorted(per.items(), key=lambda kv: kv[1][0] + kv[1][1], reverse=True)[:TOP_VOL_N]
         # The single contracts that traded most: calls and puts ranked apart,
         # so a strike carried by one side is not hidden behind a mixed one.
-        def side(i, per=per):
+        def side(i, per=per, exp=exp):
             ks = sorted(((k, v[i]) for k, v in per.items() if v[i] > 0),
                         key=lambda kv: kv[1], reverse=True)[:TOP_VOL_N]
-            return [{"rank": n + 1, "strike": round(k, 2), "vol": round(v),
-                     "dist": round(100 * (k - spot) / spot, 2) if spot else None}
+            return [dict({"rank": n + 1, "strike": round(k, 2), "vol": round(v),
+                          "dist": round(100 * (k - spot) / spot, 2) if spot else None},
+                         **gx(exp, k))
                     for n, (k, v) in enumerate(ks)]
         out[key] = {"exp": exp.isoformat(), "dte": max((exp - book_date).days, 0),
                     "total": round(tot),
-                    "rows": [{"rank": i + 1, "strike": round(k, 2),
-                              "dist": round(100 * (k - spot) / spot, 2) if spot else None,
-                              "call": round(cv), "put": round(pv), "vol": round(cv + pv),
-                              "share": round(100 * (cv + pv) / tot, 1) if tot else None}
+                    "rows": [dict({"rank": i + 1, "strike": round(k, 2),
+                                   "dist": round(100 * (k - spot) / spot, 2) if spot else None,
+                                   "call": round(cv), "put": round(pv), "vol": round(cv + pv),
+                                   "share": round(100 * (cv + pv) / tot, 1) if tot else None},
+                                  **gx(exp, k))
                              for i, (k, (cv, pv)) in enumerate(top)],
                     "calls": side(0), "puts": side(1)}
     return out
 
 
 TOP_VOL_REFRESH_HHMM = "18:00"
+
+
+def _topvol_current(tv):
+    """True when a held table has every field this version publishes, so a
+    table built by older code is rebuilt rather than held for the day."""
+    rows = [r for v in tv.values() for r in (v.get("rows") or [])]
+    return all("gex_all" in r for r in rows)
 
 
 def daily_topvol(syms, previous, now):
@@ -1374,7 +1399,8 @@ def daily_topvol(syms, previous, now):
         p = prev.get(s.get("symbol")) or {}
         at = p.get("topvol_at")
         try:
-            held = bool(p.get("topvol") and at and datetime.strptime(at, "%Y-%m-%d %H:%M") >= cut)
+            held = bool(p.get("topvol") and at and datetime.strptime(at, "%Y-%m-%d %H:%M") >= cut
+                        and _topvol_current(p["topvol"]))
         except ValueError:
             held = False
         if held:
@@ -3074,7 +3100,7 @@ def compute_symbol(inst, margins_cfg, closes_cfg, calib=None):
                 r["both"] = len(src) > 1
 
         out["zero"] = zero_dte(book, gspot, ref_spot, book_date)
-        out["topvol"] = top_volume(contracts, book_date, ref_spot)
+        out["topvol"] = top_volume(book, book_date, ref_spot, gspot)
         zs = out["zero"].get("strikes") or {}
         for r in out["ladder"]:
             d = zs.get(f"{r['strike_pre']:.2f}")
@@ -3808,37 +3834,54 @@ function topVolSection(s){
   if(!t) return "";
   const eq = `${chainName(s)}-equivalent contracts`;
   const dp = s.symbol==="GC"?1:0;
-  const fk = r => r ? `${(+r.strike).toFixed(dp)} <span class="pre">${r.dist>0?"+":""}${r.dist}%</span>` : "\u2014";
-  const head = `<thead><tr><th>Rank</th><th class="num">Calls + puts</th><th class="num">Vol</th>`
-    + `<th class="num">Top calls</th><th class="num">Call vol</th>`
-    + `<th class="num">Top puts</th><th class="num">Put vol</th></tr></thead>`;
-  const block=(key,title)=>{
+  const fs = r => `${(+r.strike).toFixed(dp)}`;
+  const fd = r => `${r.dist>0?"+":""}${r.dist}%`;
+  const gc = (v,str) => str!=null ? `<td class="num ${(v||0)>=0?"pos":"neg"}">${str}</td>` : `<td class="num">\u2014</td>`;
+  const rk = i => `<td><span class="tvrank">#${i}</span></td>`;
+  const sub = (b,title,what) => `<div class="tvsub">${title} \u00b7 ${what} \u00b7 ${b.exp} (${b.dte}d) \u00b7 ${(b.total||0).toLocaleString()} traded</div>`;
+  const none = title => `<div class="tvsub">${title} \u00b7 no expiry listed</div>`;
+  const EXPS=[["0dte","0DTE"],["weekly","Weekly"],["monthly","Monthly"]];
+  // 1) highest combined volume, with each side's volume and the net GEX there
+  const combHead = `<thead><tr><th>Rank</th><th class="num">Strike</th><th class="num">Dist</th>`
+    + `<th class="num">Call vol</th><th class="num">Put vol</th><th class="num">Total \u00b7 share</th>`
+    + `<th class="num" title="Net GEX of this expiry's open interest at the strike">GEX expiry</th>`
+    + `<th class="num" title="Net GEX of every expiry's open interest at the strike">GEX all</th></tr></thead>`;
+  const comb = EXPS.map(([key,title])=>{
     const b=t[key]||{};
-    if(b.none||!(b.rows||[]).length)
-      return `<div class="tvsub">${title} \u00b7 no expiry listed</div>`;
-    const n=Math.max((b.rows||[]).length,(b.calls||[]).length,(b.puts||[]).length);
+    if(b.none||!(b.rows||[]).length) return none(title);
+    return sub(b,title,"calls + puts") + `<div class="ztab"><table>${combHead}<tbody>`
+      + b.rows.map(r=>`<tr class="tv${r.rank}">${rk(r.rank)}<td class="num">${fs(r)}</td><td class="num">${fd(r)}</td>`
+        +`<td class="num pos">${r.call.toLocaleString()}</td><td class="num neg">${r.put.toLocaleString()}</td>`
+        +`<td class="num"><b>${r.vol.toLocaleString()}</b>${r.share!=null?` <span class="pre">${r.share}%</span>`:""}</td>`
+        +gc(r.gex,r.gex_str)+gc(r.gex_all,r.gex_all_str)+`</tr>`).join("")
+      + `</tbody></table></div>`;
+  }).join("");
+  // 2) the single call and put contracts that traded most
+  const sideHead = `<thead><tr><th>Rank</th><th class="num">Top call</th><th class="num">Call vol</th>`
+    + `<th class="num">Top put</th><th class="num">Put vol</th></tr></thead>`;
+  const sides = EXPS.map(([key,title])=>{
+    const b=t[key]||{};
+    if(b.none||!((b.calls||[]).length||(b.puts||[]).length)) return none(title);
+    const n=Math.max((b.calls||[]).length,(b.puts||[]).length);
     let body="";
     for(let i=0;i<n;i++){
-      const r=(b.rows||[])[i], c=(b.calls||[])[i], p=(b.puts||[])[i];
-      body+=`<tr class="tv${i+1}"><td><span class="tvrank">#${i+1}</span></td>`
-        +`<td class="num">${fk(r)}</td>`
-        +`<td class="num">${r?`<b>${r.vol.toLocaleString()}</b>${r.share!=null?` <span class="pre">${r.share}%</span>`:""}`:"\u2014"}</td>`
-        +`<td class="num pos">${fk(c)}</td><td class="num pos">${c?c.vol.toLocaleString():"\u2014"}</td>`
-        +`<td class="num neg">${fk(p)}</td><td class="num neg">${p?p.vol.toLocaleString():"\u2014"}</td></tr>`;
+      const c=(b.calls||[])[i], p=(b.puts||[])[i];
+      body+=`<tr class="tv${i+1}">${rk(i+1)}`
+        +`<td class="num pos">${c?`${fs(c)} <span class="pre">${fd(c)}</span>`:"\u2014"}</td><td class="num pos">${c?c.vol.toLocaleString():"\u2014"}</td>`
+        +`<td class="num neg">${p?`${fs(p)} <span class="pre">${fd(p)}</span>`:"\u2014"}</td><td class="num neg">${p?p.vol.toLocaleString():"\u2014"}</td></tr>`;
     }
-    return `<div class="tvsub">${title} \u00b7 ${b.exp} (${b.dte}d) \u00b7 ${(b.total||0).toLocaleString()} traded</div>`
-      + `<div class="ztab"><table>${head}<tbody>${body}</tbody></table></div>`;
-  };
-  return `<div class="zero"><div class="k">Highest volume strikes<b>*</b>`
-    + (s.topvol_at?` <span class="pre" style="letter-spacing:0;text-transform:none">\u00b7 as of ${String(s.topvol_at).slice(5)} ET, refreshed daily after 18:00</span>`:"")
-    + `</div>`
-    + block("0dte","0DTE") + block("weekly","Weekly") + block("monthly","Monthly")
+    return sub(b,title,"calls and puts apart") + `<div class="ztab"><table>${sideHead}<tbody>${body}</tbody></table></div>`;
+  }).join("");
+  const asof = s.topvol_at?` <span class="pre" style="letter-spacing:0;text-transform:none">\u00b7 as of ${String(s.topvol_at).slice(5)} ET, refreshed daily after 18:00</span>`:"";
+  return `<div class="zero"><div class="k">Highest combined volume<b>*</b>${asof}</div>${comb}</div>`
+    + `<div class="zero"><div class="k">Highest call and put volume<b>*</b>${asof}</div>${sides}`
     + `<div class="caveat"><b>*</b> Contracts traded (${eq}) for each expiry, among strikes within `
-    + `\u00b1${TOP_VOL_RANGE_PCT}% of price. <b>Calls + puts</b> ranks strikes by both sides together (share is of the `
-    + `expiry's whole volume); <b>Top calls</b> and <b>Top puts</b> rank the single call and put contracts that traded most. `
-    + `"0DTE" is the next expiry, Monday's on a weekend. Volume is the session's cumulative count from Cboe, about 15 `
-    + `minutes behind, so outside regular hours it is the last session's. It shows where size traded, not who bought or `
-    + `sold. Walls on the ladder that are also one of these strikes carry a <span class="chip tvchip">vol</span> tag.</div></div>`;
+    + `\u00b1${TOP_VOL_RANGE_PCT}% of price. Combined ranks strikes by calls + puts (share is of the expiry's whole `
+    + `volume) and shows each side's volume there, with the net GEX of open interest at the strike: that expiry's `
+    + `contracts, and all expiries in the book (calls +, puts \u2212). The second table ranks the single call and put `
+    + `contracts that traded most. "0DTE" is the next expiry, Monday's on a weekend. Volume is Cboe's cumulative count `
+    + `for the session; it shows where size traded, not who bought or sold. Walls on the ladder that are also one of `
+    + `these strikes carry a <span class="chip tvchip">vol</span> tag.</div></div>`;
 }
 
 // The combined ladder: one row per strike, one column per book, so "is this
